@@ -177,6 +177,12 @@ Ghostscript makes the PDF/A-2b output, and the Lambda carries Ghostscript with i
 an image to a PDF first, at 300 DPI, and Ghostscript then converts that PDF. A PDF goes to
 Ghostscript directly.
 
+The build copies the Ghostscript shared libraries to `/var/task/lib`. That directory includes a
+`libcrypto.so.3` from the build image. `pdf.py` puts the directory on `LD_LIBRARY_PATH` for the
+Ghostscript subprocess only. A function-level `LD_LIBRARY_PATH` would make the Python `ssl`
+module load that `libcrypto.so.3` in place of the runtime library. The two OpenSSL versions
+differ, the import of `ssl` then fails, and the Lambda fails to import its handler module.
+
 ### The ledger (`archiver/ledger.py`)
 
 One CSV file in S3. It has these columns: Id, Service Date, Payment Date, Vendor/Provider,
@@ -197,8 +203,9 @@ date against the entries that exist.
 | `SSM_ALLOWED_SENDERS_PARAM` | The SSM path to the allowed sender list |
 | `SNS_TOPIC_ARN` | The main notification topic |
 | `SNS_DETAILED_FAILURE_TOPIC_ARN` | The topic for detailed failures |
-| `LD_LIBRARY_PATH` | The Ghostscript shared libraries |
-| `GS_LIB` | The Ghostscript resource files |
+
+`LD_LIBRARY_PATH` and `GS_LIB` are not function environment variables. `pdf.py` sets them on
+the Ghostscript subprocess only. See the note in the PDF/A conversion section.
 
 ### Web handler Lambda
 

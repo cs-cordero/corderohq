@@ -105,14 +105,17 @@ export class HsaReceiptsStack extends cdk.Stack {
             memorySize: 1024,
             timeout: cdk.Duration.minutes(5),
             logGroup,
+            // `LD_LIBRARY_PATH` and `GS_LIB` are absent on purpose. The Ghostscript libraries
+            // in `/var/task/lib` include a `libcrypto.so.3` from the build image. A
+            // function-level `LD_LIBRARY_PATH` makes the Python `ssl` module load that library
+            // in place of the runtime library, and the import of `ssl` then fails. `pdf.py`
+            // sets both variables on the Ghostscript subprocess instead.
             environment: {
                 BUCKET_NAME: this.bucket.bucketName,
                 SNS_TOPIC_ARN: notificationTopic.topicArn,
                 SNS_DETAILED_FAILURE_TOPIC_ARN: detailedFailureTopic.topicArn,
                 SSM_API_KEY_PARAM: "/hsa-receipt-archiver/anthropic-api-key",
                 SSM_ALLOWED_SENDERS_PARAM: "/hsa-receipt-archiver/allowed-senders",
-                LD_LIBRARY_PATH: "/var/task/lib",
-                GS_LIB: "/var/task/share/Resource/Init:/var/task/share/lib",
             },
         });
 

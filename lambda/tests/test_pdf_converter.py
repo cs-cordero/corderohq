@@ -1,5 +1,6 @@
 """Tests for pdf module."""
 
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -64,6 +65,22 @@ def test_ghostscript_called_with_correct_args(mock_run: MagicMock) -> None:
     assert "-dNOPAUSE" in gs_args
     assert "-sDEVICE=pdfwrite" in gs_args
     assert mock_run.call_args[1]["capture_output"] is True
+
+
+@patch("corderohq.archiver.pdf.subprocess.run", return_value=_successful_run())
+def test_ghostscript_library_path_stays_in_the_subprocess(mock_run: MagicMock) -> None:
+    # The Lambda process must keep the runtime OpenSSL. Only Ghostscript gets the
+    # bundled libraries, so the Python `ssl` module still imports.
+    with (
+        patch("pathlib.Path.read_bytes", return_value=b"output"),
+        patch("pathlib.Path.write_bytes"),
+    ):
+        convert_to_pdfa(b"pdf-input", "application/pdf")
+
+    gs_env = mock_run.call_args[1]["env"]
+    assert gs_env["LD_LIBRARY_PATH"] == "/var/task/lib"
+    assert gs_env["GS_LIB"] == "/var/task/share/Resource/Init:/var/task/share/lib"
+    assert gs_env["PATH"] == os.environ["PATH"]
 
 
 @patch("corderohq.archiver.pdf.subprocess.run", return_value=_successful_run())

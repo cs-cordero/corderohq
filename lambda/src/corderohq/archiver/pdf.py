@@ -8,6 +8,8 @@ from pathlib import Path
 from PIL import Image
 
 _GS_BINARY = os.environ.get("GS_BINARY", "/var/task/bin/gs")
+_GS_LIBRARY_PATH = os.environ.get("GS_LIBRARY_PATH", "/var/task/lib")
+_GS_RESOURCE_PATH = os.environ.get("GS_RESOURCE_PATH", "/var/task/share/Resource/Init:/var/task/share/lib")
 
 _CONTENT_TYPE_SUFFIX = {
     "image/jpeg": ".jpg",
@@ -15,6 +17,18 @@ _CONTENT_TYPE_SUFFIX = {
     "image/gif": ".gif",
     "image/webp": ".webp",
 }
+
+
+def _gs_env() -> dict[str, str]:
+    """Return the environment for a Ghostscript subprocess.
+
+    The Ghostscript libraries must stay out of the Lambda process environment. The
+    bundle directory holds a `libcrypto.so.3` from the Ghostscript build image. A
+    process-wide `LD_LIBRARY_PATH` makes the Python `ssl` module load that library in
+    place of the runtime library. The two OpenSSL versions differ, so the import of
+    `ssl` fails, and the Lambda then fails to import its handler module.
+    """
+    return {**os.environ, "LD_LIBRARY_PATH": _GS_LIBRARY_PATH, "GS_LIB": _GS_RESOURCE_PATH}
 
 
 def convert_to_pdfa(data: bytes, content_type: str) -> bytes:
@@ -51,6 +65,7 @@ def convert_to_pdfa(data: bytes, content_type: str) -> bytes:
                 str(input_pdf),
             ],
             capture_output=True,
+            env=_gs_env(),
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -80,6 +95,7 @@ def get_page_count(pdf_data: bytes) -> int:
                 f"({input_pdf}) (r) file runpdfbegin pdfpagecount = quit",
             ],
             capture_output=True,
+            env=_gs_env(),
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -110,6 +126,7 @@ def extract_page(pdf_data: bytes, page_num: int) -> bytes:
                 str(input_pdf),
             ],
             capture_output=True,
+            env=_gs_env(),
         )
         if result.returncode != 0:
             raise RuntimeError(
