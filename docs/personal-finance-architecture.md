@@ -43,8 +43,13 @@ infra/lib/
 ## Infrastructure Overview
 
 Two CDK stacks hold this app. They build on `DnsStack`, which holds the single `corderohq.com`
-hosted zone, and on the shared `PlatformStack`, which holds the TLS certificate and the Cognito
-user pool.
+hosted zone, and on the shared `PlatformStack`, which holds the TLS certificate, the Cognito
+user pool, and the `corderohq-alerts` SNS topic.
+
+Both prod Lambda functions have a CloudWatch alarm on the `Errors` metric, and each alarm
+publishes to that shared topic. The dev stage has no alarm, because a dev failure is normal
+during development. See "Failure notifications" in `hsa-architecture.md` for the reason that
+these alarms exist.
 
 ### PersonalFinanceDynamoDbStack
 

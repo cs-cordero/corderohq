@@ -31,6 +31,7 @@ const hsaReceipts = new HsaReceiptsStack(app, "HsaReceiptArchiverStack", {
     env,
     terminationProtection: true,
     rootZone: dns.rootZone,
+    alertTopic: platform.alertTopic,
 });
 hsaReceipts.addDependency(platform);
 
@@ -44,6 +45,7 @@ const hsaWeb = new HsaWebStack(app, "HsaWebStack", {
     processorFunction: hsaReceipts.handler,
     rootZone: dns.rootZone,
     certificate: platform.certificate,
+    alertTopic: platform.alertTopic,
 });
 hsaWeb.addDependency(platform);
 hsaWeb.addDependency(hsaReceipts);
@@ -78,6 +80,7 @@ function createPersonalFinanceStacks(stage: Stage): void {
         userPool: platform.userPool,
         rootZone: dns.rootZone,
         certificate: platform.certificate,
+        alertTopic: platform.alertTopic,
         categoryGroupTable: data.categoryGroupTable,
         categoryTable: data.categoryTable,
         budgetTable: data.budgetTable,

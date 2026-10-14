@@ -6,6 +6,7 @@ import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as s3 from "aws-cdk-lib/aws-s3";
+import * as sns from "aws-cdk-lib/aws-sns";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { HsaWebStack } from "../lib/hsa-web-stack";
 
@@ -32,6 +33,7 @@ function createTestTemplate(): Template {
     const certificate = new acm.Certificate(helperStack, "SharedCert", {
         domainName: "corderohq.com",
     });
+    const alertTopic = new sns.Topic(helperStack, "AlertTopic");
 
     const stack = new HsaWebStack(app, "TestHsaWebStack", {
         env,
@@ -42,6 +44,7 @@ function createTestTemplate(): Template {
         processorFunction: fn,
         rootZone,
         certificate,
+        alertTopic,
     });
 
     return Template.fromStack(stack);

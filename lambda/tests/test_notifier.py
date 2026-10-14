@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from corderohq.archiver.ledger import LedgerEntry
 from corderohq.aws.sns import (
-    DETAILED_FAILURE_TOPIC_ARN,
+    ALERT_TOPIC_ARN,
     notify_detailed_failure,
     notify_failure,
     notify_rejection,
@@ -91,12 +91,12 @@ def test_notify_rejection_includes_force_store_instructions(mock_sns: MagicMock)
 
 
 @patch("corderohq.aws.sns._SNS_CLIENT")
-def test_notify_detailed_failure_publishes_to_detailed_topic(mock_sns: MagicMock) -> None:
+def test_notify_detailed_failure_publishes_to_alert_topic(mock_sns: MagicMock) -> None:
     exc = RuntimeError("something broke")
     notify_detailed_failure("Context message", exc)
     mock_sns.publish.assert_called_once()
     call_kwargs = mock_sns.publish.call_args[1]
-    assert call_kwargs["TopicArn"] == DETAILED_FAILURE_TOPIC_ARN
+    assert call_kwargs["TopicArn"] == ALERT_TOPIC_ARN
     assert call_kwargs["Subject"] == "HSA Receipt Processing Failed (Detailed)"
     assert "Context message" in call_kwargs["Message"]
     assert "RuntimeError" in call_kwargs["Message"]

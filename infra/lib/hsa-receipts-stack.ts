@@ -9,10 +9,12 @@ import * as ses from "aws-cdk-lib/aws-ses";
 import * as sesActions from "aws-cdk-lib/aws-ses-actions";
 import * as sns from "aws-cdk-lib/aws-sns";
 import type { Construct } from "constructs";
+import { addLambdaErrorAlarm } from "./alarms";
 import { HSA_DOMAIN } from "./constants";
 
 interface HsaReceiptsStackProps extends cdk.StackProps {
     readonly rootZone: route53.IHostedZone;
+    readonly alertTopic: sns.ITopic;
 }
 
 /**
@@ -21,16 +23,15 @@ interface HsaReceiptsStackProps extends cdk.StackProps {
  * AWS resources:
  * - S3 bucket: hsa-receipts (versioned, lifecycle rules for raw-emails/)
  * - CloudWatch log group: /aws/lambda/hsa-receipt-archiver
- * - SNS topic: hsa-receipt-archiver-notifications
- * - SNS topic: hsa-receipt-archiver-detailed-failures
+ * - SNS topic: hsa-receipt-archiver-notifications (household results, both members read it)
  * - Lambda function: hsa-receipt-archiver (Python 3.13, Ghostscript bundled)
+ * - CloudWatch alarm: hsa-receipt-archiver-errors → shared alert topic
  * - IAM policy: S3 read/write, SSM GetParameter, SNS Publish
  * - SES receipt rule set: hsa-receipt-archiver
  * - SES receipt rule: receipts@hsa.corderohq.com → S3 + Lambda
  * - Route 53 MX record: hsa.corderohq.com → inbound-smtp.us-east-1.amazonaws.com
  * - Route 53 TXT record: _amazonses.hsa.corderohq.com (SES domain verification)
- * - SNS topic: hsa-receipt-archiver-budget-alerts
- * - Budget: hsa-receipt-archiver-monthly ($10 USD, alerts at 50/80/100%)
+ * - Budget: hsa-receipt-archiver-monthly ($10 USD, alerts at 50/80/100% → shared alert topic)
  */
 export class HsaReceiptsStack extends cdk.Stack {
     readonly bucket: s3.Bucket;
@@ -68,14 +69,11 @@ export class HsaReceiptsStack extends cdk.Stack {
             removalPolicy: cdk.RemovalPolicy.DESTROY,
         });
 
-        // SNS Notification Topic
+        // SNS Notification Topic. It carries the messages that a household member reads: the
+        // receipt archived, the receipt not eligible, and the attachment the app cannot read.
+        // Everything that needs a developer goes to the shared alert topic instead.
         const notificationTopic = new sns.Topic(this, "NotificationTopic", {
             topicName: "hsa-receipt-archiver-notifications",
-        });
-
-        // SNS Detailed Failure Topic
-        const detailedFailureTopic = new sns.Topic(this, "DetailedFailureTopic", {
-            topicName: "hsa-receipt-archiver-detailed-failures",
         });
 
         // Lambda Function
@@ -113,11 +111,16 @@ export class HsaReceiptsStack extends cdk.Stack {
             environment: {
                 BUCKET_NAME: this.bucket.bucketName,
                 SNS_TOPIC_ARN: notificationTopic.topicArn,
-                SNS_DETAILED_FAILURE_TOPIC_ARN: detailedFailureTopic.topicArn,
+                SNS_ALERT_TOPIC_ARN: props.alertTopic.topicArn,
                 SSM_API_KEY_PARAM: "/hsa-receipt-archiver/anthropic-api-key",
                 SSM_ALLOWED_SENDERS_PARAM: "/hsa-receipt-archiver/allowed-senders",
             },
         });
+
+        // The notify_* calls in the handler cannot report a failure that stops the handler
+        // itself, such as an import error or a timeout. This alarm runs in CloudWatch, so it
+        // reports those failures.
+        addLambdaErrorAlarm(this, "ReceiptArchiverErrorAlarm", this.handler, props.alertTopic);
 
         // IAM Permissions
         this.bucket.grantReadWrite(this.handler);
@@ -139,7 +142,7 @@ export class HsaReceiptsStack extends cdk.Stack {
         );
 
         notificationTopic.grantPublish(this.handler);
-        detailedFailureTopic.grantPublish(this.handler);
+        props.alertTopic.grantPublish(this.handler);
 
         // SES Receipt Rule Set + Rule
         const ruleSet = new ses.ReceiptRuleSet(this, "ReceiptRuleSet", {
@@ -160,7 +163,7 @@ export class HsaReceiptsStack extends cdk.Stack {
         });
 
         this.createDnsRecords(props.rootZone);
-        this.createBudgetAlerts();
+        this.createBudgetAlerts(props.alertTopic);
     }
 
     private createDnsRecords(rootZone: route53.IHostedZone): void {
@@ -181,20 +184,9 @@ export class HsaReceiptsStack extends cdk.Stack {
         });
     }
 
-    private createBudgetAlerts(): void {
-        // Budget Alerts via SNS
-        const budgetTopic = new sns.Topic(this, "BudgetAlertsTopic", {
-            topicName: "hsa-receipt-archiver-budget-alerts",
-        });
-
-        budgetTopic.addToResourcePolicy(
-            new iam.PolicyStatement({
-                actions: ["sns:Publish"],
-                principals: [new iam.ServicePrincipal("budgets.amazonaws.com")],
-                resources: [budgetTopic.topicArn],
-            }),
-        );
-
+    private createBudgetAlerts(alertTopic: sns.ITopic): void {
+        // The budget publishes to the shared alert topic. `PlatformStack` holds that topic, and
+        // it holds the topic policy that lets budgets.amazonaws.com publish to it.
         const budgetThresholdPercentages = [50, 80, 100];
 
         new budgets.CfnBudget(this, "MonthlyBudget", {
@@ -217,7 +209,7 @@ export class HsaReceiptsStack extends cdk.Stack {
                 subscribers: [
                     {
                         subscriptionType: "SNS",
-                        address: budgetTopic.topicArn,
+                        address: alertTopic.topicArn,
                     },
                 ],
             })),

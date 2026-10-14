@@ -15,7 +15,9 @@ import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
+import type * as sns from "aws-cdk-lib/aws-sns";
 import type { Construct } from "constructs";
+import { addLambdaErrorAlarm } from "./alarms";
 import type { Stage } from "./constants";
 import { AUTH_DOMAIN, personalFinanceDomain, personalFinanceOrigin } from "./constants";
 
@@ -32,6 +34,7 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
     readonly profileTable: dynamodb.ITable;
     readonly accountTable: dynamodb.ITable;
     readonly netWorthSnapshotTable: dynamodb.ITable;
+    readonly alertTopic: sns.ITopic;
 }
 
 /**
@@ -47,6 +50,8 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
  * - Lambda function: budget-scheduled-densify-{stage} (Python 3.13, cron-driven)
  * - IAM role: scheduler invoke role for the densify Lambda
  * - EventBridge Schedule: budget-scheduled-densify-{stage} (cron(0 0 1 * ? *) America/New_York)
+ * - CloudWatch alarm (prod stage only): personal-finance-handler-prod-errors → shared alert topic
+ * - CloudWatch alarm (prod stage only): budget-scheduled-densify-prod-errors → shared alert topic
  * - API Gateway HTTP API: personal-finance-api-{stage} (Cognito JWT authorizer)
  * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /pin), /api/transactions (+ /upload, /commit, /update, /delete), /api/summary, /api/audit-log, /api/profile (+ /people, /people/{personId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
  * - S3 bucket: personal-finance-assets-{stage}-{account}-{region} (frontend assets)
@@ -66,7 +71,15 @@ export class PersonalFinanceWebStack extends cdk.Stack {
         const userPoolClient = this.createUserPoolClient(props.userPool, stage);
         this.createAdminGroup(props.userPool, stage);
         const apiHandler = this.createLambda(props, stage);
-        this.createScheduledDensifier(props, stage);
+        const densifyFn = this.createScheduledDensifier(props, stage);
+
+        // Alarms for the prod stage only. The dev Lambdas fail often during development, and
+        // those failures are expected. An alarm on dev would make noise and hide a real one.
+        if (stage === "prod") {
+            addLambdaErrorAlarm(this, "ApiHandlerErrorAlarm", apiHandler, props.alertTopic);
+            addLambdaErrorAlarm(this, "ScheduledDensifyErrorAlarm", densifyFn, props.alertTopic);
+        }
+
         const httpApi = this.createApiGateway(props, userPoolClient, apiHandler, stage);
         const { distribution, assetsBucket } = this.createCloudFront(httpApi, stage, props.certificate);
         this.createDnsRecords(props.rootZone, distribution, stage);
@@ -184,7 +197,7 @@ export class PersonalFinanceWebStack extends cdk.Stack {
         return apiHandler;
     }
 
-    private createScheduledDensifier(props: PersonalFinanceWebStackProps, stage: Stage): void {
+    private createScheduledDensifier(props: PersonalFinanceWebStackProps, stage: Stage): lambda.Function {
         // A Lambda for the cron path only. It uses the same code package as the API handler,
         // built in the same way, but it calls corderohq.scheduled_densify.handler. The densify
         // step touches no transaction and no audit entry, so this Lambda needs fewer IAM
@@ -245,6 +258,8 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             },
             description: `Monthly budget densification trigger (${stage})`,
         });
+
+        return densifyFn;
     }
 
     private createApiGateway(

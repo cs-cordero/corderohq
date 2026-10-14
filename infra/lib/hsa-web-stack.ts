@@ -11,7 +11,9 @@ import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import type * as sns from "aws-cdk-lib/aws-sns";
 import type { Construct } from "constructs";
+import { addLambdaErrorAlarm } from "./alarms";
 import { API_DOMAIN, HSA_ORIGIN } from "./constants";
 
 interface HsaWebStackProps extends cdk.StackProps {
@@ -22,6 +24,7 @@ interface HsaWebStackProps extends cdk.StackProps {
     readonly processorFunction: lambda.IFunction;
     readonly rootZone: route53.IHostedZone;
     readonly certificate: acm.ICertificate;
+    readonly alertTopic: sns.ITopic;
 }
 
 /**
@@ -31,6 +34,7 @@ interface HsaWebStackProps extends cdk.StackProps {
  * - Cognito User Pool Client: hsa-web-app (authorization code grant, PKCE)
  * - CloudWatch log group: /aws/lambda/hsa-web-handler
  * - Lambda function: hsa-web-handler (Python 3.13, boto3 only)
+ * - CloudWatch alarm: hsa-web-handler-errors → shared alert topic
  * - IAM policy: S3 read/write on data bucket, Lambda invoke on processor
  * - API Gateway HTTP API: hsa-web-api (Cognito JWT authorizer, CORS)
  * - API Gateway routes: GET /ledger, PUT /ledger, GET /receipt, POST /receipt, DELETE /receipt, GET /orphaned-receipts
@@ -47,6 +51,7 @@ export class HsaWebStack extends cdk.Stack {
 
         const userPoolClient = this.createUserPoolClient(props.userPool);
         const webHandler = this.createLambda(props.dataBucket, props.processorFunction);
+        addLambdaErrorAlarm(this, "WebHandlerErrorAlarm", webHandler, props.alertTopic);
         this.createApiGateway(props, userPoolClient, webHandler);
 
         // Deploy static web files to the shared assets bucket. `followSymlinks: EXTERNAL`

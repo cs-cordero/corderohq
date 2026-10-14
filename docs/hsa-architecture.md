@@ -43,13 +43,16 @@ shared certificate cannot validate until this zone is authoritative in public DN
 
 The resources that all apps share. It holds the TLS certificate, a Cognito user pool for sign-in,
 an S3 bucket for static web assets, and a CloudFront distribution. The distribution serves the web
-UI, and it rewrites URLs so that the paths stay clean.
+UI, and it rewrites URLs so that the paths stay clean. It also holds the
+`corderohq-alerts` SNS topic. Every app publishes to it: the CloudWatch alarms, the stack
+traces from a handler, and the AWS budget alerts.
 
 ### HsaReceiptArchiverStack
 
 The email pipeline. It holds an S3 bucket for the receipt data, and the receipt Lambda. That Lambda
 carries Ghostscript with it, for the PDF/A conversion. The stack also holds the SES receipt rules,
-the SNS topics, the DNS records for mail, and a monthly budget with cost alerts.
+the household notification topic, the DNS records for mail, and a monthly budget. The budget and
+the Lambda error alarm both publish to the shared `corderohq-alerts` topic.
 
 ### HsaWebStack
 
@@ -201,8 +204,8 @@ date against the entries that exist.
 | `BUCKET_NAME` | The S3 bucket for the receipt data |
 | `SSM_API_KEY_PARAM` | The SSM path to the Anthropic API key |
 | `SSM_ALLOWED_SENDERS_PARAM` | The SSM path to the allowed sender list |
-| `SNS_TOPIC_ARN` | The main notification topic |
-| `SNS_DETAILED_FAILURE_TOPIC_ARN` | The topic for detailed failures |
+| `SNS_TOPIC_ARN` | The household notification topic |
+| `SNS_ALERT_TOPIC_ARN` | The shared `corderohq-alerts` topic |
 
 `LD_LIBRARY_PATH` and `GS_LIB` are not function environment variables. `pdf.py` sets them on
 the Ghostscript subprocess only. See the note in the PDF/A conversion section.
@@ -216,6 +219,61 @@ the Ghostscript subprocess only. See the note in the PDF/A conversion section.
 
 Every environment variable goes through `get_env_var()`. That function raises an error if the
 value is absent or blank.
+
+## Notifications and alerts
+
+Two SNS topics exist, and the split is by reader. Subscribe each person to the topic they can
+act on.
+
+### `hsa-receipt-archiver-notifications` — the household topic
+
+Both household members read this one. Each message is in plain words, and it needs no developer.
+
+| Message | Sent when |
+|---|---|
+| HSA Receipt Archived | A receipt goes into the ledger |
+| HSA Receipt Not Eligible | Claude rejects a receipt |
+| HSA Receipt Processing Failed | The app cannot read an attachment |
+
+### `corderohq-alerts` — the shared alert topic
+
+`PlatformStack` holds this topic, and every app publishes to it. Only a developer reads it.
+
+| Message | Published by |
+|---|---|
+| A Lambda function reported an error | A CloudWatch alarm |
+| A Python stack trace | `notify_detailed_failure` in `sns.py` |
+| AWS cost over 50 / 80 / 100% of $10 | AWS Budgets |
+
+### Why the CloudWatch alarms exist
+
+Two layers report a failure, and each layer catches what the other cannot.
+
+**Layer 1 — the handler code.** `sns.py` publishes from inside the handler. It gives the detail:
+the file name, the reason, and the stack trace.
+
+**Layer 2 — the CloudWatch alarm.** Each Lambda function has an alarm on its `Errors` metric.
+CloudWatch runs the alarm outside the function.
+
+Layer 1 can report only a failure that happens while the handler runs. These failures stop the
+handler, so only layer 2 reports them:
+
+| Failure | Layer 1 | Layer 2 |
+|---|---|---|
+| Claude rejects a receipt | Yes | No |
+| One attachment fails | Yes | No |
+| The handler module fails to import | No | **Yes** |
+| The function hits the 5-minute timeout | No | **Yes** |
+| The function runs out of memory | No | **Yes** |
+| The error handler itself fails | No | **Yes** |
+
+A missing layer 2 is how an import error ran silently in October 2026. The SES rule calls the
+Lambda asynchronously, so Lambda tried 3 times and then dropped the event. No code ran, so no
+code could publish.
+
+The alarms cover `hsa-receipt-archiver`, `hsa-web-handler`, `personal-finance-handler-prod`,
+and `budget-scheduled-densify-prod`. The dev stage has no alarm, because a dev failure is normal
+during development.
 
 ## Tests
 

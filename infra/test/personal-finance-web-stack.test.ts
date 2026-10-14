@@ -3,6 +3,7 @@ import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cognito from "aws-cdk-lib/aws-cognito";
 import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as route53 from "aws-cdk-lib/aws-route53";
+import * as sns from "aws-cdk-lib/aws-sns";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { PersonalFinanceWebStack } from "../lib/personal-finance-web-stack";
 
@@ -48,12 +49,15 @@ function createTestTemplate(stage: "dev" | "prod"): Template {
         sortKey: { name: "accountId", type: dynamodb.AttributeType.STRING },
     });
 
+    const alertTopic = new sns.Topic(helperStack, "AlertTopic");
+
     const stack = new PersonalFinanceWebStack(app, "TestPersonalFinanceWebStack", {
         env,
         stage,
         userPool,
         rootZone,
         certificate,
+        alertTopic,
         categoryGroupTable,
         categoryTable,
         budgetTable,

@@ -3,10 +3,12 @@ import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as cognito from "aws-cdk-lib/aws-cognito";
+import * as iam from "aws-cdk-lib/aws-iam";
 import * as route53 from "aws-cdk-lib/aws-route53";
 import * as route53Targets from "aws-cdk-lib/aws-route53-targets";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as s3deploy from "aws-cdk-lib/aws-s3-deployment";
+import * as sns from "aws-cdk-lib/aws-sns";
 import type { Construct } from "constructs";
 import { AUTH_DOMAIN, HSA_DOMAIN, PERSONAL_FINANCE_DOMAIN, ROOT_DOMAIN, WWW_DOMAIN } from "./constants";
 
@@ -32,12 +34,15 @@ interface PlatformStackProps extends cdk.StackProps {
  * - S3 BucketDeployment: web/root/ → assets bucket root/ prefix (CloudFront invalidation)
  * - CloudFront distribution: hsa.corderohq.com → S3 /hsa/ (OAC, HTTPS redirect, /oauth2/* → Cognito proxy)
  * - Route 53 A record: hsa.corderohq.com → CloudFront
+ * - SNS topic: corderohq-alerts (CloudWatch alarms, handler stack traces, AWS budget alerts)
+ * - SNS topic policy: budgets.amazonaws.com may publish to corderohq-alerts
  */
 export class PlatformStack extends cdk.Stack {
     userPool!: cognito.UserPool;
     assetsBucket!: s3.Bucket;
     distribution!: cloudfront.Distribution;
     certificate!: acm.Certificate;
+    readonly alertTopic: sns.Topic;
     private rootDistribution!: cloudfront.Distribution;
 
     constructor(scope: Construct, id: string, props: PlatformStackProps) {
@@ -46,6 +51,25 @@ export class PlatformStack extends cdk.Stack {
         cdk.Tags.of(this).add("project", "corderohq-platform");
 
         const { rootZone } = props;
+
+        // One topic for every message that needs a developer: a CloudWatch alarm, a stack
+        // trace from a handler, and an AWS budget alert. A single topic means a single email
+        // subscription. The messages that a household member reads stay on their own topic,
+        // `hsa-receipt-archiver-notifications`.
+        this.alertTopic = new sns.Topic(this, "AlertTopic", {
+            topicName: "corderohq-alerts",
+            displayName: "corderohq alerts",
+        });
+
+        // AWS Budgets publishes to the topic directly, so the topic policy must name the
+        // service. The budget itself stays in the stack of the app that it measures.
+        this.alertTopic.addToResourcePolicy(
+            new iam.PolicyStatement({
+                actions: ["sns:Publish"],
+                principals: [new iam.ServicePrincipal("budgets.amazonaws.com")],
+                resources: [this.alertTopic.topicArn],
+            }),
+        );
 
         this.createCertificate(rootZone);
         this.createCloudFront();

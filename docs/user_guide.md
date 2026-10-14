@@ -78,28 +78,27 @@ npx cdk deploy HsaWebStack --exclusively
         --type String
     ```
 
-4. **Subscribe to the SNS topics, to get the notifications by email:**
+4. **Subscribe to the two SNS topics, to get the notifications by email.** The topics split by
+   reader. Subscribe each person to the topic they can act on.
+
     ```bash
-    # Main notifications (success, rejection, failure)
+    # hsa-receipt-archiver-notifications — receipt archived, not eligible, or unreadable.
+    # Plain words, no developer necessary. Subscribe every household member.
     aws sns subscribe \
         --topic-arn <notification-topic-arn> \
         --protocol email \
         --notification-endpoint you@example.com
 
-    # Detailed failures (stack traces, to help you find a fault)
+    # corderohq-alerts — Lambda error alarms, Python stack traces, and AWS budget alerts.
+    # Every app publishes here. Subscribe the developer only.
     aws sns subscribe \
-        --topic-arn <detailed-failure-topic-arn> \
-        --protocol email \
-        --notification-endpoint you@example.com
-
-    # Budget alerts
-    aws sns subscribe \
-        --topic-arn <budget-alerts-topic-arn> \
+        --topic-arn <alert-topic-arn> \
         --protocol email \
         --notification-endpoint you@example.com
     ```
 
-    Find each topic ARN in the AWS Console under SNS, or in the output of `cdk deploy`.
+    Find each topic ARN in the AWS Console under SNS, or in the output of `cdk deploy`. Each
+    subscription sends a confirmation email. Click the link, or the topic stays silent.
 
 5. **Make the SES receipt rule set active.** The CDK makes the rule set, but SES does not let the
    CDK activate it. Do this by hand in the AWS Console, under SES > Email Receiving > Rule Sets.

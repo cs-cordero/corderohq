@@ -9,8 +9,11 @@ from corderohq.util import get_env_var
 
 _SNS_CLIENT = boto3.client("sns")
 
+# Two topics, split by the reader. `TOPIC_ARN` carries the messages that a household member
+# reads. `ALERT_TOPIC_ARN` is the shared `corderohq-alerts` topic, and it carries the messages
+# that need a developer: a stack trace, a CloudWatch alarm, and an AWS budget alert.
 TOPIC_ARN = get_env_var("SNS_TOPIC_ARN")
-DETAILED_FAILURE_TOPIC_ARN = get_env_var("SNS_DETAILED_FAILURE_TOPIC_ARN")
+ALERT_TOPIC_ARN = get_env_var("SNS_ALERT_TOPIC_ARN")
 
 
 def notify_success(entries: list[LedgerEntry]) -> None:
@@ -67,7 +70,7 @@ def notify_rejection(filename: str, description: str, reasoning: str) -> None:
 
 
 def notify_detailed_failure(message: str, exception: BaseException) -> None:
-    """Publish the full details of a failure, with the stack trace, to the detailed failures topic."""
+    """Publish the full details of a failure, with the stack trace, to the shared alert topic."""
     tb = "".join(traceback.format_exception(type(exception), exception, exception.__traceback__))
     body = (
         f"Failure context: {message}\n\n"
@@ -76,7 +79,7 @@ def notify_detailed_failure(message: str, exception: BaseException) -> None:
         f"Stack trace:\n{tb}"
     )
     _SNS_CLIENT.publish(
-        TopicArn=DETAILED_FAILURE_TOPIC_ARN,
+        TopicArn=ALERT_TOPIC_ARN,
         Subject="HSA Receipt Processing Failed (Detailed)",
         Message=body,
     )
