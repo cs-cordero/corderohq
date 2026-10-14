@@ -264,8 +264,9 @@ aws s3 ls s3://BUCKET/receipts/ --recursive
 
 ## Costs
 
-A monthly AWS Budget sends an alert at 50%, at 80%, and at 100% of its limit. The alerts go to an
-SNS topic. Subscribe to it in the same way as the notification topics.
+`corderohq-monthly-budget` sends an alert at 50%, at 80%, and at 100% of its $10 limit. The
+budget has no cost filter, so it measures the whole AWS account and not one app. The alerts go
+to the `corderohq-alerts` topic, together with the Lambda error alarms.
 
 These four things cost the most:
 

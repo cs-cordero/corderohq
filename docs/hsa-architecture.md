@@ -43,16 +43,19 @@ shared certificate cannot validate until this zone is authoritative in public DN
 
 The resources that all apps share. It holds the TLS certificate, a Cognito user pool for sign-in,
 an S3 bucket for static web assets, and a CloudFront distribution. The distribution serves the web
-UI, and it rewrites URLs so that the paths stay clean. It also holds the
-`corderohq-alerts` SNS topic. Every app publishes to it: the CloudWatch alarms, the stack
-traces from a handler, and the AWS budget alerts.
+UI, and it rewrites URLs so that the paths stay clean.
+
+This stack also holds the two account-wide resources. The `corderohq-alerts` SNS topic takes
+the CloudWatch alarms, the stack traces from a handler, and the AWS budget alerts. The
+`corderohq-monthly-budget` budget measures the cost of the whole AWS account, and it publishes
+to that same topic. Both belong here, and not in the stack of one app.
 
 ### HsaReceiptArchiverStack
 
 The email pipeline. It holds an S3 bucket for the receipt data, and the receipt Lambda. That Lambda
 carries Ghostscript with it, for the PDF/A conversion. The stack also holds the SES receipt rules,
-the household notification topic, the DNS records for mail, and a monthly budget. The budget and
-the Lambda error alarm both publish to the shared `corderohq-alerts` topic.
+the household notification topic, and the DNS records for mail. Its Lambda error alarm publishes
+to the shared `corderohq-alerts` topic.
 
 ### HsaWebStack
 

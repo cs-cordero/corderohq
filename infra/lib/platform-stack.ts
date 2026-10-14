@@ -1,4 +1,5 @@
 import * as cdk from "aws-cdk-lib";
+import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as acm from "aws-cdk-lib/aws-certificatemanager";
 import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
@@ -36,6 +37,7 @@ interface PlatformStackProps extends cdk.StackProps {
  * - Route 53 A record: hsa.corderohq.com → CloudFront
  * - SNS topic: corderohq-alerts (CloudWatch alarms, handler stack traces, AWS budget alerts)
  * - SNS topic policy: budgets.amazonaws.com may publish to corderohq-alerts
+ * - Budget: corderohq-monthly-budget ($10 USD, whole account, alerts at 50/80/100% → alert topic)
  */
 export class PlatformStack extends cdk.Stack {
     userPool!: cognito.UserPool;
@@ -61,8 +63,7 @@ export class PlatformStack extends cdk.Stack {
             displayName: "corderohq alerts",
         });
 
-        // AWS Budgets publishes to the topic directly, so the topic policy must name the
-        // service. The budget itself stays in the stack of the app that it measures.
+        // AWS Budgets publishes to the topic directly, so the topic policy must name the service.
         this.alertTopic.addToResourcePolicy(
             new iam.PolicyStatement({
                 actions: ["sns:Publish"],
@@ -71,6 +72,7 @@ export class PlatformStack extends cdk.Stack {
             }),
         );
 
+        this.createBudgetAlerts();
         this.createCertificate(rootZone);
         this.createCloudFront();
 
@@ -81,6 +83,48 @@ export class PlatformStack extends cdk.Stack {
         cognitoDomain.node.addDependency(apexRecord);
 
         this.createDnsRecords(rootZone, cognitoDomain);
+    }
+
+    /**
+     * The cost budget for the whole AWS account.
+     *
+     * The budget has no cost filter, so it measures every app together. It belongs here, with
+     * the alert topic it publishes to, and not in the stack of one app.
+     *
+     * Take care with a change to `notificationsWithSubscribers`. That property is immutable, so
+     * a change to a threshold or to a subscriber replaces the budget. CloudFormation makes the
+     * new budget before it removes the old one. The two then hold the same name, and the deploy
+     * fails: "a budget with the same name but a different internalId already exists". Change
+     * `budgetName` in the same commit, or delete the budget by hand before the deploy.
+     */
+    private createBudgetAlerts(): void {
+        const budgetThresholdPercentages = [50, 80, 100];
+
+        new budgets.CfnBudget(this, "MonthlyBudget", {
+            budget: {
+                budgetName: "corderohq-monthly-budget",
+                budgetType: "COST",
+                timeUnit: "MONTHLY",
+                budgetLimit: {
+                    amount: 10,
+                    unit: "USD",
+                },
+            },
+            notificationsWithSubscribers: budgetThresholdPercentages.map((pct) => ({
+                notification: {
+                    notificationType: "ACTUAL",
+                    comparisonOperator: "GREATER_THAN",
+                    threshold: pct,
+                    thresholdType: "PERCENTAGE",
+                },
+                subscribers: [
+                    {
+                        subscriptionType: "SNS",
+                        address: this.alertTopic.topicArn,
+                    },
+                ],
+            })),
+        });
     }
 
     /**

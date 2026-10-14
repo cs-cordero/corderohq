@@ -1,5 +1,4 @@
 import * as cdk from "aws-cdk-lib";
-import * as budgets from "aws-cdk-lib/aws-budgets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
@@ -31,7 +30,6 @@ interface HsaReceiptsStackProps extends cdk.StackProps {
  * - SES receipt rule: receipts@hsa.corderohq.com → S3 + Lambda
  * - Route 53 MX record: hsa.corderohq.com → inbound-smtp.us-east-1.amazonaws.com
  * - Route 53 TXT record: _amazonses.hsa.corderohq.com (SES domain verification)
- * - Budget: hsa-receipt-archiver-monthly ($10 USD, alerts at 50/80/100% → shared alert topic)
  */
 export class HsaReceiptsStack extends cdk.Stack {
     readonly bucket: s3.Bucket;
@@ -163,7 +161,6 @@ export class HsaReceiptsStack extends cdk.Stack {
         });
 
         this.createDnsRecords(props.rootZone);
-        this.createBudgetAlerts(props.alertTopic);
     }
 
     private createDnsRecords(rootZone: route53.IHostedZone): void {
@@ -181,38 +178,6 @@ export class HsaReceiptsStack extends cdk.Stack {
             zone: rootZone,
             recordName: `_amazonses.${HSA_DOMAIN}`,
             values: ["YonxACp7We9tgvwNDh9cZQtqb5HkmUuxn0NGRnWIRqk="],
-        });
-    }
-
-    private createBudgetAlerts(alertTopic: sns.ITopic): void {
-        // The budget publishes to the shared alert topic. `PlatformStack` holds that topic, and
-        // it holds the topic policy that lets budgets.amazonaws.com publish to it.
-        const budgetThresholdPercentages = [50, 80, 100];
-
-        new budgets.CfnBudget(this, "MonthlyBudget", {
-            budget: {
-                budgetName: "hsa-receipt-archiver-monthly",
-                budgetType: "COST",
-                timeUnit: "MONTHLY",
-                budgetLimit: {
-                    amount: 10,
-                    unit: "USD",
-                },
-            },
-            notificationsWithSubscribers: budgetThresholdPercentages.map((pct) => ({
-                notification: {
-                    notificationType: "ACTUAL",
-                    comparisonOperator: "GREATER_THAN",
-                    threshold: pct,
-                    thresholdType: "PERCENTAGE",
-                },
-                subscribers: [
-                    {
-                        subscriptionType: "SNS",
-                        address: alertTopic.topicArn,
-                    },
-                ],
-            })),
         });
     }
 }
