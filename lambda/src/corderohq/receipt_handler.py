@@ -69,7 +69,15 @@ def _handle_ses(event: dict[str, Any]) -> dict[str, Any]:
         LOGGER.warning("No attachments found in email from %s", sender_email)
         return {"statusCode": 400, "body": "No attachments"}
 
-    force_store = FORCE_STORE_PREFIX in parsed.body.upper()
+    # Read the flag from `top_body`, and not from `body`. A reply quotes the rejection
+    # notification, and that notification names FORCE_STORE in its instructions.
+    force_store = FORCE_STORE_PREFIX in parsed.top_body.upper()
+    LOGGER.info(
+        "FORCE_STORE found: %s (top body of %d characters, full body of %d)",
+        force_store,
+        len(parsed.top_body),
+        len(parsed.body),
+    )
     api_key = get_ssm_param(SSM_API_KEY_PARAM)
 
     failed_attachments: list[str] = []

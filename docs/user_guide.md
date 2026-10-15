@@ -149,6 +149,15 @@ an SNS notification with the result.
 
 To store a receipt that Claude rejects, send the email again with `FORCE_STORE` in the body.
 
+Write `FORCE_STORE` in your own text, at the top. The app reads the new text only, and it ignores
+the quoted reply chain below it. A quoted rejection notification holds the word `FORCE_STORE` in
+its instructions, and the app must not read that as your decision. A reply works, as long as you
+write the word above the quote.
+
+`FORCE_STORE` goes past the eligibility check only. It does **not** go past the date check. The
+app still rejects a receipt dated before 2025-01-27, because that date is earlier than the HSA
+account.
+
 ## How to run the tests
 
 ```bash

@@ -295,7 +295,17 @@ The fixtures in `conftest.py` set dummy AWS credentials and SNS topic ARNs. With
 - **A CSV ledger** — It is simple, it moves easily, and a person can edit it. No database is
   necessary.
 - **One Claude call for each page** — A large document is too big for one call.
-- **FORCE_STORE** — A way past the check, for when Claude rejects a good receipt.
+- **FORCE_STORE** — A way past the eligibility check, for when Claude rejects a good receipt.
+  The app reads the flag from `top_body`, which holds the new text of the email only. The
+  rejection notification names `FORCE_STORE` in its instructions, so a quoted copy of that
+  notification would otherwise turn the flag on against the wish of the sender. The flag does
+  not go past the date check.
+- **Quote detection by pattern** — `ses.py` finds the start of the quoted reply chain by a set
+  of patterns, one group for each mail client. ProtonMail is the client in daily use, and it
+  has tests of its own. Gmail, Apple Mail, and Outlook each have patterns too. A client that no
+  pattern matches keeps its quote in `top_body`. The log line in `receipt_handler.py` prints
+  the length of `top_body` next to the length of `body`, and a pair of equal lengths on a reply
+  shows that no pattern matched.
 - **SPF and DKIM checks** — They stop an attacker who makes a false email address.
 - **S3 versions** — They protect the ledger if someone writes over it by mistake.
 - **Ghostscript inside the Lambda** — It is part of the deployment, and not a Lambda layer. One

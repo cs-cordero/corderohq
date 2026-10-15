@@ -69,10 +69,17 @@ def _make_parsed_email(
     subject: str = "Receipt",
     body: str = "",
     attachments: list[Attachment] | None = None,
+    top_body: str | None = None,
 ) -> ParsedEmail:
     if attachments is None:
         attachments = [Attachment("receipt.jpg", "image/jpeg", b"jpeg-data")]
-    return ParsedEmail(sender=sender, subject=subject, body=body, attachments=attachments)
+    return ParsedEmail(
+        sender=sender,
+        subject=subject,
+        body=body,
+        top_body=body if top_body is None else top_body,
+        attachments=attachments,
+    )
 
 
 class TestSesPath:
@@ -109,6 +116,88 @@ class TestSesPath:
         mock_process.assert_called_once()
         mock_notify_success.assert_called_once()
         mock_tag.assert_called_once()
+
+    @patch.dict(os.environ, ENV_VARS)
+    @patch("corderohq.receipt_handler.tag_raw_email")
+    @patch("corderohq.receipt_handler.notify_success")
+    @patch("corderohq.receipt_handler.process_attachment")
+    @patch("corderohq.receipt_handler.parse_ses_email")
+    @patch("corderohq.receipt_handler.fetch_raw_email", return_value=b"raw-email")
+    @patch("corderohq.receipt_handler.get_ssm_param")
+    def test_force_store_in_body_reaches_the_processor(
+        self,
+        mock_ssm: MagicMock,
+        mock_fetch_email: MagicMock,
+        mock_parse: MagicMock,
+        mock_process: MagicMock,
+        mock_notify_success: MagicMock,
+        mock_tag: MagicMock,
+    ) -> None:
+        mock_ssm.side_effect = lambda name: {"/test/api-key": "key", "/test/senders": "allowed@example.com"}[name]
+        mock_parse.return_value = _make_parsed_email(body="please keep this one\nforce_store\n")
+        mock_process.return_value = ProcessingResult(entries=[_sample_entry()], rejections=[], receipt_s3_uri="s3://x")
+
+        from corderohq.receipt_handler import _handle
+
+        _handle(_make_ses_event())
+
+        assert mock_process.call_args[1]["force_store"] is True
+
+    @patch.dict(os.environ, ENV_VARS)
+    @patch("corderohq.receipt_handler.tag_raw_email")
+    @patch("corderohq.receipt_handler.notify_success")
+    @patch("corderohq.receipt_handler.process_attachment")
+    @patch("corderohq.receipt_handler.parse_ses_email")
+    @patch("corderohq.receipt_handler.fetch_raw_email", return_value=b"raw-email")
+    @patch("corderohq.receipt_handler.get_ssm_param")
+    def test_empty_body_leaves_force_store_off(
+        self,
+        mock_ssm: MagicMock,
+        mock_fetch_email: MagicMock,
+        mock_parse: MagicMock,
+        mock_process: MagicMock,
+        mock_notify_success: MagicMock,
+        mock_tag: MagicMock,
+    ) -> None:
+        mock_ssm.side_effect = lambda name: {"/test/api-key": "key", "/test/senders": "allowed@example.com"}[name]
+        mock_parse.return_value = _make_parsed_email(body="")
+        mock_process.return_value = ProcessingResult(entries=[_sample_entry()], rejections=[], receipt_s3_uri="s3://x")
+
+        from corderohq.receipt_handler import _handle
+
+        _handle(_make_ses_event())
+
+        assert mock_process.call_args[1]["force_store"] is False
+
+    @patch.dict(os.environ, ENV_VARS)
+    @patch("corderohq.receipt_handler.tag_raw_email")
+    @patch("corderohq.receipt_handler.notify_success")
+    @patch("corderohq.receipt_handler.process_attachment")
+    @patch("corderohq.receipt_handler.parse_ses_email")
+    @patch("corderohq.receipt_handler.fetch_raw_email", return_value=b"raw-email")
+    @patch("corderohq.receipt_handler.get_ssm_param")
+    def test_force_store_in_a_quoted_reply_is_ignored(
+        self,
+        mock_ssm: MagicMock,
+        mock_fetch_email: MagicMock,
+        mock_parse: MagicMock,
+        mock_process: MagicMock,
+        mock_notify_success: MagicMock,
+        mock_tag: MagicMock,
+    ) -> None:
+        """The handler reads `top_body`, so a quoted rejection notification cannot set the flag."""
+        mock_ssm.side_effect = lambda name: {"/test/api-key": "key", "/test/senders": "allowed@example.com"}[name]
+        mock_parse.return_value = _make_parsed_email(
+            body='Thanks\n> re-send the email with "FORCE_STORE" in the body.',
+            top_body="Thanks",
+        )
+        mock_process.return_value = ProcessingResult(entries=[_sample_entry()], rejections=[], receipt_s3_uri="s3://x")
+
+        from corderohq.receipt_handler import _handle
+
+        _handle(_make_ses_event())
+
+        assert mock_process.call_args[1]["force_store"] is False
 
     @patch.dict(os.environ, ENV_VARS)
     def test_spf_fail_returns_403(self) -> None:
