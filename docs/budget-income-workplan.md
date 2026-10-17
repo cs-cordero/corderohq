@@ -52,17 +52,17 @@ Give the user these commands. Each one runs from the repository root.
 
 No code. The goal is to confirm that the design still matches the code.
 
-- [ ] Read `docs/budget-specs.md` (Definitions, Specs 31 to 57, Deferred).
-- [ ] Read `docs/budget-income-design.md` in full.
-- [ ] Open each file in the **Code Map** of the design, and confirm that the names in it exist:
+- [x] Read `docs/budget-specs.md` (Definitions, Specs 31 to 57, Deferred).
+- [x] Read `docs/budget-income-design.md` in full.
+- [x] Open each file in the **Code Map** of the design, and confirm that the names in it exist:
       `_ensure_hydrated()`, `_validate_commit_rows()`, `_post_transactions_upload()`,
       `_post_transactions_commit()`, `_put_transaction()`, `_put_account()`, `compute_summary()`,
       `TransactionsTable.update()`, `densify()`, `resolve_future_targets()`, `map_columns()`,
       `categorize_transactions()`, `AccountType`, `_ACCOUNT_TYPE_META`, `ACCOUNT_TYPES`,
       `BUDGET_LINKS`.
-- [ ] Ask the user about the open item "the `credit_card` account type" in the design. Record the
+- [x] Ask the user about the open item "the `credit_card` account type" in the design. Record the
       answer in the design.
-- [ ] Tell the user about each difference that you found. Correct the design.
+- [x] Tell the user about each difference that you found. Correct the design.
 
 ---
 
@@ -231,24 +231,34 @@ Checks:
 
 ---
 
-## CP6 — Accounts (Spec 44)
+## CP6 — Accounts, the Credit Card Type, and the Debt Class (Spec 44)
 
 **Before you start:** design sections **Changed table: `Account-{stage}`** and **Accounts**.
 
-- [ ] `networth/models.py`: the `credit_card` type and its meta. A `budget_role_of(account)`
-      function with the default table from the design.
+- [ ] `networth/models.py`: the `credit_card` type, the `debt` class, and the meta. Change
+      `mortgage` and `other_liability` to the fixed class `debt`. Reject `debt` for a type that
+      lets the user choose classes.
+- [ ] A `budget_role_of(account)` function with the default table from the design.
 - [ ] `AccountTable.update()` and `_put_account()`: `budgetRole` and `lastFour` are editable.
       Validate `lastFour` (each value is exactly 4 digits).
 - [ ] `types.ts`: `credit_card` in `ACCOUNT_TYPES`, `ACCOUNT_TYPE_META`, and `ACCOUNT_TYPE_LABELS`.
-      `Account` gets `budgetRole` and `lastFour`.
-- [ ] `AccountsPage.tsx`: the budget role picker and the "last four digits" field.
-- [ ] `test_networth_models.py` and the account tests: the new type, the default roles, and the
-      validation.
+      `debt` in `ASSET_CLASSES` and `ASSET_CLASS_LABELS`. `mortgage` and `other_liability` use
+      `debt`. `Account` gets `budgetRole` and `lastFour`.
+- [ ] `AccountsPage.tsx` and `NetWorthEntryPage.tsx`: leave `debt` out of the class pickers.
+      `AccountsPage.tsx`: the budget role picker and the "last four digits" field.
+- [ ] `lambda/scripts/migrate_liabilities_to_debt.py` (design: the migration script). Check
+      `import_networth_csv.py` too.
+- [ ] `test_networth_models.py` and the account tests: the new type and class, the default roles,
+      the `lastFour` validation, and the rule that an asset account cannot choose `debt`.
 
 Checks:
 
 - [ ] Python tests and frontend build pass.
-- [ ] Dev deploy. Make a credit card account. The net worth entry page still works.
+- [ ] The user runs the migration script on dev as a dry run, then with `--apply`, and gives the
+      ID of the card account with `--to-credit-card`.
+- [ ] Dev deploy. The card shows as "Credit Card". The net worth history of the card and the
+      mortgage shows the same totals as before.
+- [ ] The user deploys to prod, and then runs the script on prod.
 
 ---
 
@@ -333,3 +343,5 @@ Checks:
 One line for each session: the date, the checkpoint, and what changed or what is blocked.
 
 - 2026-10-17: Specs, design, and workplan written. No code yet.
+- 2026-10-17: CP0 done. The user chose a `credit_card` type and a `debt` class for all liabilities,
+  with a migration of the existing data (CP6).

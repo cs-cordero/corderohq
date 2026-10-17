@@ -221,13 +221,41 @@ The default role for each account type:
 | `savings`, `brokerage`, `529`, `530a` | HOLDING |
 | All other types | none. The account cannot take a CSV upload until the user sets a role. |
 
-**A new account type is necessary: `credit_card`.** The net worth record has no credit card type
-today. A credit card is the main upload source, and Spec 44 needs an account for each upload. The
-new type has `liability=True` and the fixed asset class `cash`, the same as `checking` but as a
-liability. Add it in two places that must match: `AccountType` and `_ACCOUNT_TYPE_META` in
-`networth/models.py`, and `ACCOUNT_TYPES`, `ACCOUNT_TYPE_META`, and `ACCOUNT_TYPE_LABELS` in
-`web/personal-finance/src/types.ts`. The net worth record can show a credit card balance too, but it does not have to: the
-user can set `excludedFromNetWorth` on it.
+**A new account type, `credit_card`, and a new asset class, `debt` (decided 2026-10-17).**
+
+- The net worth record has no credit card type today. The user's existing card is an
+  `other_liability` account. A credit card is the main upload source, and Spec 44 needs an
+  account for each upload.
+- `credit_card`: `liability=True`, fixed asset class `debt`, `amortizing=False` (no loan terms).
+- **`debt`** is a new asset class for every liability. `mortgage` and `other_liability` change
+  their fixed asset class from `other` to `debt`. The existing data changes too (see the
+  migration below).
+- `debt` is only a fixed class. An asset account can never choose it. The class pickers on
+  `AccountsPage.tsx` and `NetWorthEntryPage.tsx` (`ADDABLE_CLASSES`) must leave it out, and the
+  backend must reject it for a type that lets the user choose classes.
+- Add the type and the class in the places that must match:
+  - `networth/models.py`: `AccountType`, `AssetClass`, and `_ACCOUNT_TYPE_META`.
+  - `web/personal-finance/src/types.ts`: `ACCOUNT_TYPES`, `ACCOUNT_TYPE_META`,
+    `ACCOUNT_TYPE_LABELS`, `ASSET_CLASSES`, and `ASSET_CLASS_LABELS`.
+- The net worth record can show a credit card balance, but it does not have to: the user can set
+  `excludedFromNetWorth` on it.
+
+**One-time migration script: `lambda/scripts/migrate_liabilities_to_debt.py`.** Copy the style of
+`migrate_networth_asset_classes.py`: `--stage`, a dry run by default, `--apply` to write, and safe
+to run again.
+
+1. Each `Account` row with `accountType` `mortgage` or `other_liability`: change `assetClasses`
+   from `["other"]` to `["debt"]`.
+2. Each `NetWorthSnapshot` row of those accounts: move the value at `byAssetClass.other` to
+   `byAssetClass.debt`.
+3. Each account ID that the user gives with `--to-credit-card <accountId>`: change `accountType`
+   to `credit_card`, set `assetClasses` to `["debt"]`, and remove `loanTerms`. Its snapshot rows
+   move from `other` to `debt` in step 2, because it is an `other_liability` account before the
+   change.
+4. Print each change. Run it on dev first, then on prod.
+
+Also check `lambda/scripts/import_networth_csv.py`. Its comments and its class map name `other`
+for a mortgage.
 
 ### Changed table: `BudgetAuditLog-{stage}`
 
@@ -689,7 +717,8 @@ New and changed tests in `lambda/tests/`:
   Off-budget total, `totalsWithOffBudget`, and `leftToAssign`.
 - `test_budget_transactions.py` — disposition validation, the note, and the account.
 - `test_personal_finance_handler.py` — the new routes, and the changes to upload and commit.
-- `test_networth_models.py` — the `credit_card` account type.
+- `test_networth_models.py` — the `credit_card` account type, the `debt` class, and the rule
+  that an asset account cannot choose `debt`.
 - `test_budget_csv_import.py` — the local column types, the prompt without values, unique
   descriptions, the `kind` in the answer, fingerprints with `n`, the pair match (none, one, many),
   last four, the bank hint, and every row of the direction table.
@@ -711,8 +740,6 @@ short:
 
 ## Open Items
 
-- **The `credit_card` account type** changes the net worth record. Confirm that a credit card in
-  the Account table is acceptable, and whether it shows in net worth.
 - **`compute_summary()` has its own walk-back** (`_walk_back_amount()` in `aws/dynamodb.py`), apart
   from `budget/densify.py`. The refactor of the densify code (workplan CP2) must cover both, or
   leave the summary copy as it is and say so.
