@@ -18,17 +18,17 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Run static checks across the monorepo (pytest, ruff, ty, tsc, eslint, prettier).
+Run static checks across the monorepo (pytest, ruff, ty, tsc, eslint, prettier, jest).
 
 By default, ruff/eslint/prettier autofix in place. Pass --no-fix for a
 read-only run (CI-style).
 
 Options:
   -p, --python       Only run Python checks (lambda/)
-  -t, --typescript   Only run TypeScript/JS checks (infra/, personal-finance/)
+  -t, --typescript   Only run TypeScript/JS checks (infra/, web/personal-finance/)
   -s, --synth        Also run \`cdk synth\` (opt-in; slow, skipped by default)
-  -n, --no-fix       Don't autofix — just report. pytest, ty, tsc, cdk synth
-                     are always read-only and unaffected by this flag.
+  -n, --no-fix       Don't autofix — just report. pytest, ty, tsc, jest, and
+                     cdk synth are always read-only and unaffected by this flag.
   -c, --copy         Also copy combined output to the clipboard (macOS pbcopy)
   -h, --help         Show this help
 
@@ -73,6 +73,21 @@ run() {
     fi
 }
 
+# Go into a folder before its checks. If the folder is absent, report one failure and return
+# non-zero, so that the caller skips the checks of that folder. Without this, a wrong path makes
+# the checks run in the previous folder, and they pass for the wrong code.
+enter() {
+    local dir="$1"
+    if cd "$dir" 2>/dev/null; then
+        return 0
+    fi
+    echo
+    echo "==> cd $dir"
+    echo "    FAIL (folder not found)"
+    FAILURES+=("cd $dir")
+    return 1
+}
+
 main() {
     # In --fix mode, swap `--check` flags for the equivalent in-place writes.
     # Only "safe" autofixes are applied (ruff's default policy, eslint's default
@@ -89,8 +104,7 @@ main() {
         local PRETTIER_ARGS=(--check)
     fi
 
-    if $RUN_PYTHON; then
-        cd "$ROOT/lambda"
+    if $RUN_PYTHON && enter "$ROOT/lambda"; then
         run "lambda: pytest"        uv run python -m pytest
         run "lambda: ruff check"    uv run ruff check "${RUFF_CHECK_ARGS[@]}" .
         run "lambda: ruff format"   uv run ruff format "${RUFF_FORMAT_ARGS[@]}" .
@@ -98,19 +112,24 @@ main() {
     fi
 
     if $RUN_TS; then
-        cd "$ROOT/infra"
-        run "infra: tsc"            npx tsc --noEmit
-        run "infra: eslint"         npx eslint "${ESLINT_ARGS[@]}" .
-        run "infra: prettier"       npx prettier "${PRETTIER_ARGS[@]}" .
+        if enter "$ROOT/infra"; then
+            run "infra: tsc"            npx tsc --noEmit
+            run "infra: eslint"         npx eslint "${ESLINT_ARGS[@]}" .
+            run "infra: prettier"       npx prettier "${PRETTIER_ARGS[@]}" .
+            run "infra: jest"           npm test --silent
+        fi
 
-        cd "$ROOT/personal-finance"
-        run "personal-finance: tsc"      npx tsc --noEmit
-        run "personal-finance: eslint"   npx eslint "${ESLINT_ARGS[@]}" .
-        run "personal-finance: prettier" npx prettier "${PRETTIER_ARGS[@]}" .
+        # tsconfig.json here holds only project references and no files, so a plain
+        # `tsc --noEmit` checks nothing. `tsc -b` follows the references. Both referenced
+        # configs set noEmit, so it writes no output.
+        if enter "$ROOT/web/personal-finance"; then
+            run "personal-finance: tsc"      npx tsc -b
+            run "personal-finance: eslint"   npx eslint "${ESLINT_ARGS[@]}" .
+            run "personal-finance: prettier" npx prettier "${PRETTIER_ARGS[@]}" .
+        fi
     fi
 
-    if $RUN_SYNTH; then
-        cd "$ROOT/infra"
+    if $RUN_SYNTH && enter "$ROOT/infra"; then
         run "infra: cdk synth"      npx cdk synth --quiet
     fi
 

@@ -40,6 +40,7 @@ Give the user these commands. Each one runs from the repository root.
 
 | Name | Command |
 |---|---|
+| All checks, read-only | `./check.sh -n` (`-p` for Python only, `-t` for TypeScript only; without `-n` it fixes files in place) |
 | Python tests | `cd lambda && uv run pytest` |
 | One Python test file | `cd lambda && uv run pytest tests/<file>.py` |
 | Python lint and format | `cd lambda && uv run ruff check . && uv run ruff format --check .` |
