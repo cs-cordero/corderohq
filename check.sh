@@ -7,6 +7,8 @@
 set -o pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# The folder that the user ran the script from. main() goes back to it at the end.
+ORIG_DIR="$(pwd)"
 
 RUN_PYTHON=false
 RUN_TS=false
@@ -88,7 +90,7 @@ enter() {
     return 1
 }
 
-main() {
+run_checks() {
     # In --fix mode, swap `--check` flags for the equivalent in-place writes.
     # Only "safe" autofixes are applied (ruff's default policy, eslint's default
     # --fix scope, prettier's --write). pytest/ty/tsc/synth have no fix mode.
@@ -144,6 +146,14 @@ main() {
         echo "  - $f"
     done
     return 1
+}
+
+# Run the checks, and then go back to the folder that the user started in, whatever the result.
+main() {
+    run_checks
+    local rc=$?
+    cd "$ORIG_DIR" || true
+    return "$rc"
 }
 
 if $COPY; then
