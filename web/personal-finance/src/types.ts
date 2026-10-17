@@ -67,13 +67,28 @@ export interface PinResult {
     };
 }
 
+// How the budget counts a transaction. The backend treats an absent value as BUDGET, and the
+// parser does the same.
+export const DISPOSITIONS = ["BUDGET", "OFF_BUDGET", "SKIP"] as const;
+export type Disposition = (typeof DISPOSITIONS)[number];
+
+export const DISPOSITION_LABELS: Record<Disposition, string> = {
+    BUDGET: "Budget",
+    OFF_BUDGET: "Off-budget",
+    SKIP: "Skip",
+};
+
 export interface Transaction {
     yearMonth: string;
     sortId: string;
     transactionDate: string;
     description: string;
     amount: number;
-    categoryId: string;
+    disposition: Disposition;
+    // Always present on a BUDGET row. Optional on an OFF_BUDGET row. Absent on a SKIP row.
+    categoryId?: string;
+    accountId?: string;
+    note?: string;
     createdAt: string;
 }
 
@@ -94,6 +109,9 @@ export interface Summary {
     state: "EDITABLE" | "GRACE" | "LOCKED";
     categories: SummaryCategory[];
     totals: { budgeted: number; actual: number; delta: number };
+    // Not part of `totals`. The budgeted amount of the Off-budget row is always 0.
+    offBudget: { actual: number };
+    totalsWithOffBudget: { budgeted: number; actual: number };
 }
 
 export interface AuditUser {

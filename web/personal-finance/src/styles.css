@@ -957,6 +957,22 @@ textarea:focus {
     font-weight: 600;
 }
 
+/* Transaction disposition badges. A BUDGET row shows no badge. */
+.badge-disposition-OFF_BUDGET {
+    background: #f3e8ff;
+    color: #6b21a8;
+}
+
+.badge-disposition-SKIP {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+/* The Off-budget rows below the summary total. */
+.summary-off-budget-row td {
+    color: #6b21a8;
+}
+
 .row-has-issue {
     background: #fff7ed;
 }

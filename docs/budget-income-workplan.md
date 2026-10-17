@@ -29,6 +29,8 @@ These come from `CLAUDE.md` and the user. Obey them.
 - Read each environment variable with `get_env_var()` from `util.py`.
 - When a CDK stack gets a new resource, change the JSDoc of the stack class to list it.
 - Use no deprecated API or package.
+- Do not put spec numbers ("Spec 45") in code comments, docstrings, or test docstrings. Say the
+  rule in plain words. Spec numbers are fine in the docs.
 - The repository is public. Put no real names, employers, amounts, or account numbers in the code,
   the tests, or the docs. Use made-up values such as "Employer A".
 
@@ -76,39 +78,46 @@ income work yet.
 
 Backend:
 
-- [ ] `aws/dynamodb.py`: add `disposition_of(txn) -> str`. An absent value returns `"BUDGET"`.
-      Add the three values as constants.
-- [ ] `TransactionsTable.create()` and `batch_create()`: store `disposition`, `accountId`, and
+- [x] `budget/dispositions.py` (new): `disposition_of(txn) -> str`, where an absent value returns
+      `"BUDGET"`; the three values as constants; and `resolve_disposition_fields()`, which checks
+      the rules. The handler and `aws/dynamodb.py` both use it.
+- [x] `TransactionsTable.create()` and `batch_create()`: store `disposition`, `accountId`, and
       `note` when they are present.
-- [ ] `TransactionsTable.update()`: `SET` the new fields. `REMOVE` `categoryId` for a change to
+- [x] `TransactionsTable.update()`: `SET` the new fields. `REMOVE` `categoryId` for a change to
       SKIP. `REMOVE` `note` for an empty note.
-- [ ] Handler `_post_transaction()`, `_put_transaction()`, `_post_transactions_commit()`: accept and
+- [x] Handler `_post_transaction()`, `_put_transaction()`, `_post_transactions_commit()`: accept and
       validate `disposition` and `note` (design **Transaction API**). `categoryId` is required only
       for BUDGET.
-- [ ] `_validate_commit_rows()`: `missing_category` only for a BUDGET row, or an OFF_BUDGET row
+- [x] `_validate_commit_rows()`: `missing_category` only for a BUDGET row, or an OFF_BUDGET row
       with an unknown `categoryId`.
-- [ ] `compute_summary()`: only BUDGET rows count in a category and in the membership rules. Add
+- [x] `compute_summary()`: only BUDGET rows count in a category and in the membership rules. Add
       `offBudget` and `totalsWithOffBudget` to the result.
+- [x] `_post_budget_replace()`: the body rule ("every category with a non-zero transaction") reads
+      BUDGET rows only. A SKIP row has no `categoryId`, so the old code failed on it.
 
 Frontend:
 
-- [ ] `types.ts` and `parsers.ts`: `Transaction` gets optional `disposition`, `accountId`, and
-      `note`. `Summary` gets `offBudget` and `totalsWithOffBudget`. The parser must accept a row
+- [x] `types.ts` and `parsers.ts`: `Transaction` gets `disposition` (the parser gives BUDGET when
+      it is absent), and optional `categoryId`, `accountId`, and `note`. `categoryId` was
+      required before, so a SKIP row would have broken the parser. `Summary` gets `offBudget` and `totalsWithOffBudget`. The parser must accept a row
       with no `disposition`.
-- [ ] `api.ts`: `createTransaction()` and `updateTransaction()` send `disposition` and `note`.
-- [ ] `TransactionsPage.tsx`: disposition and note columns. A "Show skipped rows" filter, off by
+- [x] `api.ts`: `createTransaction()` and `updateTransaction()` send `disposition` and `note`.
+- [x] `TransactionsPage.tsx`: disposition and note columns. A "Show skipped rows" filter, off by
       default. The edit of a row can change the disposition and the note. Hide the category picker
       for SKIP.
-- [ ] `SummaryPage.tsx`: the Off-budget row and the "TOTAL + off-budget" row below the TOTAL row.
-- [ ] `UploadPage.tsx`: no change yet. Its rows commit as BUDGET, the same as today.
+- [x] `SummaryPage.tsx`: the Off-budget row and the "TOTAL + off-budget" row below the TOTAL row.
+- [x] `UploadPage.tsx`: no change yet. Its rows commit as BUDGET, the same as today.
 
 Tests:
 
-- [ ] `test_budget_transactions.py`: the disposition rules, the note rules, and the `REMOVE` cases.
-- [ ] `test_budget_summary.py`: an OFF_BUDGET row and a SKIP row do not change a category; the
+- [x] `test_budget_dispositions.py` (new): the disposition rules and the note rules.
+- [x] `test_budget_transactions.py`: `create()`, `batch_create()`, and the `REMOVE` cases of
+      `update()`.
+- [x] `test_budget_summary.py`: an OFF_BUDGET row and a SKIP row do not change a category; the
       membership rules; `offBudget`; `totalsWithOffBudget`; a row with no `disposition` counts as
       BUDGET.
-- [ ] `test_personal_finance_handler.py`: the new body fields on the three routes.
+- [x] `test_personal_finance_handler.py`: the new body fields on the three routes, and the
+      `/replace` body rule, which now ignores the categories of OFF_BUDGET and SKIP rows.
 
 Checks (the user runs them):
 
@@ -345,3 +354,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: Specs, design, and workplan written. No code yet.
 - 2026-10-17: CP0 done. The user chose a `credit_card` type and a `debt` class for all liabilities,
   with a migration of the existing data (CP6).
+- 2026-10-17: CP1 code and tests written and committed. The CP1 checks are not run yet.

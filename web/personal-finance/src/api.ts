@@ -26,7 +26,7 @@ import {
     parseTransactionArray,
     parseUploadResult,
 } from "./parsers";
-import type { AccountCreate, AccountUpdate, Transaction } from "./types";
+import type { AccountCreate, AccountUpdate, Disposition, Transaction } from "./types";
 
 const API_BASE = "/api";
 
@@ -149,7 +149,10 @@ export const createTransaction = (
         transactionDate: string;
         description: string;
         amount: number;
-        categoryId: string;
+        disposition: Disposition;
+        // Required for BUDGET, optional for OFF_BUDGET. The server drops it for SKIP.
+        categoryId?: string;
+        note?: string;
     },
     override = false,
 ) =>
@@ -160,7 +163,9 @@ export const createTransaction = (
 export const updateTransaction = (
     yearMonth: string,
     sortId: string,
-    updates: Partial<Pick<Transaction, "description" | "amount" | "categoryId">>,
+    // An empty string for `categoryId` or `note` removes the value. A change to SKIP removes the
+    // category on the server.
+    updates: Partial<Pick<Transaction, "description" | "amount" | "disposition" | "categoryId" | "note">>,
     override = false,
 ) =>
     request("/transactions/update", parseTransaction, {

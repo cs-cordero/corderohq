@@ -125,6 +125,20 @@ export default function SummaryPage() {
                                 <strong>{formatCurrency(summary.totals.delta)}</strong>
                             </td>
                         </tr>
+                        {/* Off-budget money is not in the Total above, so the Total delta shows no
+                            false overspend. The last row adds it back, to show all money spent. */}
+                        <tr className="summary-off-budget-row">
+                            <td>Off-budget</td>
+                            <td className="num">{formatCurrency(0)}</td>
+                            <td className="num">{formatCurrency(summary.offBudget.actual)}</td>
+                            <td className="num">{"\u2014"}</td>
+                        </tr>
+                        <tr className="summary-off-budget-row">
+                            <td>Total + off-budget</td>
+                            <td className="num">{formatCurrency(summary.totalsWithOffBudget.budgeted)}</td>
+                            <td className="num">{formatCurrency(summary.totalsWithOffBudget.actual)}</td>
+                            <td className="num">{"\u2014"}</td>
+                        </tr>
                     </tfoot>
                 </table>
             )}

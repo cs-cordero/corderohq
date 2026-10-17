@@ -12,6 +12,13 @@ from zoneinfo import ZoneInfo
 import boto3
 from ulid import ULID
 
+from corderohq.budget.dispositions import (
+    DISPOSITION_ATTRIBUTES,
+    DISPOSITION_BUDGET,
+    DISPOSITION_OFF_BUDGET,
+    disposition_of,
+    resolve_disposition_fields,
+)
 from corderohq.budget.editability import editability
 from corderohq.networth.models import (
     HOUSEHOLD_PK,
@@ -584,9 +591,16 @@ class TransactionsTable:
         transaction_date: str,
         description: str,
         amount: int,
-        category_id: str,
+        category_id: str | None,
+        disposition: str = DISPOSITION_BUDGET,
+        account_id: str | None = None,
+        note: str | None = None,
     ) -> dict[str, Any]:
-        """Create a single transaction. Returns the created item."""
+        """Create a single transaction. Returns the created item.
+
+        The caller checks the disposition rules first (`resolve_disposition_fields`). An optional
+        value that is `None` is not stored.
+        """
         description = description.strip()
         if not description:
             raise ValueError("Transaction description must not be empty")
@@ -600,17 +614,27 @@ class TransactionsTable:
             "transactionDate": transaction_date,
             "description": description,
             "amount": amount,
-            "categoryId": category_id,
+            "disposition": disposition,
             "createdAt": now,
         }
+        if category_id is not None:
+            item["categoryId"] = category_id
+        if account_id is not None:
+            item["accountId"] = account_id
+        if note is not None:
+            item["note"] = note
 
         self._table.put_item(Item=item)
         _LOGGER.info("Created transaction %s in %s", sort_id, year_month)
         return item
 
     def batch_create(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Create multiple transactions in a batch. Each dict must have yearMonth,
-        transactionDate, description, amount, categoryId. Returns created items."""
+        """Create multiple transactions in a batch. Returns created items.
+
+        Each dict must have yearMonth, transactionDate, description, and amount. The keys
+        disposition, categoryId, accountId, and note are copied when they are present. The caller
+        checks the disposition rules first.
+        """
         now = datetime.now(tz=UTC).isoformat()
         items: list[dict[str, Any]] = []
 
@@ -623,9 +647,11 @@ class TransactionsTable:
                     "transactionDate": txn["transactionDate"],
                     "description": txn["description"].strip(),
                     "amount": txn["amount"],
-                    "categoryId": txn["categoryId"],
                     "createdAt": now,
                 }
+                for name in DISPOSITION_ATTRIBUTES:
+                    if txn.get(name) is not None:
+                        item[name] = txn[name]
                 batch.put_item(Item=item)
                 items.append(item)
 
@@ -633,29 +659,46 @@ class TransactionsTable:
         return items
 
     def update(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Update a transaction's mutable fields (description, amount, categoryId).
-        Returns the updated item, or None if not found."""
+        """Update the mutable fields of a transaction. Returns the updated item, or None if not found.
+
+        The mutable fields are description, amount, and the attributes in
+        `DISPOSITION_ATTRIBUTES`. If `updates` names any disposition attribute, the method merges
+        the change over the stored row, checks the disposition rules, and then writes all four
+        attributes: it sets each value that exists, and removes each one that does not. Raise
+        `ValueError` if a rule fails.
+        """
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
         if "Item" not in response:
             return None
+        existing = response["Item"]
 
-        update_parts: list[str] = []
-        attr_values: dict[str, Any] = {}
+        set_values: dict[str, Any] = {field: updates[field] for field in ("description", "amount") if field in updates}
+        remove_names: list[str] = []
+        if any(name in updates for name in DISPOSITION_ATTRIBUTES):
+            fields = resolve_disposition_fields(updates, base=existing)
+            set_values.update(fields.stored_values())
+            remove_names = fields.absent_attributes()
+
+        if not set_values and not remove_names:
+            return existing
+
         attr_names: dict[str, str] = {}
+        attr_values: dict[str, Any] = {}
+        set_parts: list[str] = []
+        for field, value in set_values.items():
+            attr_names[f"#{field}"] = field
+            attr_values[f":{field}"] = value
+            set_parts.append(f"#{field} = :{field}")
+        for field in remove_names:
+            attr_names[f"#{field}"] = field
 
-        for field in ("description", "amount", "categoryId"):
-            if field in updates:
-                placeholder = f":{field}"
-                update_parts.append(f"#{field} = {placeholder}")
-                attr_values[placeholder] = updates[field]
-                attr_names[f"#{field}"] = field
-
-        if not update_parts:
-            return response["Item"]
+        expression = "SET " + ", ".join(set_parts)
+        if remove_names:
+            expression += " REMOVE " + ", ".join(f"#{field}" for field in remove_names)
 
         result = self._table.update_item(
             Key={"yearMonth": year_month, "sortId": sort_id},
-            UpdateExpression="SET " + ", ".join(update_parts),
+            UpdateExpression=expression,
             ExpressionAttributeNames=attr_names,
             ExpressionAttributeValues=attr_values,
             ReturnValues="ALL_NEW",
@@ -828,6 +871,10 @@ def compute_summary(
     Amounts are signed (positive=expense, negative=income/return). Aggregation is
     a straight sum — no `abs()`, no sign flips. A refund or income row reduces the
     category's actual, which makes delta (= budgeted - actual) larger.
+
+    Only a BUDGET transaction counts in a category and in the membership rules. The OFF_BUDGET
+    transactions add up to `offBudget.actual`, which is not in `totals`. A SKIP transaction counts
+    nowhere.
     """
     txns = transactions.list_for_month(year_month)
     categories_all = category_table.list_all()
@@ -861,10 +908,19 @@ def compute_summary(
 
     actual_by_category: dict[str, Decimal] = {}
     nonzero_txn_cat_ids: set[str] = set()
+    budget_txn_cat_ids: set[str] = set()
+    off_budget_actual = Decimal("0")
     for txn in txns:
-        cat_id = txn["categoryId"]
         raw_amount = txn.get("amount")
         amount = Decimal("0") if raw_amount is None else Decimal(str(raw_amount))
+        disposition = disposition_of(txn)
+        if disposition == DISPOSITION_OFF_BUDGET:
+            off_budget_actual += amount
+            continue
+        if disposition != DISPOSITION_BUDGET:
+            continue
+        cat_id = txn["categoryId"]
+        budget_txn_cat_ids.add(cat_id)
         actual_by_category[cat_id] = actual_by_category.get(cat_id, Decimal("0")) + amount
         if amount != 0:
             nonzero_txn_cat_ids.add(cat_id)
@@ -875,7 +931,7 @@ def compute_summary(
     if is_locked:
         # Locked rule: every category with ANY budget row or ANY transaction (zero or not).
         # Budget rows are never removed on deactivation, so they're the historical signal.
-        member_ids = set(budget_by_category.keys()) | {t["categoryId"] for t in txns}
+        member_ids = set(budget_by_category.keys()) | budget_txn_cat_ids
     else:
         # Editable rule: active categories + (inactive with non-zero txn).
         active_ids = {c["categoryId"] for c in categories_all if c.get("active", False)}
@@ -921,6 +977,11 @@ def compute_summary(
             "budgeted": int(total_budgeted),
             "actual": int(total_actual),
             "delta": int(total_budgeted - total_actual),
+        },
+        "offBudget": {"actual": int(off_budget_actual)},
+        "totalsWithOffBudget": {
+            "budgeted": int(total_budgeted),
+            "actual": int(total_actual + off_budget_actual),
         },
     }
 

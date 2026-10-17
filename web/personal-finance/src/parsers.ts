@@ -15,6 +15,7 @@ import type {
     ColumnMapping,
     CommitResult,
     DeactivateResult,
+    Disposition,
     DeletionPreview,
     HardDeleteResult,
     LoanTerms,
@@ -34,6 +35,7 @@ import type {
     Transaction,
     UploadResult,
 } from "./types";
+import { DISPOSITIONS } from "./types";
 import {
     arrayOf,
     isObject,
@@ -180,6 +182,17 @@ export function parsePinResult(raw: unknown): PinResult {
     };
 }
 
+function parseDisposition(obj: Record<string, unknown>, parentLabel: string): Disposition {
+    // An old row has no disposition. It is a BUDGET row.
+    const raw = optionalString(obj, "disposition", parentLabel);
+    if (raw === undefined) return "BUDGET";
+    const match = DISPOSITIONS.find((d) => d === raw);
+    if (match === undefined) {
+        throw new Error(`${parentLabel}.disposition: unexpected value '${raw}'`);
+    }
+    return match;
+}
+
 export function parseTransaction(raw: unknown): Transaction {
     const obj = requireObject(raw, "Transaction");
     return {
@@ -188,7 +201,10 @@ export function parseTransaction(raw: unknown): Transaction {
         transactionDate: requireString(obj, "transactionDate", "Transaction"),
         description: requireString(obj, "description", "Transaction"),
         amount: requireNumber(obj, "amount", "Transaction"),
-        categoryId: requireString(obj, "categoryId", "Transaction"),
+        disposition: parseDisposition(obj, "Transaction"),
+        categoryId: optionalString(obj, "categoryId", "Transaction"),
+        accountId: optionalString(obj, "accountId", "Transaction"),
+        note: optionalString(obj, "note", "Transaction"),
         createdAt: requireString(obj, "createdAt", "Transaction"),
     };
 }
@@ -227,6 +243,19 @@ function parseSummaryTotals(raw: unknown): { budgeted: number; actual: number; d
     };
 }
 
+function parseSummaryOffBudget(raw: unknown): { actual: number } {
+    const obj = requireObject(raw, "Summary.offBudget");
+    return { actual: requireNumber(obj, "actual", "Summary.offBudget") };
+}
+
+function parseSummaryTotalsWithOffBudget(raw: unknown): { budgeted: number; actual: number } {
+    const obj = requireObject(raw, "Summary.totalsWithOffBudget");
+    return {
+        budgeted: requireNumber(obj, "budgeted", "Summary.totalsWithOffBudget"),
+        actual: requireNumber(obj, "actual", "Summary.totalsWithOffBudget"),
+    };
+}
+
 export function parseSummary(raw: unknown): Summary {
     const obj = requireObject(raw, "Summary");
     const state = requireString(obj, "state", "Summary");
@@ -238,6 +267,8 @@ export function parseSummary(raw: unknown): Summary {
         state,
         categories: arrayOf(obj.categories, parseSummaryCategory, "Summary.categories"),
         totals: parseSummaryTotals(obj.totals),
+        offBudget: parseSummaryOffBudget(obj.offBudget),
+        totalsWithOffBudget: parseSummaryTotalsWithOffBudget(obj.totalsWithOffBudget),
     };
 }
 
