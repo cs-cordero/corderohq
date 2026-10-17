@@ -121,7 +121,7 @@ Tests:
 
 Checks (the user runs them):
 
-- [ ] Python tests, lint, format, and types pass.
+- [x] Python tests, lint, format, and types pass.
 - [ ] Frontend build and lint pass.
 - [ ] Dev deploy. Mark one transaction Off-budget with a note, and one transaction Skip. The
       summary shows the expected totals.
@@ -355,3 +355,5 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP0 done. The user chose a `credit_card` type and a `debt` class for all liabilities,
   with a migration of the existing data (CP6).
 - 2026-10-17: CP1 code and tests written and committed. The CP1 checks are not run yet.
+- 2026-10-17: CP1 Python checks pass, after three fixes for older type errors in the net worth
+  code. The frontend checks and the dev test are still open.
