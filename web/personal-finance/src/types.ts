@@ -124,7 +124,11 @@ export interface AuditEntry {
     sortId: string;
     changedAt: string;
     effectiveYearMonth: string | null;
-    categoryId: string;
+    // A budget entry has a categoryId. An income plan entry has incomeLineId, and a paycheck
+    // entry also has incomeSourceId.
+    categoryId?: string;
+    incomeSourceId?: string;
+    incomeLineId?: string;
     action: string;
     explanation: string;
     user: AuditUser;

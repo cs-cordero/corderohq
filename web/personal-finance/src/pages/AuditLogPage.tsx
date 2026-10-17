@@ -47,6 +47,7 @@ export default function AuditLogPage() {
     // Category table, so categoryName(id) wouldn't resolve. The audit row carries the
     // historical name in changes.name; we surface it here as a tooltip.
     const renderCategory = (entry: AuditEntry) => {
+        if (entry.categoryId === undefined) return <span>Income</span>;
         const cat = categories.find((c) => c.categoryId === entry.categoryId);
         if (cat) return <span>{cat.name}</span>;
         const changesName = entry.changes.name;

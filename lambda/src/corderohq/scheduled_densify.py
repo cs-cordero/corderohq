@@ -1,4 +1,4 @@
-"""The Lambda that a schedule calls each month, to make the budget month dense.
+"""The Lambda that a schedule calls each month, to make the month dense in the Budget table and in the IncomePlan table.
 
 Invoked by an EventBridge Scheduler at midnight ET on the 1st of every month.
 Runs the same `densify` routine that the API handlers use for lazy hydration,
@@ -16,7 +16,11 @@ from corderohq.aws.dynamodb import (
     BudgetCarryStore,
     BudgetTable,
     CategoryTable,
+    IncomePlanCarryStore,
+    IncomePlanTable,
+    IncomeSourceTable,
     active_category_ids,
+    active_income_source_ids,
     current_year_month,
 )
 from corderohq.budget.densify import densify
@@ -27,6 +31,8 @@ LOGGER.setLevel(logging.INFO)
 
 _CATEGORY_TABLE = CategoryTable(get_env_var("CATEGORY_TABLE_NAME"))
 _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
+_INCOME_SOURCE_TABLE = IncomeSourceTable(get_env_var("INCOME_SOURCE_TABLE_NAME"))
+_INCOME_PLAN_TABLE = IncomePlanTable(get_env_var("INCOME_PLAN_TABLE_NAME"))
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -47,6 +53,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             active_category_ids(_CATEGORY_TABLE.list_all()),
             current_ym,
             cold_start_value=0,
+        )
+        rows_written += densify(
+            IncomePlanCarryStore(_INCOME_PLAN_TABLE),
+            active_income_source_ids(_INCOME_SOURCE_TABLE.list_all()),
+            current_ym,
+            cold_start_value=None,
         )
     except Exception:
         LOGGER.exception(json.dumps({"event": "scheduled_densify_failed", "currentYearMonth": current_ym}))

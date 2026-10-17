@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import boto3
 from ulid import ULID
 
-from corderohq.budget.densify import CarryRow, carry_map, value_at_or_before
+from corderohq.budget.densify import CarryRow, carry_map, value_at_or_before, walk_back_for
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
     DISPOSITION_BUDGET,
@@ -21,6 +21,13 @@ from corderohq.budget.dispositions import (
     resolve_disposition_fields,
 )
 from corderohq.budget.editability import editability
+from corderohq.budget.income import (
+    ONE_TIME_LINE_PREFIX,
+    PAYCHECK_LINE_PREFIX,
+    monthly_net,
+    net_pay,
+    paycheck_line_id,
+)
 from corderohq.networth.models import (
     HOUSEHOLD_PK,
     PROFILE_SETTINGS_SK,
@@ -778,6 +785,222 @@ class TransactionsTable:
         return len(keys)
 
 
+class IncomeSourceTable:
+    """CRUD operations for income sources. An income source is one job of one person.
+
+    The money is not here. Each month of the plan holds a paycheck row in `IncomePlanTable`.
+    """
+
+    def __init__(self, table_name: str) -> None:
+        self._table = _DYNAMO_RESOURCE.Table(table_name)
+
+    def list_all(self) -> list[dict[str, Any]]:
+        """Return every income source (active and inactive), sorted by sortOrder, then label."""
+        items: list[dict[str, Any]] = []
+        params: dict[str, Any] = {}
+        while True:
+            response = self._table.scan(**params)
+            items.extend(response.get("Items", []))
+            if "LastEvaluatedKey" not in response:
+                break
+            params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        return sorted(items, key=lambda s: (int(s.get("sortOrder", 0)), str(s["label"])))
+
+    def get(self, income_source_id: str) -> dict[str, Any] | None:
+        response = self._table.get_item(Key={"incomeSourceId": income_source_id})
+        return response.get("Item")
+
+    def create(self, person_id: str, label: str, frequency: str) -> dict[str, Any]:
+        """Create an active income source at the end of the order. Returns the created item."""
+        existing = self.list_all()
+        sort_order = max((int(s.get("sortOrder", 0)) for s in existing), default=-1) + 1
+        now = datetime.now(tz=UTC).isoformat()
+        item: dict[str, Any] = {
+            "incomeSourceId": str(ULID()),
+            "personId": person_id,
+            "label": label,
+            "frequency": frequency,
+            "active": True,
+            "sortOrder": sort_order,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        self._table.put_item(Item=item)
+        _LOGGER.info("Created income source %s", item["incomeSourceId"])
+        return item
+
+    def update(self, income_source_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+        """Change `label` and/or `frequency`. Returns the changed item, or None if not found.
+
+        The caller checks the values first.
+        """
+        if self.get(income_source_id) is None:
+            return None
+        set_parts = ["updatedAt = :now"]
+        values: dict[str, Any] = {":now": datetime.now(tz=UTC).isoformat()}
+        for field in ("label", "frequency"):
+            if field in updates:
+                set_parts.append(f"{field} = :{field}")
+                values[f":{field}"] = updates[field]
+        response = self._table.update_item(
+            Key={"incomeSourceId": income_source_id},
+            UpdateExpression="SET " + ", ".join(set_parts),
+            ExpressionAttributeValues=values,
+            ReturnValues="ALL_NEW",
+        )
+        return response["Attributes"]
+
+    def set_active(self, income_source_id: str, active: bool) -> dict[str, Any] | None:
+        """Deactivate or reactivate an income source. Returns the changed item, or None if not found."""
+        if self.get(income_source_id) is None:
+            return None
+        response = self._table.update_item(
+            Key={"incomeSourceId": income_source_id},
+            UpdateExpression="SET active = :val, updatedAt = :now",
+            ExpressionAttributeValues={":val": active, ":now": datetime.now(tz=UTC).isoformat()},
+            ReturnValues="ALL_NEW",
+        )
+        _LOGGER.info("Set income source %s active=%s", income_source_id, active)
+        return response["Attributes"]
+
+    def reorder(self, income_source_ids_in_order: list[str]) -> None:
+        """Write `sortOrder = index` on each income source in the list."""
+        now = datetime.now(tz=UTC).isoformat()
+        for index, income_source_id in enumerate(income_source_ids_in_order):
+            self._table.update_item(
+                Key={"incomeSourceId": income_source_id},
+                UpdateExpression="SET sortOrder = :o, updatedAt = :now",
+                ExpressionAttributeValues={":o": index, ":now": now},
+            )
+
+
+def active_income_source_ids(income_sources: list[dict[str, Any]]) -> list[str]:
+    """Return the IDs of the active income sources, in the order given. The densify step uses them."""
+    return [s["incomeSourceId"] for s in income_sources if s["active"]]
+
+
+def _paycheck_of(row: dict[str, Any]) -> dict[str, Any]:
+    """Return the paycheck value of a stored paycheck row."""
+    return {
+        "paychecksPerMonth": row["paychecksPerMonth"],
+        "gross": row["gross"],
+        "deductions": row.get("deductions", []),
+    }
+
+
+class IncomePlanTable:
+    """The income plan of each month: paycheck rows and one-time income lines.
+
+    PK `yearMonth`, SK `lineId`. A paycheck row has `lineId = "SRC#{incomeSourceId}"`. It obeys
+    the dense-past, sparse-future rules of a Budget row (see `IncomePlanCarryStore`). A one-time
+    line has `lineId = "ONE#{ULID}"`. It belongs to its month only.
+    """
+
+    def __init__(self, table_name: str) -> None:
+        self._table = _DYNAMO_RESOURCE.Table(table_name)
+
+    def get_month(self, year_month: str) -> list[dict[str, Any]]:
+        """Return every row of one month: paycheck rows and one-time lines."""
+        items: list[dict[str, Any]] = []
+        params: dict[str, Any] = {
+            "KeyConditionExpression": "yearMonth = :ym",
+            "ExpressionAttributeValues": {":ym": year_month},
+        }
+        while True:
+            response = self._table.query(**params)
+            items.extend(response.get("Items", []))
+            if "LastEvaluatedKey" not in response:
+                break
+            params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        return items
+
+    def scan_paychecks(self) -> list[dict[str, Any]]:
+        """Return every paycheck row in the table. The one-time lines are left out."""
+        items: list[dict[str, Any]] = []
+        params: dict[str, Any] = {
+            "FilterExpression": "begins_with(lineId, :prefix)",
+            "ExpressionAttributeValues": {":prefix": PAYCHECK_LINE_PREFIX},
+        }
+        while True:
+            response = self._table.scan(**params)
+            items.extend(response.get("Items", []))
+            if "LastEvaluatedKey" not in response:
+                break
+            params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+        return [item for item in items if str(item["lineId"]).startswith(PAYCHECK_LINE_PREFIX)]
+
+    def put_paycheck(self, year_month: str, income_source_id: str, paycheck: dict[str, Any]) -> dict[str, Any]:
+        """Write the paycheck row of one income source in one month. The caller checks the paycheck."""
+        item: dict[str, Any] = {
+            "yearMonth": year_month,
+            "lineId": paycheck_line_id(income_source_id),
+            "lineType": "PAYCHECK",
+            "incomeSourceId": income_source_id,
+            **paycheck,
+        }
+        self._table.put_item(Item=item)
+        return item
+
+    def delete_paycheck(self, year_month: str, income_source_id: str) -> None:
+        self._table.delete_item(Key={"yearMonth": year_month, "lineId": paycheck_line_id(income_source_id)})
+
+    def find_future_months_with_source(self, income_source_id: str, after_month: str) -> list[str]:
+        """Return the months after `after_month` that hold a paycheck row (a pin) for this source."""
+        return sorted(
+            {
+                str(row["yearMonth"])
+                for row in self.scan_paychecks()
+                if row["incomeSourceId"] == income_source_id and str(row["yearMonth"]) > after_month
+            }
+        )
+
+    def get_line(self, year_month: str, line_id: str) -> dict[str, Any] | None:
+        response = self._table.get_item(Key={"yearMonth": year_month, "lineId": line_id})
+        return response.get("Item")
+
+    def put_one_time(self, year_month: str, label: str, amount: int, line_id: str | None = None) -> dict[str, Any]:
+        """Create a one-time income line, or replace it when `line_id` is given. The caller checks the values."""
+        now = datetime.now(tz=UTC).isoformat()
+        existing = self.get_line(year_month, line_id) if line_id else None
+        item: dict[str, Any] = {
+            "yearMonth": year_month,
+            "lineId": line_id or f"{ONE_TIME_LINE_PREFIX}{ULID()}",
+            "lineType": "ONE_TIME",
+            "label": label,
+            "amount": amount,
+            "createdAt": existing["createdAt"] if existing else now,
+            "updatedAt": now,
+        }
+        self._table.put_item(Item=item)
+        return item
+
+    def delete_line(self, year_month: str, line_id: str) -> None:
+        self._table.delete_item(Key={"yearMonth": year_month, "lineId": line_id})
+
+
+class IncomePlanCarryStore:
+    """The paycheck rows of the IncomePlan table as a `DenseSparseStore` for `budget/densify.py`.
+
+    The key of a row is its `incomeSourceId`, and the value is its paycheck. The one-time lines
+    are not part of it, so they never carry forward. A source with no earlier row gets no row:
+    `put_carry_row` writes nothing for a `None` value.
+    """
+
+    def __init__(self, income_plan_table: IncomePlanTable) -> None:
+        self._income_plan_table = income_plan_table
+
+    def scan_carry_rows(self) -> list[CarryRow]:
+        return [
+            (str(row["yearMonth"]), str(row["incomeSourceId"]), _paycheck_of(row))
+            for row in self._income_plan_table.scan_paychecks()
+        ]
+
+    def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
+        if value is None:
+            return
+        self._income_plan_table.put_paycheck(year_month, key, value)
+
+
 _AUDIT_PARTITION = "AUDIT"
 
 
@@ -795,12 +1018,14 @@ class AuditLogTable:
     def write_entry(
         self,
         effective_year_month: str | None,
-        category_id: str,
+        category_id: str | None,
         action: str,
         explanation: str,
         user: dict[str, str],
         changes: dict[str, Any],
         override: bool = False,
+        income_source_id: str | None = None,
+        income_line_id: str | None = None,
     ) -> dict[str, Any]:
         """Write a single audit log entry. Returns the created item.
 
@@ -808,6 +1033,8 @@ class AuditLogTable:
         per the architecture doc's "Audit user identity" section.
         `effective_year_month` may be None for actions not scoped to a single month
         (e.g. CATEGORY_HARD_DELETE).
+        A budget entry has a `category_id`. An income plan entry has an `income_line_id`, and a
+        paycheck entry also has an `income_source_id`. An ID that is None is not stored.
         """
         now = datetime.now(tz=UTC)
 
@@ -816,20 +1043,25 @@ class AuditLogTable:
             "sortId": str(ULID()),
             "changedAt": now.isoformat(),
             "effectiveYearMonth": effective_year_month,
-            "categoryId": category_id,
             "action": action,
             "explanation": explanation,
             "user": user,
             "override": override,
             "changes": changes,
         }
+        if category_id is not None:
+            item["categoryId"] = category_id
+        if income_source_id is not None:
+            item["incomeSourceId"] = income_source_id
+        if income_line_id is not None:
+            item["incomeLineId"] = income_line_id
 
         self._table.put_item(Item=item)
         _LOGGER.info(
             "Audit: %s on %s/%s by %s%s",
             action,
             effective_year_month,
-            category_id,
+            category_id or income_line_id,
             user.get("email", user.get("sub", "?")),
             " (override)" if override else "",
         )
@@ -984,6 +1216,86 @@ def compute_summary(
             "budgeted": int(total_budgeted),
             "actual": int(total_actual + off_budget_actual),
         },
+    }
+
+
+def compute_income(
+    income_plan: IncomePlanTable,
+    income_sources: IncomeSourceTable,
+    year_month: str,
+    now: datetime,
+) -> dict[str, Any]:
+    """Return the income plan of one month, with the net pay of each paycheck and the planned net income.
+
+    Membership, the same as the categories of the summary:
+    - **A future month** — each active income source, with a pin or a value from the walk back.
+      A source with no history is left out.
+    - **The current month and the grace month** — each active income source with a paycheck row.
+    - **A locked month** — each income source with a paycheck row in that month, active or not.
+
+    The one-time lines of the month always count. Nothing here reads a transaction.
+    """
+    sources_by_id = {s["incomeSourceId"]: s for s in income_sources.list_all()}
+    state = editability(year_month, now)
+    now_et = now.astimezone(_BUDGET_TZ)
+    current_ym = f"{now_et.year:04d}-{now_et.month:02d}"
+    is_future = year_month > current_ym
+
+    month_rows = income_plan.get_month(year_month)
+    paycheck_by_source: dict[str, dict[str, Any]] = {}
+    pinned_ids: set[str] = set()
+    if is_future:
+        by_key = carry_map(IncomePlanCarryStore(income_plan).scan_carry_rows())
+        for source_id in active_income_source_ids(list(sources_by_id.values())):
+            if (year_month, source_id) in by_key:
+                paycheck_by_source[source_id] = by_key[(year_month, source_id)]
+                pinned_ids.add(source_id)
+                continue
+            carried = walk_back_for(by_key, year_month, source_id)
+            if carried is not None:
+                paycheck_by_source[source_id] = carried
+    else:
+        for row in month_rows:
+            if not str(row["lineId"]).startswith(PAYCHECK_LINE_PREFIX):
+                continue
+            source = sources_by_id.get(row["incomeSourceId"])
+            if state == "LOCKED" or (source is not None and source.get("active", False)):
+                paycheck_by_source[str(row["incomeSourceId"])] = _paycheck_of(row)
+
+    paychecks: list[dict[str, Any]] = []
+    for source_id, source in sources_by_id.items():
+        if source_id not in paycheck_by_source:
+            continue
+        paycheck = paycheck_by_source[source_id]
+        entry: dict[str, Any] = {
+            "incomeSourceId": source_id,
+            "label": source["label"],
+            "personId": source["personId"],
+            "active": bool(source.get("active", False)),
+            **paycheck,
+            "net": net_pay(paycheck),
+            "monthlyNet": monthly_net(paycheck),
+        }
+        if is_future:
+            entry["pinned"] = source_id in pinned_ids
+        paychecks.append(entry)
+
+    one_time = sorted(
+        (
+            {"lineId": row["lineId"], "label": row["label"], "amount": int(row["amount"])}
+            for row in month_rows
+            if str(row["lineId"]).startswith(ONE_TIME_LINE_PREFIX)
+        ),
+        key=lambda line: str(line["lineId"]),
+    )
+
+    planned = sum(p["monthlyNet"] for p in paychecks) + sum(line["amount"] for line in one_time)
+    return {
+        "yearMonth": year_month,
+        "state": state,
+        "paychecks": paychecks,
+        "oneTime": one_time,
+        "plannedNetIncome": planned,
     }
 
 

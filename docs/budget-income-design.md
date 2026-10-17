@@ -345,6 +345,8 @@ All routes need a JWT, and all sit under `/api`, the same as today.
 | Method | Path                                       | Purpose                                |
 +--------+--------------------------------------------+----------------------------------------+
 | GET    | /api/income-sources?include_inactive=true  | List income sources.                   |
+| POST   | /api/income-sources/reorder                | Body: {order: [incomeSourceId]}.       |
+|        |                                            | Writes sortOrder = index.              |
 | POST   | /api/income-sources                        | Create. Body: personId, label,         |
 |        |                                            | frequency, initialPaycheck (P),        |
 |        |                                            | explanation. Densify first, then write |
@@ -392,15 +394,34 @@ delete becomes necessary later, it copies the category hard delete.
 Membership is the same as Spec 5. An editable month shows the active income sources. A locked
 month shows every income source with a paycheck row in that month, active or not.
 
-**`/replace`** and **`/pin`** copy the Budget endpoints exactly. The budget endpoints take the body
-key `targets`. The income endpoints take the body key `paychecks`, a list of
-`{incomeSourceId, paycheck: P | null}`. `/replace` needs every income source with a row in that
-month. `/pin` returns `downstreamPins` and `pinMatchesCarriedValue`. Two paychecks match when
-`paychecksPerMonth`, `gross`, and the full deduction list are equal. Each body has an
-`explanation` and an optional `override`.
+**`/replace`** and **`/pin`** copy the Budget endpoints. The budget endpoints take the body key
+`targets`. The income endpoints take the body key `paychecks`, a list of
+`{incomeSourceId, paycheck}`. Each income source in the body must exist. Each body has an
+`explanation`, and `/replace` also takes an optional `override`.
+
+- `/replace` needs every income source with a row in that month. **A `null` paycheck is not
+  permitted here** (a `400`). To stop a source, deactivate it. Each change writes one
+  INCOME_CREATE or INCOME_UPDATE entry. The response is the month, the same as
+  `GET /api/income/{YYYY-MM}`.
+- `/pin` takes `null` to remove a pin. It returns `{income: <the month>, warnings:
+  {downstreamPins: [{incomeSourceId, yearMonth}], pinMatchesCarriedValue: [incomeSourceId]}}`.
+- Two paychecks match when `paychecksPerMonth`, `gross`, and the full deduction list are equal,
+  after each goes through the checks (so a stored `Decimal` equals an `int`). The same paycheck
+  again is a no-op with no audit entry.
 
 **The one-time routes.** The year-month must be EDITABLE or GRACE, or LOCKED with the override.
 This includes a future month. Each body has an `explanation`. `amount` must be more than 0.
+`/one-time/update` and `/one-time/delete` take a `lineId` that starts with `ONE#`.
+
+**API Gateway.** API Gateway lists each route explicitly (`createHttpApi()` in
+`personal-finance-web-stack.ts`). Each new route must be in that list, or API Gateway returns a
+404 before the Lambda sees the request.
+
+**The code.** `budget/income.py` holds the paycheck rules (`validate_paycheck()`, `net_pay()`,
+`monthly_net()`, `paychecks_equal()`) and the row IDs. `aws/dynamodb.py` holds
+`IncomeSourceTable`, `IncomePlanTable`, the adapter `IncomePlanCarryStore`,
+`active_income_source_ids()`, and `compute_income()`. Each paycheck entry in the response also
+has `active`, so the Income page can mark an inactive source in a locked month.
 
 ## Left to Assign
 
@@ -752,6 +773,10 @@ short:
 
 ## Open Items
 
+- **An old bug, not in scope:** `compute_summary()` finds the current month with
+  `f"{now.year:04d}-{now.month:02d}"`, which is UTC. After 8 PM or 7 PM ET on the last day of a
+  month, it treats the next month as the current month. `compute_income()` uses ET. CP5 joins the
+  two numbers, so fix the summary in CP5 or before it.
 - **The column mapping without values** (Step 2) can be wrong about the sign. Test it with real
   CSVs from each bank before step 5 of the work.
 - **The first upload after the change** can make copies of old rows, because old rows have no

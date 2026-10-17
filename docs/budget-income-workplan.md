@@ -164,33 +164,38 @@ Checks:
 
 Infrastructure:
 
-- [ ] `personal-finance-dynamodb-stack.ts`: the two tables, two `readonly` properties, and the
+- [x] `personal-finance-dynamodb-stack.ts`: the two tables, two `readonly` properties, and the
       JSDoc.
-- [ ] `infra/app.ts`: pass the two tables to `PersonalFinanceWebStack`.
-- [ ] `personal-finance-web-stack.ts`: the props, the environment variables, and the grants for
-      the API handler and for `densifyFn`. Change the JSDoc if the resource list changes.
-- [ ] `infra/test/`: the tables, the environment variables, and the grants.
+- [x] `infra/app.ts`: pass the two tables to `PersonalFinanceWebStack`.
+- [x] `personal-finance-web-stack.ts`: the props, the environment variables, and the grants for
+      the API handler and for `densifyFn`. **The 12 new routes in the API Gateway route list**
+      (the design missed this). The JSDoc.
+- [x] `infra/test/`: the tables, the environment variables, and the grants.
 
 Backend:
 
-- [ ] `aws/dynamodb.py`: `IncomeSourceTable` (list, get, create, update, deactivate, reactivate,
+- [x] `aws/dynamodb.py`: `IncomeSourceTable` (list, get, create, update, deactivate, reactivate,
       reorder) and `IncomePlanTable` (the `DenseSparseStore` protocol for `SRC#` rows, and the
       one-time line methods).
-- [ ] A paycheck model with validation and the net pay calculation (design **New table:
+- [x] A paycheck model with validation and the net pay calculation (design **New table:
       `IncomePlan-{stage}`**). Put it in a new module, `budget/income.py`.
-- [ ] `compute_income()` (design **Left to Assign**).
-- [ ] `_ensure_hydrated()` and `scheduled_densify.py` densify the income plan too.
-- [ ] The income routes in the handler (design **Income Plan API**), with the editability checks
+- [x] `compute_income()` (design **Left to Assign**).
+- [x] `_ensure_hydrated()` and `scheduled_densify.py` densify the income plan too.
+- [x] The income routes in the handler (design **Income Plan API**), with the editability checks
       and the override.
-- [ ] The audit actions and their `changes` payloads.
+- [x] The audit actions and their `changes` payloads. `AuditLogTable.write_entry()` takes
+      `category_id=None`, `income_source_id`, and `income_line_id`.
+- [x] Frontend, moved here from CP4 so that the audit page does not break in dev:
+      `AuditEntry.categoryId` is optional in `types.ts` and `parsers.ts`, and `AuditLogPage`
+      shows "Income" for an entry with no category.
 
 Tests:
 
-- [ ] `test_budget_income.py` (new): the paycheck validation and the net pay; the income source
+- [x] `test_budget_income.py` (new), which also holds the income plan densify tests: the paycheck validation and the net pay; the income source
       life cycle; `/replace`; `/pin` with both warnings; the one-time routes; the audit entries;
       the editability checks; `compute_income()` for an editable, a future, and a locked month.
-- [ ] `test_budget_densify.py`: the income plan walk-forward, a pin, and a one-time line that never
-      carries forward.
+- [x] The income plan walk-forward, and a one-time line that never carries forward (in
+      `test_budget_income.py`, with the `IncomePlanCarryStore` tests).
 
 Checks:
 
@@ -364,3 +369,5 @@ One line for each session: the date, the checkpoint, and what changed or what is
   code. The frontend checks and the dev test are still open.
 - 2026-10-17: CP1 complete. The user confirmed that all checks pass. Next: CP2.
 - 2026-10-17: CP2 code written. The checks are not run yet.
+- 2026-10-17: CP3 code and tests written. The checks are not run yet. Found: the route list in
+  API Gateway, and an old bug (`compute_summary()` reads the current month in UTC, not ET).
