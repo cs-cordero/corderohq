@@ -77,7 +77,7 @@ The files that the work changes. Paths are from the repository root.
 |---|---|
 | HTTP routes | `lambda/src/corderohq/personal_finance_handler.py` (one `if`/`elif` chain in `handler()`; module-level table objects at the top; `_ensure_hydrated()` runs the densify step) |
 | Table classes, summary | `lambda/src/corderohq/aws/dynamodb.py` (`BudgetTable`, `TransactionsTable`, `AuditLogTable`, `compute_summary()`, `AccountTable`) |
-| Month rules | `lambda/src/corderohq/budget/densify.py` (`densify()`, `resolve_future_targets()`, `walk_back_for()`), `budget/editability.py` |
+| Month rules | `lambda/src/corderohq/budget/densify.py` (`DenseSparseStore`, `densify()`, `resolve_future()`, `resolve_future_targets()`, `walk_back_for()`, `value_at_or_before()`), `budget/editability.py`; the adapter `BudgetCarryStore` and `active_category_ids()` in `aws/dynamodb.py` |
 | CSV import | `lambda/src/corderohq/budget/csv_import.py` (`map_columns()`, `categorize_transactions()`); the upload flow is `_post_transactions_upload()` in the handler |
 | Cron densify | `lambda/src/corderohq/scheduled_densify.py` |
 | Account types | `lambda/src/corderohq/networth/models.py` (`AccountType`, `_ACCOUNT_TYPE_META`) |
@@ -292,23 +292,35 @@ The income plan obeys every month rule of the Budget table (Spec 34). The rules 
 - The densify step fills each missing month, oldest first, for each active income source. It
   leaves a pin in place. It never copies a `ONE#` row.
 
-**Refactor `budget/densify.py` to serve both tables.** Today `densify()` and
-`resolve_future_targets()` take a `BudgetTable` and a `CategoryTable`. Change them to take a small
-protocol:
+**`budget/densify.py` serves both tables (done in CP2).** The module does not import any table
+class. It works on a small protocol, and each caller passes the list of active keys:
 
 ```python
+CarryRow = tuple[str, str, Any]   # (yearMonth, key, value)
+
 class DenseSparseStore(Protocol):
-    def scan_carry_rows(self) -> list[tuple[str, str, Any]]: ...   # (yearMonth, key, value)
+    def scan_carry_rows(self) -> list[CarryRow]: ...
     def put_carry_row(self, year_month: str, key: str, value: Any) -> None: ...
 
-def densify(store: DenseSparseStore, active_keys: list[str], current_ym: str, cold_start_value: Any) -> int: ...
-def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: str) -> list[ResolvedRow]: ...
+def densify(store, active_keys, current_ym, cold_start_value) -> int: ...
+def resolve_future(store, active_keys, year_month) -> list[ResolvedValue]: ...   # key, value, pinned
+def resolve_future_targets(budget_store, active_category_ids, year_month) -> list[dict]: ...  # API shape
+def walk_back_for(by_key, target, key) -> Any: ...          # starts at the month before `target`
+def value_at_or_before(by_key, year_month, key) -> Any: ... # the row in `year_month`, else walk back
 ```
 
-`BudgetTable` and `IncomePlanTable` each implement it. For the Budget table the key is the
-`categoryId`, and the value is the amount. For the income plan the key is the `incomeSourceId`, and
-the value is the paycheck `P`. The existing tests for the densify step must pass with no change to
-their expected results.
+- For the Budget table, `BudgetCarryStore(budget_table)` in `aws/dynamodb.py` is the adapter. The
+  key is the `categoryId`, and the value is the amount. It reads through `scan_all()` and writes
+  through `put_single()`. It is an adapter, and not methods on `BudgetTable`, so that the handler
+  tests, which replace `BudgetTable` with a mock, still work.
+- `active_category_ids(_CATEGORY_TABLE.list_all())` gives the active keys. It filters in Python,
+  the same as the old code.
+- `compute_summary()` now uses `value_at_or_before()`. Its own copy of the walk-back code
+  (`_walk_back_amount()`) is gone. The copy existed only because `densify.py` imported
+  `aws/dynamodb.py`, and that import is gone.
+- **For CP3:** make `IncomePlanCarryStore(income_plan_table)` the same way. The key is the
+  `incomeSourceId`, and the value is the paycheck `P`. It must read only `SRC#` rows, and strip the
+  `SRC#` prefix from the key.
 
 Other rules:
 
@@ -740,9 +752,6 @@ short:
 
 ## Open Items
 
-- **`compute_summary()` has its own walk-back** (`_walk_back_amount()` in `aws/dynamodb.py`), apart
-  from `budget/densify.py`. The refactor of the densify code (workplan CP2) must cover both, or
-  leave the summary copy as it is and say so.
 - **The column mapping without values** (Step 2) can be wrong about the sign. Test it with real
   CSVs from each bank before step 5 of the work.
 - **The first upload after the change** can make copies of old rows, because old rows have no

@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import boto3
 from ulid import ULID
 
+from corderohq.budget.densify import CarryRow, carry_map, value_at_or_before
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
     DISPOSITION_BUDGET,
@@ -56,30 +57,6 @@ def _month_end_utc(year_month: str) -> datetime:
     last_day = calendar.monthrange(year, month)[1]
     local_end = datetime(year, month, last_day, 23, 59, 59, 999999, tzinfo=_BUDGET_TZ)
     return local_end.astimezone(UTC)
-
-
-def _prev_year_month(year_month: str) -> str:
-    year, month = int(year_month[:4]), int(year_month[5:7])
-    if month == 1:
-        return f"{year - 1}-12"
-    return f"{year}-{month - 1:02d}"
-
-
-def _walk_back_amount(by_key: dict[tuple[str, str], Any], year_month: str, cat_id: str, max_steps: int = 240) -> Any:
-    """Find the most recent stored amount at or before `year_month` for `cat_id`.
-
-    Mirrors densify.walk_back_for but lives here to avoid a circular import
-    between dynamodb.py and budget.densify (densify imports BudgetTable from
-    here). Returns None if no row is found within the safety bound.
-    """
-    if (year_month, cat_id) in by_key:
-        return by_key[(year_month, cat_id)]
-    cursor = year_month
-    for _ in range(max_steps):
-        cursor = _prev_year_month(cursor)
-        if (cursor, cat_id) in by_key:
-            return by_key[(cursor, cat_id)]
-    return None
 
 
 def _resolve_historical_name(category: dict[str, Any], month_end_utc: datetime) -> str | None:
@@ -423,6 +400,31 @@ class CategoryTable:
         return response["Attributes"]
 
 
+def active_category_ids(categories: list[dict[str, Any]]) -> list[str]:
+    """Return the IDs of the active categories, in the order given. The densify step uses them."""
+    return [c["categoryId"] for c in categories if c["active"]]
+
+
+class BudgetCarryStore:
+    """The Budget table as a `DenseSparseStore` for `budget/densify.py`.
+
+    The key of a row is its `categoryId`, and the value is its amount. This is a separate class,
+    and not methods on `BudgetTable`, so that a test that replaces `BudgetTable` with a mock still
+    drives the densify step through `scan_all()` and `put_single()`.
+    """
+
+    def __init__(self, budget_table: BudgetTable) -> None:
+        self._budget_table = budget_table
+
+    def scan_carry_rows(self) -> list[CarryRow]:
+        """Return every Budget row as `(yearMonth, categoryId, amount)`."""
+        return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan_all()]
+
+    def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
+        """Write one Budget row."""
+        self._budget_table.put_single(year_month, key, value)
+
+
 class BudgetTable:
     """Monthly budget target management."""
 
@@ -477,7 +479,7 @@ class BudgetTable:
         return items
 
     def put_single(self, year_month: str, category_id: str, amount: Any) -> None:
-        """Write one budget row. The densify step calls this to fill a cell that is absent."""
+        """Write one budget row."""
         self._table.put_item(
             Item={"yearMonth": year_month, "categoryId": category_id, "amount": amount},
         )
@@ -894,11 +896,10 @@ def compute_summary(
     # month is resolved per category" rule.
     budget_by_category: dict[str, Decimal] = {}
     if is_future:
-        rows = budget.scan_all()
-        by_key: dict[tuple[str, str], Any] = {(r["yearMonth"], r["categoryId"]): r["amount"] for r in rows}
+        by_key = carry_map(BudgetCarryStore(budget).scan_carry_rows())
         for cat in categories_all:
             cat_id = cat["categoryId"]
-            raw = _walk_back_amount(by_key, year_month, cat_id)
+            raw = value_at_or_before(by_key, year_month, cat_id)
             if raw is not None:
                 budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))
     else:

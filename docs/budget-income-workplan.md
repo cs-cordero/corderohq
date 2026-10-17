@@ -135,14 +135,18 @@ A refactor only. The budget must work exactly as before.
 **Before you start:** design section **Income Plan Month Rules**. Read `budget/densify.py` and
 `tests/test_budget_densify.py` in full.
 
-- [ ] Add the `DenseSparseStore` protocol in `budget/densify.py`.
-- [ ] Change `densify()` and `resolve_future_targets()` to take the protocol and a list of active
-      keys. Keep the cold-start value as a parameter (`0` for the budget).
-- [ ] `BudgetTable` implements the protocol.
-- [ ] Change every caller: `_ensure_hydrated()`, `_get_budget()`, `compute_summary()`, the pin
-      code, and `scheduled_densify.py`.
-- [ ] The existing tests in `test_budget_densify.py` pass. Change only how they call the
-      functions, not what they expect.
+- [x] Add the `DenseSparseStore` protocol in `budget/densify.py`. The module no longer imports
+      `aws/dynamodb.py`.
+- [x] Change `densify()` and `resolve_future_targets()` to take the protocol and a list of active
+      keys. Keep the cold-start value as a parameter (`0` for the budget). Add `resolve_future()`
+      (generic) and `value_at_or_before()`.
+- [x] `BudgetCarryStore` (an adapter in `aws/dynamodb.py`) implements the protocol for the Budget
+      table. `active_category_ids()` gives the active keys.
+- [x] Change every caller: `_ensure_hydrated()`, `_get_budget()`, the pin code, and
+      `scheduled_densify.py`.
+- [x] `compute_summary()` uses `value_at_or_before()`. Delete its copy of the walk-back code.
+- [x] The existing tests in `test_budget_densify.py` change only how they call the functions.
+      New tests drive the generic functions with an in-memory store.
 
 Checks:
 
@@ -358,3 +362,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP1 Python checks pass, after three fixes for older type errors in the net worth
   code. The frontend checks and the dev test are still open.
 - 2026-10-17: CP1 complete. The user confirmed that all checks pass. Next: CP2.
+- 2026-10-17: CP2 code written. The checks are not run yet.

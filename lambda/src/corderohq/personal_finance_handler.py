@@ -12,12 +12,14 @@ from zoneinfo import ZoneInfo
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditLogTable,
+    BudgetCarryStore,
     BudgetTable,
     CategoryGroupTable,
     CategoryTable,
     NetWorthSnapshotTable,
     ProfileTable,
     TransactionsTable,
+    active_category_ids,
     compute_summary,
 )
 from corderohq.budget.auth import is_budget_admin
@@ -134,7 +136,12 @@ def _ensure_hydrated(now: datetime) -> None:
     depends on dense rows for past/current months (reads, /replace, /pin,
     category create). See docs/personal-finance-architecture.md "Densification".
     """
-    densify(_BUDGET_TABLE, _CATEGORY_TABLE, _year_month_of(now))
+    densify(
+        BudgetCarryStore(_BUDGET_TABLE),
+        active_category_ids(_CATEGORY_TABLE.list_all()),
+        _year_month_of(now),
+        cold_start_value=0,
+    )
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -672,7 +679,9 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     # Future month: resolve effective values via per-category walk-back,
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
     # carried values.
-    targets = resolve_future_targets(_BUDGET_TABLE, _CATEGORY_TABLE, year_month)
+    targets = resolve_future_targets(
+        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.list_all()), year_month
+    )
     return _json_response(200, json.dumps(targets, default=_json_default))
 
 
@@ -891,7 +900,9 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         key=lambda p: (p["yearMonth"], p["categoryId"]),
     )
 
-    resolved = resolve_future_targets(_BUDGET_TABLE, _CATEGORY_TABLE, year_month)
+    resolved = resolve_future_targets(
+        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.list_all()), year_month
+    )
 
     return _json_response(
         200,
