@@ -1957,7 +1957,7 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
     """Edit an account's mutable fields.
 
     Body may carry any of name/assetClasses/owners/excludedFromNetWorth/targetYear/
-    loanTerms/notes/sortOrder. A field present with value null removes the optional
+    loanTerms/notes/sortOrder/budgetRole/lastFour. A field present with value null removes the optional
     attribute (loanTerms/notes). `owners` and `assetClasses`, when present, are
     non-empty lists that replace the current values. `targetYear` is reconciled
     against the effective asset-class set. `accountType` and `liability` are immutable
@@ -1977,6 +1977,8 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
         "loanTerms",
         "notes",
         "sortOrder",
+        "budgetRole",
+        "lastFour",
     )
     updates = {field: body[field] for field in editable_fields if field in body}
     if not updates:

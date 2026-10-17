@@ -16,7 +16,7 @@ CSV shape — (Account, AssetClass) rows, month-year columns:
 
 - AssetClass accepts a friendly label ("US Equity Large Cap") or the raw code
   ("us_equity_large_cap"). Leave it blank for single-class accounts (checking →
-  cash, mortgage → other) — it defaults to the account's sole class; it is required
+  cash, mortgage → debt) — it defaults to the account's sole class; it is required
   for multi-class accounts.
 - One DynamoDB item is written per (month, account): the asset-class cells for that
   account/month become its `byAssetClass` map. Re-running overwrites those balances
@@ -54,6 +54,7 @@ _LABELS = {
     "real estate": "real_estate",
     "target date": "target_date",
     "other": "other",
+    "debt": "debt",
 }
 _CODE_ALIASES = {**_LABELS, **{c.value: c.value for c in AssetClass}}
 

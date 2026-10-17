@@ -293,8 +293,35 @@ export interface Account {
     targetYear?: number;
     loanTerms?: LoanTerms;
     notes?: string;
+    // The budget role for the CSV import. Absent means the default for the type (see
+    // DEFAULT_BUDGET_ROLES).
+    budgetRole?: BudgetRole;
+    // The "last four digits" of the account, which the CSV import looks for in a description.
+    lastFour?: string[];
     createdAt: string;
     updatedAt: string;
+}
+
+export const BUDGET_ROLES = ["SPENDING", "HOLDING"] as const;
+export type BudgetRole = (typeof BUDGET_ROLES)[number];
+
+export const BUDGET_ROLE_LABELS: Record<BudgetRole, string> = {
+    SPENDING: "Spending (checking, credit card)",
+    HOLDING: "Holding (savings fund, brokerage, 529)",
+};
+
+// The same defaults as _DEFAULT_BUDGET_ROLE in lambda/src/corderohq/networth/models.py.
+export const DEFAULT_BUDGET_ROLES: Record<string, BudgetRole> = {
+    checking: "SPENDING",
+    credit_card: "SPENDING",
+    savings: "HOLDING",
+    brokerage: "HOLDING",
+    "529": "HOLDING",
+    "530a": "HOLDING",
+};
+
+export function budgetRoleOf(account: Account): BudgetRole | null {
+    return account.budgetRole ?? DEFAULT_BUDGET_ROLES[account.accountType] ?? null;
 }
 
 // Create payload: required identity/classification fields plus optional extras.
@@ -324,6 +351,8 @@ export type AccountUpdate = Partial<{
     loanTerms: LoanTerms | null;
     notes: string | null;
     sortOrder: number;
+    budgetRole: BudgetRole | null; // null removes it; the account then uses the default for its type
+    lastFour: string[]; // an empty list removes it
 }>;
 
 // Enum value spaces mirror lambda/src/corderohq/networth/models.py. The backend
@@ -345,6 +374,7 @@ export const ACCOUNT_TYPES = [
     "vehicle",
     "other_asset",
     "other_liability",
+    "credit_card",
 ] as const;
 
 // The asset classes that the account picker offers. A choice of `target_date` also needs
@@ -387,9 +417,10 @@ export const ACCOUNT_TYPE_META: Record<string, AccountTypeMeta> = {
     "530a": { liability: false, fixedAssetClass: null, amortizing: false },
     real_estate: { liability: false, fixedAssetClass: "real_estate", amortizing: false },
     vehicle: { liability: false, fixedAssetClass: "other", amortizing: false },
-    mortgage: { liability: true, fixedAssetClass: "other", amortizing: true },
+    mortgage: { liability: true, fixedAssetClass: "debt", amortizing: true },
     other_asset: { liability: false, fixedAssetClass: null, amortizing: false },
-    other_liability: { liability: true, fixedAssetClass: "other", amortizing: true },
+    other_liability: { liability: true, fixedAssetClass: "debt", amortizing: true },
+    credit_card: { liability: true, fixedAssetClass: "debt", amortizing: false },
 };
 
 export const ACCOUNT_TYPE_LABELS: Record<string, string> = {
@@ -408,6 +439,7 @@ export const ACCOUNT_TYPE_LABELS: Record<string, string> = {
     vehicle: "Vehicle",
     other_asset: "Other Asset",
     other_liability: "Other Liability",
+    credit_card: "Credit Card",
 };
 
 export const ASSET_CLASS_LABELS: Record<string, string> = {
@@ -420,6 +452,8 @@ export const ASSET_CLASS_LABELS: Record<string, string> = {
     real_estate: "Real Estate",
     target_date: "Target Date",
     other: "Other",
+    // The fixed class of every liability. It is not in ASSET_CLASSES, so no picker offers it.
+    debt: "Debt",
 };
 
 // A prefill is the most recent value from before this month. The entry grid uses it for

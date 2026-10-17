@@ -36,6 +36,8 @@ from corderohq.networth.models import (
     resolve_target_year,
     validate_asset_classes,
     validate_birth_year_month,
+    validate_budget_role,
+    validate_last_four,
     validate_loan_terms,
     validate_owners,
     validate_target_year,
@@ -1545,7 +1547,7 @@ class AccountTable:
         """Partial edit of a mutable account field set.
 
         Editable fields: name, assetClasses, owners, excludedFromNetWorth, targetYear,
-        loanTerms, notes, sortOrder. `accountType` and `liability` are IMMUTABLE after
+        loanTerms, notes, sortOrder, budgetRole, lastFour. `accountType` and `liability` are IMMUTABLE after
         create (the type drives liability, asset-class rules, and loan-term
         eligibility — reclassifying is a deactivate-and-recreate). `assetClasses` is
         editable (a non-empty set, replaced wholesale) only for types that let the
@@ -1553,7 +1555,8 @@ class AccountTable:
         against the effective asset-class set (required with `target_date`, cleared
         without it). `loanTerms` is gated on the type's amortizing flag. `owners` is
         required and replaced wholesale (never removed). A field present with value
-        None REMOVEs the optional attribute (loanTerms/notes).
+        None REMOVEs the optional attribute (loanTerms/notes/budgetRole). An empty
+        `lastFour` list removes that attribute.
 
         Returns the updated item, or None if the account does not exist.
         """
@@ -1614,6 +1617,21 @@ class AccountTable:
             else:
                 set_parts.append("notes = :notes")
                 values[":notes"] = str(updates["notes"])
+        if "budgetRole" in updates:
+            # null removes the role, and the account then uses the default for its type.
+            budget_role = validate_budget_role(updates["budgetRole"])
+            if budget_role is None:
+                remove_parts.append("budgetRole")
+            else:
+                set_parts.append("budgetRole = :br")
+                values[":br"] = budget_role
+        if "lastFour" in updates:
+            last_four = validate_last_four(updates["lastFour"])
+            if not last_four:
+                remove_parts.append("lastFour")
+            else:
+                set_parts.append("lastFour = :lf")
+                values[":lf"] = last_four
 
         # Reconcile targetYear against the effective (post-update) asset-class set, so
         # adding target_date requires a year and removing it clears a stale one — even

@@ -54,6 +54,7 @@ class AccountType(StrEnum):
     VEHICLE = "vehicle"
     OTHER_ASSET = "other_asset"
     OTHER_LIABILITY = "other_liability"
+    CREDIT_CARD = "credit_card"
 
 
 class AssetClass(StrEnum):
@@ -73,6 +74,9 @@ class AssetClass(StrEnum):
     REAL_ESTATE = "real_estate"
     TARGET_DATE = "target_date"
     OTHER = "other"
+    # The class of every liability. Only a liability type has it, as its fixed class. An asset
+    # account can never choose it.
+    DEBT = "debt"
 
 
 class AccountTypeMeta(NamedTuple):
@@ -87,8 +91,8 @@ class AccountTypeMeta(NamedTuple):
     - liability: derived, never a client input.
     - fixed_asset_class: when set, the asset class is forced to this value and the
       client's choice is ignored. When None, the client picks from AssetClass.
-      Liabilities pin this to `other` — a debt's own asset class is meaningless
-      (the financed asset, e.g. a house, is a separate account).
+      Liabilities pin this to `debt`. The financed asset, such as a house, is a
+      separate account.
     - amortizing: whether loanTerms may be attached (mortgage, other liabilities).
     """
 
@@ -112,10 +116,63 @@ _ACCOUNT_TYPE_META: dict[AccountType, AccountTypeMeta] = {
         liability=False, fixed_asset_class=AssetClass.REAL_ESTATE, amortizing=False
     ),
     AccountType.VEHICLE: AccountTypeMeta(liability=False, fixed_asset_class=AssetClass.OTHER, amortizing=False),
-    AccountType.MORTGAGE: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True),
+    AccountType.MORTGAGE: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.DEBT, amortizing=True),
     AccountType.OTHER_ASSET: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.OTHER_LIABILITY: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True),
+    AccountType.OTHER_LIABILITY: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.DEBT, amortizing=True),
+    AccountType.CREDIT_CARD: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.DEBT, amortizing=False),
 }
+
+# The budget role of an account, for the CSV import. Money counts in the budget only when it
+# crosses the boundary between the outside world, the spending accounts, and the holding
+# accounts. An account with no role cannot take a CSV upload.
+BUDGET_ROLE_SPENDING = "SPENDING"
+BUDGET_ROLE_HOLDING = "HOLDING"
+BUDGET_ROLES = frozenset({BUDGET_ROLE_SPENDING, BUDGET_ROLE_HOLDING})
+
+_DEFAULT_BUDGET_ROLE: dict[AccountType, str] = {
+    AccountType.CHECKING: BUDGET_ROLE_SPENDING,
+    AccountType.CREDIT_CARD: BUDGET_ROLE_SPENDING,
+    AccountType.SAVINGS: BUDGET_ROLE_HOLDING,
+    AccountType.BROKERAGE: BUDGET_ROLE_HOLDING,
+    AccountType.PLAN_529: BUDGET_ROLE_HOLDING,
+    AccountType.PLAN_530A: BUDGET_ROLE_HOLDING,
+}
+
+
+def budget_role_of(account: dict[str, Any]) -> str | None:
+    """Return the budget role of an account: its own `budgetRole`, else the default for its type."""
+    explicit = account.get("budgetRole")
+    if isinstance(explicit, str) and explicit in BUDGET_ROLES:
+        return explicit
+    account_type = account.get("accountType")
+    if isinstance(account_type, str) and account_type in _ACCOUNT_TYPE_VALUES:
+        return _DEFAULT_BUDGET_ROLE.get(AccountType(account_type))
+    return None
+
+
+def validate_budget_role(value: Any) -> str | None:
+    """Return the budget role, or None to remove it (the account then uses its default)."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in BUDGET_ROLES:
+        raise ValueError(f"budgetRole must be one of {sorted(BUDGET_ROLES)} or null")
+    return value
+
+
+def validate_last_four(value: Any) -> list[str]:
+    """Return the list of "last four digits" of an account, without duplicates, in the order given.
+
+    Each entry is a string of exactly 4 digits. An empty list removes the attribute.
+    """
+    if not isinstance(value, list):
+        raise ValueError("lastFour must be a list of 4-digit strings")
+    result: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str) or len(entry) != 4 or not entry.isdigit():
+            raise ValueError("each lastFour entry must be a string of exactly 4 digits")
+        if entry not in result:
+            result.append(entry)
+    return result
 
 
 def account_type_meta(account_type: str) -> AccountTypeMeta:
@@ -171,6 +228,8 @@ def validate_asset_classes(value: Any) -> list[str]:
     result: list[str] = []
     for entry in value:
         validate_asset_class(entry)
+        if entry == AssetClass.DEBT:
+            raise ValueError("assetClasses cannot include 'debt'; only a liability type has it")
         if entry not in seen:
             seen.add(entry)
             result.append(entry)

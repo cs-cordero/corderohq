@@ -41,7 +41,7 @@ import type {
     Transaction,
     UploadResult,
 } from "./types";
-import { DEDUCTION_KINDS, DISPOSITIONS } from "./types";
+import { BUDGET_ROLES, DEDUCTION_KINDS, DISPOSITIONS } from "./types";
 import {
     arrayOf,
     isObject,
@@ -591,6 +591,10 @@ export function parseAccount(raw: unknown): Account {
     // what was actually asserted), so tolerate their absence here.
     const notes = optionalString(obj, "notes", "Account");
     if (notes !== undefined) account.notes = notes;
+    const budgetRole = optionalString(obj, "budgetRole", "Account");
+    const role = BUDGET_ROLES.find((r) => r === budgetRole);
+    if (role !== undefined) account.budgetRole = role;
+    if (obj.lastFour !== undefined) account.lastFour = stringArray(obj.lastFour, "Account.lastFour");
     if (typeof obj.targetYear === "number") account.targetYear = obj.targetYear;
     if (obj.loanTerms !== undefined) account.loanTerms = parseLoanTerms(obj.loanTerms);
     return account;

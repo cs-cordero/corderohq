@@ -260,20 +260,22 @@ Checks:
 
 **Before you start:** design sections **Changed table: `Account-{stage}`** and **Accounts**.
 
-- [ ] `networth/models.py`: the `credit_card` type, the `debt` class, and the meta. Change
+- [x] `networth/models.py`: the `credit_card` type, the `debt` class, and the meta. Change
       `mortgage` and `other_liability` to the fixed class `debt`. Reject `debt` for a type that
       lets the user choose classes.
-- [ ] A `budget_role_of(account)` function with the default table from the design.
-- [ ] `AccountTable.update()` and `_put_account()`: `budgetRole` and `lastFour` are editable.
+- [x] A `budget_role_of(account)` function with the default table from the design.
+- [x] `AccountTable.update()` and `_put_account()`: `budgetRole` and `lastFour` are editable.
       Validate `lastFour` (each value is exactly 4 digits).
-- [ ] `types.ts`: `credit_card` in `ACCOUNT_TYPES`, `ACCOUNT_TYPE_META`, and `ACCOUNT_TYPE_LABELS`.
+- [x] `types.ts`: `credit_card` in `ACCOUNT_TYPES`, `ACCOUNT_TYPE_META`, and `ACCOUNT_TYPE_LABELS`.
       `debt` in `ASSET_CLASSES` and `ASSET_CLASS_LABELS`. `mortgage` and `other_liability` use
       `debt`. `Account` gets `budgetRole` and `lastFour`.
-- [ ] `AccountsPage.tsx` and `NetWorthEntryPage.tsx`: leave `debt` out of the class pickers.
-      `AccountsPage.tsx`: the budget role picker and the "last four digits" field.
-- [ ] `lambda/scripts/migrate_liabilities_to_debt.py` (design: the migration script). Check
+- [x] `AccountsPage.tsx` and `NetWorthEntryPage.tsx`: leave `debt` out of the class pickers.
+      (`debt` has a label in `ASSET_CLASS_LABELS`, but it is not in `ASSET_CLASSES`, which only the
+      pickers read.) `AccountsPage.tsx`: the budget role picker and the "last four digits" field.
+      The create route takes no budget fields, so the page sends them in a second call.
+- [x] `lambda/scripts/migrate_liabilities_to_debt.py` (design: the migration script). Check
       `import_networth_csv.py` too.
-- [ ] `test_networth_models.py` and the account tests: the new type and class, the default roles,
+- [x] `test_networth_models.py` and the account tests: the new type and class, the default roles,
       the `lastFour` validation, and the rule that an asset account cannot choose `debt`.
 
 Checks:
@@ -380,3 +382,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP3 checks are clean (`./check.sh -n`). The dev test is still open.
 - 2026-10-17: CP4 code written. The user asked for one big check after many CPs.
 - 2026-10-17: CP5 code written.
+- 2026-10-17: CP6 code written. The migration script is not run yet.
