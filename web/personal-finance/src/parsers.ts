@@ -262,6 +262,14 @@ function parseSummaryTotalsWithOffBudget(raw: unknown): { budgeted: number; actu
     };
 }
 
+function parseSummaryIncome(raw: unknown): { plannedNetIncome: number; leftToAssign: number } {
+    const obj = requireObject(raw, "Summary.income");
+    return {
+        plannedNetIncome: requireNumber(obj, "plannedNetIncome", "Summary.income"),
+        leftToAssign: requireNumber(obj, "leftToAssign", "Summary.income"),
+    };
+}
+
 export function parseSummary(raw: unknown): Summary {
     const obj = requireObject(raw, "Summary");
     const state = requireString(obj, "state", "Summary");
@@ -275,6 +283,7 @@ export function parseSummary(raw: unknown): Summary {
         totals: parseSummaryTotals(obj.totals),
         offBudget: parseSummaryOffBudget(obj.offBudget),
         totalsWithOffBudget: parseSummaryTotalsWithOffBudget(obj.totalsWithOffBudget),
+        income: parseSummaryIncome(obj.income),
     };
 }
 

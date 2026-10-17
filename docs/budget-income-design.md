@@ -773,10 +773,8 @@ short:
 
 ## Open Items
 
-- **An old bug, not in scope:** `compute_summary()` finds the current month with
-  `f"{now.year:04d}-{now.month:02d}"`, which is UTC. After 8 PM or 7 PM ET on the last day of a
-  month, it treats the next month as the current month. `compute_income()` uses ET. CP5 joins the
-  two numbers, so fix the summary in CP5 or before it.
+- **Fixed in CP5:** `compute_summary()` found the current month in UTC. It now uses ET, the same
+  as `compute_income()`.
 - **The column mapping without values** (Step 2) can be wrong about the sign. Test it with real
   CSVs from each bank before step 5 of the work.
 - **The first upload after the change** can make copies of old rows, because old rows have no

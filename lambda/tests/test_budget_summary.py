@@ -289,6 +289,22 @@ class TestHistoricalNameResolution:
         assert result["categories"][0]["historicalName"] is None
 
 
+class TestCurrentMonthInEasternTime:
+    def test_last_evening_of_a_month_is_still_that_month(self) -> None:
+        # 2026-06-30 at 22:00 ET is 2026-07-01 at 02:00 UTC. The current month is still June,
+        # so July is a future month and its summary walks back to the June row.
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.scan.return_value = {"Items": [{"yearMonth": "2026-06", "categoryId": "cat1", "amount": 500}]}
+        budget_mock.query.return_value = {"Items": []}
+        txn_mock.query.return_value = {"Items": []}
+        cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
+        late_june = datetime(2026, 7, 1, 2, 0, 0, tzinfo=UTC)
+
+        result = compute_summary(budget, transactions, category_table, "2026-07", late_june)
+
+        assert result["totals"]["budgeted"] == 500
+
+
 class TestDispositions:
     """Only BUDGET rows are actuals. OFF_BUDGET rows have their own total."""
 

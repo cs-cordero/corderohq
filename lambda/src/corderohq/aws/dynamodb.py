@@ -1114,7 +1114,9 @@ def compute_summary(
     categories_all = category_table.list_all()
     category_by_id = {c["categoryId"]: c for c in categories_all}
 
-    current_ym = f"{now.year:04d}-{now.month:02d}"
+    # The budget month changes at midnight ET, so read the current month in ET, not in UTC.
+    now_et = now.astimezone(_BUDGET_TZ)
+    current_ym = f"{now_et.year:04d}-{now_et.month:02d}"
     is_future = year_month > current_ym
 
     # The densify step writes `amount=null` when the walk back finds no earlier row.

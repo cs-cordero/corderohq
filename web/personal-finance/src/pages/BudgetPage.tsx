@@ -1,6 +1,14 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useAdmin } from "../admin";
-import { fetchAllCategories, fetchBudget, fetchCategoryGroups, pinBudget, replaceBudget } from "../api";
+import {
+    fetchAllCategories,
+    fetchBudget,
+    fetchCategoryGroups,
+    fetchIncomeMonth,
+    pinBudget,
+    replaceBudget,
+} from "../api";
+import LeftToAssign from "../components/LeftToAssign";
 import LoadingOverlay from "../components/LoadingOverlay";
 import MonthPicker from "../components/MonthPicker";
 import StatusMessage from "../components/StatusMessage";
@@ -29,6 +37,7 @@ export default function BudgetPage() {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editAmount, setEditAmount] = useState("");
     const [editExplanation, setEditExplanation] = useState("");
+    const [plannedNetIncome, setPlannedNetIncome] = useState<number | null>(null);
     const { status, showLoading, showSuccess, showError, clear } = useStatus();
     const { adminModeOn } = useAdmin();
 
@@ -44,13 +53,15 @@ export default function BudgetPage() {
     const load = useCallback(async () => {
         showLoading("Loading...");
         try {
-            const [targets, cats, grps] = await Promise.all([
+            const [targets, cats, grps, income] = await Promise.all([
                 fetchBudget(month),
                 fetchAllCategories(),
                 fetchCategoryGroups(),
+                fetchIncomeMonth(month),
             ]);
             setCategories(cats);
             setGroups(grps);
+            setPlannedNetIncome(income.plannedNetIncome);
 
             const targetMap = new Map<string, BudgetTarget>();
             for (const t of targets) targetMap.set(t.categoryId, t);
@@ -94,6 +105,16 @@ export default function BudgetPage() {
     useEffect(() => {
         load();
     }, [load]);
+
+    // The live total of the targets, with the row that is open for edit at its typed value. The
+    // left to assign line then moves while the user types. Only active categories count here,
+    // the same as the summary for an editable month.
+    const liveBudgeted = useMemo(() => {
+        const typed = editingId === null ? null : parseCurrencyInput(editAmount);
+        return rows
+            .filter((r) => r.active)
+            .reduce((sum, r) => sum + (r.categoryId === editingId && typed !== null ? typed : r.amount), 0);
+    }, [rows, editingId, editAmount]);
 
     const startEdit = (row: BudgetRow) => {
         setEditingId(row.categoryId);
@@ -204,6 +225,8 @@ export default function BudgetPage() {
             <LoadingOverlay message={status.message} visible={status.type === "loading"} />
             <MonthPicker value={month} onChange={setMonth} />
             <StatusMessage message={status.type !== "loading" ? status.message : ""} type={status.type} />
+
+            {plannedNetIncome !== null && <LeftToAssign plannedNetIncome={plannedNetIncome} budgeted={liveBudgeted} />}
 
             {isReadOnly && <p className="hint">This month is locked. Toggle Admin mode to edit with override.</p>}
             {isFutureMonth && (

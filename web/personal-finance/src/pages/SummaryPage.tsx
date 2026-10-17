@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { fetchAllCategories, fetchCategoryGroups, fetchSummary } from "../api";
 import MonthPicker from "../components/MonthPicker";
+import LeftToAssign from "../components/LeftToAssign";
 import LoadingOverlay from "../components/LoadingOverlay";
 import StatusMessage from "../components/StatusMessage";
 import { currentYearMonth, formatCurrency } from "../format";
@@ -80,6 +81,10 @@ export default function SummaryPage() {
             <LoadingOverlay message={status.message} visible={status.type === "loading"} />
             <MonthPicker value={month} onChange={setMonth} />
             <StatusMessage message={status.type !== "loading" ? status.message : ""} type={status.type} />
+
+            {summary && (
+                <LeftToAssign plannedNetIncome={summary.income.plannedNetIncome} budgeted={summary.totals.budgeted} />
+            )}
 
             {summary && (
                 <table className="data-table">

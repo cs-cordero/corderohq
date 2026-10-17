@@ -1107,15 +1107,32 @@ class TestDeleteTransactions:
 
 
 class TestGetSummary:
+    @patch("corderohq.personal_finance_handler.compute_income")
     @patch("corderohq.personal_finance_handler.compute_summary")
-    def test_returns_summary(self, mock_summary: MagicMock) -> None:
+    def test_returns_summary(self, mock_summary: MagicMock, mock_income: MagicMock) -> None:
         mock_summary.return_value = {
             "yearMonth": _EDITABLE_MONTH,
             "categories": [],
             "totals": {"budgeted": 0, "actual": 0, "delta": 0},
         }
+        mock_income.return_value = {"plannedNetIncome": 0}
         result = handler(_make_event("GET", "/api/summary", query={"month": _EDITABLE_MONTH}), None)
         assert result["statusCode"] == 200
+
+    @patch("corderohq.personal_finance_handler.compute_income")
+    @patch("corderohq.personal_finance_handler.compute_summary")
+    def test_left_to_assign_is_planned_income_minus_targets(
+        self, mock_summary: MagicMock, mock_income: MagicMock
+    ) -> None:
+        mock_summary.return_value = {
+            "yearMonth": _EDITABLE_MONTH,
+            "categories": [],
+            "totals": {"budgeted": 7_000_000_000, "actual": 6_000_000_000, "delta": 1_000_000_000},
+        }
+        mock_income.return_value = {"plannedNetIncome": 8_000_000_000}
+        result = handler(_make_event("GET", "/api/summary", query={"month": _EDITABLE_MONTH}), None)
+        body = json.loads(result["body"])
+        assert body["income"] == {"plannedNetIncome": 8_000_000_000, "leftToAssign": 1_000_000_000}
 
     def test_returns_400_when_month_missing(self) -> None:
         result = handler(_make_event("GET", "/api/summary"), None)

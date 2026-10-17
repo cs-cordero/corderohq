@@ -112,6 +112,8 @@ export interface Summary {
     // Not part of `totals`. The budgeted amount of the Off-budget row is always 0.
     offBudget: { actual: number };
     totalsWithOffBudget: { budgeted: number; actual: number };
+    // leftToAssign = plannedNetIncome − totals.budgeted. The goal is 0.
+    income: { plannedNetIncome: number; leftToAssign: number };
 }
 
 export interface AuditUser {

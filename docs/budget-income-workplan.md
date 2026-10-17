@@ -234,15 +234,20 @@ This checkpoint delivers the main goal.
 
 **Before you start:** design section **Left to Assign**.
 
-- [ ] `_get_summary()`: add the `income` object from `compute_income()` and
+- [x] `_get_summary()`: add the `income` object from `compute_income()` and
       `totals.budgeted`.
-- [ ] `types.ts` and `parsers.ts`: `Summary.income`.
-- [ ] `SummaryPage.tsx`: the header line "Planned net income · Left to assign". A different colour
+- [x] `compute_summary()` reads the current month in ET, not in UTC (the old bug).
+- [x] A shared `components/LeftToAssign.tsx` draws the line on both pages.
+- [x] `types.ts` and `parsers.ts`: `Summary.income`.
+- [x] `SummaryPage.tsx`: the header line "Planned net income · Left to assign". A different colour
       when the value is not `$0`.
-- [ ] `BudgetPage.tsx`: fetch `GET /api/income/{YYYY-MM}`. Show the same header line. Calculate
-      the value live from the form.
-- [ ] `test_budget_summary.py`: `leftToAssign` for an editable, a future, and a locked month, and
-      with an inactive category or income source.
+- [x] `BudgetPage.tsx`: fetch `GET /api/income/{YYYY-MM}`. Show the same header line. Calculate
+      the value live from the form. It adds the active categories only, the same as the summary
+      for an editable month. (A deactivated category with a row and a transaction in the month is
+      in the summary total but not in the live total. That case is rare.)
+- [x] Tests: `leftToAssign` in the summary route (`test_personal_finance_handler.py`); the ET
+      month in `compute_summary()` (`test_budget_summary.py`). The membership of each half is
+      already tested by the summary tests and the `compute_income()` tests.
 
 Checks:
 
@@ -374,3 +379,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
   API Gateway, and an old bug (`compute_summary()` reads the current month in UTC, not ET).
 - 2026-10-17: CP3 checks are clean (`./check.sh -n`). The dev test is still open.
 - 2026-10-17: CP4 code written. The user asked for one big check after many CPs.
+- 2026-10-17: CP5 code written.

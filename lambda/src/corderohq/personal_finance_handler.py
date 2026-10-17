@@ -1792,6 +1792,10 @@ def _get_summary(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     _ensure_hydrated(now)
 
     result = compute_summary(_BUDGET_TABLE, _TRANSACTIONS_TABLE, _CATEGORY_TABLE, month, now)
+    # Left to assign: the planned net income minus every budget target. It uses the same
+    # category membership as `totals.budgeted`. No transaction changes it.
+    planned = int(compute_income(_INCOME_PLAN_TABLE, _INCOME_SOURCE_TABLE, month, now)["plannedNetIncome"])
+    result["income"] = {"plannedNetIncome": planned, "leftToAssign": planned - int(result["totals"]["budgeted"])}
     return _json_response(200, json.dumps(result, default=_json_default))
 
 
