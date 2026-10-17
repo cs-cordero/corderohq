@@ -4,6 +4,14 @@ This is the design for Specs 31 to 57 in `docs/budget-specs.md`. It is a proposa
 do any of this yet. When the work is complete, move the final design into
 `docs/personal-finance-architecture.md`, and delete this file.
 
+Read these documents in this order:
+
+1. `docs/budget-specs.md` — what the user wants. Specs 31 to 57 are new.
+2. This document — how to build it. Read **Decisions and Reasons** before you change a decision.
+3. `docs/budget-income-workplan.md` — the checkpoints, the files for each one, and the progress.
+4. `docs/personal-finance-architecture.md` — how the app works today. The month rules, the
+   editability rules, and the audit rules there apply to the new work too.
+
 ## Goal
 
 The budget shows the **left to assign** amount for each year-month: the planned net income minus
@@ -32,6 +40,52 @@ Three changes make this possible:
 | Dispositions and the note | 45 to 49 | Data Model, Transaction API |
 | Summary changes | 50, 51 | Summary |
 | CSV import | 52 to 57 | CSV Import |
+
+## Decisions and Reasons
+
+The user made these decisions in a design chat. Do not change one without a question to the user.
+
+| Decision | Reason |
+|---|---|
+| The budget is **plan-based**, not cash-based. Left to assign = planned net income − targets. | The user wants a stable monthly plan, like EveryDollar or the tracking mode of Actual Budget. A cash-based plan (YNAB) needs work on each payday. |
+| The plan uses **2 paychecks for each source, each month**, all year. | Two months each year have 3 biweekly paychecks. The user wants the same targets every month. The plan is then a little lower than the real income. The user accepts that error. |
+| The **third paycheck**, bonuses, RSU payouts, and DCFSA payouts are **not in the plan** unless the user adds a one-time income line. | The Ramsey way: extra money that the user does not plan for does not exist. The app shows no surplus and gives no warning. |
+| **Record gross pay and each deduction.** Net pay is the top line. | The user wants to see why net pay is the number that it is. |
+| **Do not model changes to net pay during the year** (the 401k limit, the Social Security wage limit). | No budget app does this. The user cannot keep it correct. The user changes the paycheck by hand. |
+| **DCFSA is only a pre-tax deduction.** It has no link to a category. | The user can use DCFSA money for any qualified expense, not only childcare. A DCFSA payout is extra money, the same as the third paycheck. |
+| The income plan uses the **same month rules as a budget target**. | Consistency. A locked month must show the same left to assign amount for ever (Spec 2). |
+| The unit of income is an **income source**, not a person. | A person can have more than one job. |
+| **Actual income is not tracked.** | The user does not want it. Paycheck deposits get Skip. |
+| **No category balances** (no envelopes, no carryover). | The user does not want them. Money counts one time, when it goes into a fund. Money that leaves a fund is Off-budget. |
+| **A target that carries forward after a one-month change is OK.** | The user changes it back by hand. |
+| **One disposition, "Off-budget"**, for work travel and for payments from a fund. | One idea for the user: "the budget must not count this". The optional note keeps the reason. |
+| **The app saves every row**, Skip rows too. | Fingerprints and the pair match need them. The user can change a row later. |
+| No "income" disposition. Skip covers paychecks and transfers. | Actual income is not tracked, so a separate value adds nothing. |
+| The Off-budget row is **below the TOTAL, not in it**. A second "TOTAL + off-budget" line follows. | If it were in the TOTAL, the total delta would always show an overspend that is not real. |
+| **Each upload has an account.** The boundary rule (spending vs. holding) sets the default disposition. | Each transfer between the user's own accounts then counts one time at most, with no search. |
+| **When unsure, suggest Skip and mark the row.** | A missed savings transfer is easy to see on the summary. A double count is not. Human review is the backstop, so the import balances effort against errors. |
+| **Send as little data to Anthropic as possible**: no cell values for the column mapping, unique descriptions only. | The user's choice. |
+| **No employer names or other real data in the code.** | The repository is public. Real data lives only in DynamoDB. |
+| **Import rules, remembered choices, and a stored column mapping are deferred.** | They fit in later as one more step before the LLM step. Nothing in this design blocks them. |
+| Left to assign **does not block a save**. The ledger **hides Skip rows by default**. A row that exists already is **not selected by default**. An income source can be **deactivated**. | The user confirmed these four assumptions (Specs 41, 49, 56, 37). |
+
+## Code Map
+
+The files that the work changes. Paths are from the repository root.
+
+| Area | Files |
+|---|---|
+| HTTP routes | `lambda/src/corderohq/personal_finance_handler.py` (one `if`/`elif` chain in `handler()`; module-level table objects at the top; `_ensure_hydrated()` runs the densify step) |
+| Table classes, summary | `lambda/src/corderohq/aws/dynamodb.py` (`BudgetTable`, `TransactionsTable`, `AuditLogTable`, `compute_summary()`, `AccountTable`) |
+| Month rules | `lambda/src/corderohq/budget/densify.py` (`densify()`, `resolve_future_targets()`, `walk_back_for()`), `budget/editability.py` |
+| CSV import | `lambda/src/corderohq/budget/csv_import.py` (`map_columns()`, `categorize_transactions()`); the upload flow is `_post_transactions_upload()` in the handler |
+| Cron densify | `lambda/src/corderohq/scheduled_densify.py` |
+| Account types | `lambda/src/corderohq/networth/models.py` (`AccountType`, `_ACCOUNT_TYPE_META`) |
+| Tables (CDK) | `infra/lib/personal-finance-dynamodb-stack.ts` |
+| Lambda env vars and grants (CDK) | `infra/lib/personal-finance-web-stack.ts` (the API handler and `densifyFn`); `infra/app.ts` passes the tables between the stacks |
+| Frontend types and parsers | `web/personal-finance/src/types.ts`, `parsers.ts`, `api.ts` |
+| Frontend pages and nav | `web/personal-finance/src/pages/*.tsx`, `App.tsx` (routes), `components/Layout.tsx` (`BUDGET_LINKS`) |
+| Tests | `lambda/tests/test_budget_*.py`, `test_personal_finance_handler.py`, `test_networth_models.py`; `infra/test/*.test.ts`. The Python tests use `MagicMock` tables, not a real DynamoDB. |
 
 ## Data Model
 
@@ -129,6 +183,10 @@ New fields. The keys do not change.
 +--------------+------------------------------------------------------------------------+
 ```
 
+`TransactionsTable.update()` today only uses `SET`, for `description`, `amount`, and `categoryId`.
+It must also `SET` the new fields, and `REMOVE` `categoryId` or `note` when the new value is absent
+(a change to SKIP, or an empty note). `create()` and `batch_create()` must store the new fields.
+
 **No migration is necessary.** An absent `disposition` reads as `BUDGET`. Every row that exists
 today has a `categoryId`, so every row that exists today stays valid. The code reads the
 disposition through one helper, `disposition_of(txn)`, so the default lives in one place.
@@ -166,7 +224,9 @@ The default role for each account type:
 **A new account type is necessary: `credit_card`.** The net worth record has no credit card type
 today. A credit card is the main upload source, and Spec 44 needs an account for each upload. The
 new type has `liability=True` and the fixed asset class `cash`, the same as `checking` but as a
-liability. The net worth record can show a credit card balance too, but it does not have to: the
+liability. Add it in two places that must match: `AccountType` and `_ACCOUNT_TYPE_META` in
+`networth/models.py`, and `ACCOUNT_TYPES`, `ACCOUNT_TYPE_META`, and `ACCOUNT_TYPE_LABELS` in
+`web/personal-finance/src/types.ts`. The net worth record can show a credit card balance too, but it does not have to: the
 user can set `excludedFromNetWorth` on it.
 
 ### Changed table: `BudgetAuditLog-{stage}`
@@ -186,7 +246,9 @@ for a paycheck, `incomeSourceId`. It has no `categoryId`.
 
 `P` is `{paychecksPerMonth, gross, deductions}`. `L` is `{label, amount}`. The audit log page shows
 the label of the income source, or the label of the one-time line, where it shows a category name
-today. The rename of an income source and its reactivation make no entry, the same as for a
+today. In `types.ts`, `AuditEntry.categoryId` becomes optional, and `incomeSourceId` and
+`incomeLineId` are new optional fields. For a one-time line, store the label in `changes`, because
+the line can be deleted later. The rename of an income source and its reactivation make no entry, the same as for a
 category.
 
 ## Income Plan Month Rules
@@ -229,8 +291,8 @@ Other rules:
   cannot happen through the API. If it does happen, the densify step writes no row, and the source
   adds `$0`.
 - **The scheduled densify Lambda** (`scheduled_densify.py`) densifies both tables. The on-demand
-  fallback runs for both tables on the same requests as today, and also on every income plan
-  request.
+  fallback is `_ensure_hydrated()` in the handler. It densifies both tables, on the same requests
+  as today, and also on every income plan request.
 - **Editability** is the same function. The Enforcement table gets the new endpoints (see
   **Income Plan API**).
 
@@ -290,7 +352,8 @@ delete becomes necessary later, it copies the category hard delete.
 Membership is the same as Spec 5. An editable month shows the active income sources. A locked
 month shows every income source with a paycheck row in that month, active or not.
 
-**`/replace`** and **`/pin`** copy the Budget endpoints exactly. The body rows are
+**`/replace`** and **`/pin`** copy the Budget endpoints exactly. The budget endpoints take the body
+key `targets`. The income endpoints take the body key `paychecks`, a list of
 `{incomeSourceId, paycheck: P | null}`. `/replace` needs every income source with a row in that
 month. `/pin` returns `downstreamPins` and `pinMatchesCarriedValue`. Two paychecks match when
 `paychecksPerMonth`, `gross`, and the full deduction list are equal. Each body has an
@@ -317,13 +380,15 @@ leftToAssign(M)     = plannedNetIncome(M) − totals.budgeted(M)
 New shared function: `compute_income(income_plan, income_sources, year_month, now)` in
 `aws/dynamodb.py`, next to `compute_summary()`. It returns the body of `GET /api/income/{YYYY-MM}`.
 
-The value appears in three responses:
+The value appears in two responses:
 
 - `GET /api/summary` gets an `income` object: `{plannedNetIncome, leftToAssign}`.
-- `GET /api/budget/{YYYY-MM}` gets `plannedNetIncome`. The budget editor calculates
-  `leftToAssign` on the client, live, from the amounts in the form. The user then sees the number
-  move while they type (Spec 41).
 - `GET /api/income/{YYYY-MM}` has `plannedNetIncome`.
+
+`GET /api/budget/{YYYY-MM}` does **not** change. It returns a bare JSON list today, and the
+frontend parses a list. The budget page calls `GET /api/income/{YYYY-MM}` as well, and calculates
+`leftToAssign` on the client, live, from the amounts in the form. The user then sees the number
+move while they type (Spec 41).
 
 The app never blocks a save because `leftToAssign != 0` (Spec 41). The frontend shows the value in
 a different colour when it is not `$0`.
@@ -351,9 +416,9 @@ The frontend draws the Off-budget row and the "TOTAL + off-budget" row below the
 ## Accounts
 
 The user chooses an account for each upload (Spec 44). The upload page lists each active account
-with a budget role, explicit or default. The user sets `budgetRole` and `lastFour` on the account
-page of the net worth record, through the existing account update endpoint. Add both fields to
-the list of fields that the update permits.
+with a budget role, explicit or default. The user sets `budgetRole` and `lastFour` on
+`AccountsPage`, through the existing `PUT /api/accounts/{id}`. Add both fields to the editable
+fields in `_put_account()` and in `AccountTable.update()`.
 
 ## Transaction API
 
@@ -403,8 +468,9 @@ Headers and types:
 Transaction Date (date), Post Date (date), Description (text), Category (text), Type (text), Amount (number)
 ```
 
-The LLM returns `date`, `description`, `amount` (or a `debit` and a `credit` column), `bankCategory`
-(optional, new), and `invertSign`.
+The LLM returns the keys that it returns today, `date`, `description`, `amount`, and `amount_invert`,
+and one new optional key, `bankCategory`. A CSV with a separate debit column and credit column is
+not supported today, and it stays out of scope.
 
 **A risk to test.** The sign rule is the hard part. Today the LLM sees sample amounts and can tell
 whether a purchase is negative. Without values, it must use the header names. Mitigation: the code
@@ -510,37 +576,50 @@ to see.
 
 ### Upload response
 
-The row gets new fields. `validation.issues` keeps its meaning: an issue blocks the commit. The new
-`review` list does not block the commit. It only puts the row at the top of the review screen.
+Today `POST /api/transactions/upload` takes `{csvData}` and returns three keys:
+`{columnMapping, transactions, validations}`. `transactions[i]` is
+`{transactionDate, description, amount, categoryId, categoryName}`. `validations[i]` is
+`{index, issues}`, and `issues` holds `missing_category` and `locked_month` only. A CSV row that
+the code cannot parse is dropped with no error.
+
+The new request is `{csvData, accountId}`. `accountId` is required. The response keeps the same
+three keys, and adds `accountId`. The new fields go on the existing objects:
 
 ```
 {
   "accountId": "01J...",
-  "rows": [
+  "columnMapping": { ... },
+  "transactions": [
     {
-      "transactionDate", "description", "amount",
+      "transactionDate", "description", "amount", "categoryId", "categoryName",   // as today
       "disposition": "BUDGET" | "OFF_BUDGET" | "SKIP",
-      "categoryId": "01HQ..." | null,
       "suggestedBy": "PAIR" | "LAST_FOUR" | "BANK" | "LLM" | "DEFAULT",
-      "pairWith": { "accountId", "yearMonth", "sortId" } | { "uploadIndex" } | null,
+      "pairWith": { "yearMonth", "sortId" } | { "uploadIndex" } | null,
       "fingerprint": "…",
-      "duplicate": bool,
-      "review": ["no_pair_found", "llm_guess", "many_pairs"],
-      "validation": {
-        "editability": "EDITABLE" | "GRACE" | "LOCKED",
-        "issues": ["missing_category", "locked_month"]
-      }
+      "duplicate": bool
+    }
+  ],
+  "validations": [
+    {
+      "index": 0,
+      "issues": ["missing_category", "locked_month"],         // as today; these block the commit
+      "review": ["no_pair_found", "llm_guess", "many_pairs"]  // new; these do not block
     }
   ]
 }
 ```
 
-`missing_category` now applies to a BUDGET row only.
+`missing_category` now applies to a BUDGET row only, and to an OFF_BUDGET row with a `categoryId`
+that does not exist. `_validate_commit_rows()` in the handler makes these checks for both the
+upload and the commit. Change `ParsedTransaction`, `RowValidation`, and `RowValidationIssue` in
+`types.ts`, and their parsers in `parsers.ts`, to match.
 
 ### Commit
 
-The commit body rows get `disposition`, `accountId`, `note`, and `fingerprint`. The client sends
-only the rows that the user selected. The server does these steps:
+Today the commit needs `transactionDate`, `description`, `amount`, and `categoryId` on each row.
+The new rows also get `disposition`, `accountId`, `note`, and `fingerprint`, and `categoryId` is
+required only for a BUDGET row. The client sends only the rows that the user selected. The server
+does these steps:
 
 1. Validate each row (the Transaction API rules above).
 2. Run the editability check, as today.
@@ -550,6 +629,10 @@ only the rows that the user selected. The server does these steps:
 
 ## Frontend
 
+- **Routes and nav.** Add the `income` route in `App.tsx`, and an "Income" link in
+  `BUDGET_LINKS` in `components/Layout.tsx`. Each new response shape needs a type in `types.ts`
+  and a parser in `parsers.ts`, the same as the existing ones. `api.ts` gets one wrapper for each
+  new route.
 - **`IncomePage`** (new, Spec 38). A month picker. For each income source: the paycheck as a list,
   from gross pay through each deduction to net pay, then `× paychecksPerMonth = monthlyNet`. The
   one-time lines of the month. The planned net income at the bottom. The edit flow copies the
@@ -567,8 +650,8 @@ only the rows that the user selected. The server does these steps:
   (Spec 54). Each row has a disposition picker, a category picker (shown for BUDGET and
   OFF_BUDGET), and a note field. Duplicate rows show unselected, with a "duplicate" chip. A
   "flip all signs" button for the whole file (see Step 2).
-- **The account page of the net worth record.** A budget role picker and a "last four digits"
-  field.
+- **`AccountsPage`.** A budget role picker and a "last four digits" field. `_put_account()` in the
+  handler and `AccountTable.update()` must accept `budgetRole` and `lastFour` as editable fields.
 - **`AuditLogPage`.** It shows the new actions, with the label of the income source or the
   one-time line.
 
@@ -579,9 +662,11 @@ only the rows that the user selected. The server does these steps:
 - Add `IncomeSource-{stage}` (PK `incomeSourceId`) and `IncomePlan-{stage}` (PK `yearMonth`, SK
   `lineId`). Pay per request, point-in-time recovery, and the same removal policy as the other
   tables.
-- Change the JSDoc of the stack class to list the two new tables.
+- Add two `readonly` table properties, the same as the existing ones.
+- Change the JSDoc of the stack class to list the two new tables (a rule in `CLAUDE.md`).
 
-`PersonalFinanceWebStack`, and the stack of the scheduled densify Lambda:
+`PersonalFinanceWebStack` (it holds both the API handler and the scheduled densify Lambda,
+`densifyFn`), and `infra/app.ts`, which passes each table to it:
 
 - New environment variables: `INCOME_SOURCE_TABLE_NAME` and `INCOME_PLAN_TABLE_NAME`. Read them
   with `get_env_var()`.
@@ -603,6 +688,8 @@ New and changed tests in `lambda/tests/`:
 - `test_budget_summary.py` — dispositions (BUDGET only in categories and membership), the
   Off-budget total, `totalsWithOffBudget`, and `leftToAssign`.
 - `test_budget_transactions.py` — disposition validation, the note, and the account.
+- `test_personal_finance_handler.py` — the new routes, and the changes to upload and commit.
+- `test_networth_models.py` — the `credit_card` account type.
 - `test_budget_csv_import.py` — the local column types, the prompt without values, unique
   descriptions, the `kind` in the answer, fingerprints with `n`, the pair match (none, one, many),
   last four, the bank hint, and every row of the direction table.
@@ -610,23 +697,25 @@ New and changed tests in `lambda/tests/`:
 
 ## Order of Work
 
-Each step can ship alone, and each step leaves the app in a working state.
+`docs/budget-income-workplan.md` has the checkpoints, the files for each one, and the checks. In
+short:
 
-1. **Dispositions and the note.** The Transactions fields, the API validation, the summary
-   (BUDGET only, the Off-budget rows), and the ledger page. The user can mark work travel at once.
-2. **Income plan.** The two tables, the densify refactor, the income API, `compute_income()`, the
-   audit actions, and the Income page.
-3. **Left to assign.** The new fields on the summary and budget responses, and the header lines.
-   This step delivers the main goal (Spec 40).
-4. **Accounts.** The `credit_card` account type, `budgetRole`, `lastFour`, and the account picker
-   on the upload page.
-5. **CSV import.** Fingerprints, the column mapping without values, unique descriptions, the
-   `kind`, the other side, the direction table, and the new review screen.
+1. Dispositions and the note.
+2. A generic densify step (a refactor, with no change in behavior).
+3. The income plan: backend.
+4. The income plan: frontend.
+5. Left to assign. This step delivers the main goal (Spec 40).
+6. Accounts.
+7. to 9. The CSV import, in three parts.
+10. The documentation.
 
 ## Open Items
 
 - **The `credit_card` account type** changes the net worth record. Confirm that a credit card in
   the Account table is acceptable, and whether it shows in net worth.
+- **`compute_summary()` has its own walk-back** (`_walk_back_amount()` in `aws/dynamodb.py`), apart
+  from `budget/densify.py`. The refactor of the densify code (workplan CP2) must cover both, or
+  leave the summary copy as it is and say so.
 - **The column mapping without values** (Step 2) can be wrong about the sign. Test it with real
   CSVs from each bank before step 5 of the work.
 - **The first upload after the change** can make copies of old rows, because old rows have no

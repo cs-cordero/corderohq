@@ -33,7 +33,12 @@ web/personal-finance/    React + TypeScript frontend (Vite)
         ...
 lambda/src/corderohq/
     personal_finance_handler.py  Lambda entrypoint + HTTP routing
+    scheduled_densify.py   Lambda that the monthly schedule calls (see Densification)
     budget/csv_import.py   LLM-driven CSV column mapping + categorization
+    budget/densify.py      Densify step and future-month walk-back
+    budget/editability.py  The editability state function
+    budget/auth.py         Admin group check
+    networth/              Net worth models and snapshot logic
     aws/dynamodb.py        Table wrappers and summary computation
 infra/lib/
     personal-finance-dynamodb-stack.ts   DynamoDB tables
@@ -96,8 +101,15 @@ it.
 +------------------------+--------------------+------------+-----------------------------+
 | Table                  | PK                 | SK         | Notes                       |
 +------------------------+--------------------+------------+-----------------------------+
+| CategoryGroup-{stage}  | groupId            | —          | groupId is ULID. Fields:    |
+|                        |                    |            | name, order, system (true   |
+|                        |                    |            | only for the "Unassigned"   |
+|                        |                    |            | group), timestamps. See     |
+|                        |                    |            | Specs 23 to 30.             |
++------------------------+--------------------+------------+-----------------------------+
 | Category-{stage}       | categoryId         | —          | categoryId is ULID. Fields: |
-|                        |                    |            | name, active, timestamps,   |
+|                        |                    |            | name, active, groupId,      |
+|                        |                    |            | orderInGroup, timestamps,   |
 |                        |                    |            | nameHistory (list of        |
 |                        |                    |            | {previousName, replacedAt   |
 |                        |                    |            | ISO-8601 UTC}). Soft-delete |
@@ -122,12 +134,14 @@ it.
 |                        |                    |            | key sorts chronologically   |
 |                        |                    |            | within a month.             |
 +------------------------+--------------------+------------+-----------------------------+
-| BudgetAuditLog-{stage} | "AUDIT"            | sortId     | Single-partition design so  |
-|                        |                    |            | recent-N queries are one    |
+| BudgetAuditLog-{stage} | entityType         | sortId     | Single-partition design so  |
+|                        | (always "AUDIT")   |            | recent-N queries are one    |
 |                        |                    |            | Query with                  |
-|                        |                    |            | ScanIndexForward=false. PK  |
-|                        |                    |            | is the literal string       |
-|                        |                    |            | "AUDIT". sortId is ULID     |
+|                        |                    |            | ScanIndexForward=false. The |
+|                        |                    |            | PK attribute is entityType, |
+|                        |                    |            | and its value is always the |
+|                        |                    |            | string "AUDIT". sortId is   |
+|                        |                    |            | ULID                        |
 |                        |                    |            | (sortable by time). Fields: |
 |                        |                    |            | changedAt (ISO-8601 UTC     |
 |                        |                    |            | timestamp), effectiveYear-  |
@@ -149,6 +163,24 @@ it.
 |                        |                    |            | /api/categories/{id} with   |
 |                        |                    |            | effectiveYearMonth null.    |
 +------------------------+--------------------+------------+-----------------------------+
+```
+
+The net worth record has three more tables. This document does not describe the net worth record
+in detail yet. See the code in `networth/` and in `aws/dynamodb.py`.
+
+```
++--------------------------+-----------------------+------------+----------------------------+
+| Table                    | PK                    | SK         | Notes                      |
++--------------------------+-----------------------+------------+----------------------------+
+| Profile-{stage}          | householdId (always   | personId   | One row for each person.   |
+|                          | "HOUSEHOLD")          |            |                            |
+| Account-{stage}          | accountId             | —          | accountType, liability,    |
+|                          |                       |            | assetClasses, owners,      |
+|                          |                       |            | active, sortOrder, and     |
+|                          |                       |            | more. See networth/models. |
+| NetWorthSnapshot-{stage} | yearMonth             | accountId  | One row for each account   |
+|                          |                       |            | in each month.             |
++--------------------------+-----------------------+------------+----------------------------+
 ```
 
 ### Category name uniqueness
@@ -203,6 +235,14 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 | GET    | /api/categories?include_inactive=true    | List categories (active only by    |
 |        |                                          | default).                          |
 +--------+------------------------------------------+------------------------------------+
+| GET    | /api/category-groups                     | List the category groups.          |
+| POST   | /api/category-groups                     | Create a group. Body: name.        |
+| PUT    | /api/category-groups/{id}                | Rename a group.                    |
+| DELETE | /api/category-groups/{id}                | Delete a group (Spec 28).          |
+| POST   | /api/category-groups/reorder             | Write the full group order.        |
+| POST   | /api/categories/reorder                  | Write the category order in one    |
+|        |                                          | group.                             |
++--------+------------------------------------------+------------------------------------+
 | GET    | /api/categories/{id}?deletion_preview=   | Admin-only. Returns the hard-      |
 |        | true                                     | delete impact summary (counts of   |
 |        |                                          | Budget rows, Transactions, locked  |
@@ -211,8 +251,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | See **Hard delete semantics**.     |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/categories                          | Create category. Body requires     |
-|        |                                          | name and initialTarget (non-zero,  |
-|        |                                          | non-negative integer millionths).  |
+|        |                                          | name and groupId. initialTarget is |
+|        |                                          | optional: a non-negative integer   |
+|        |                                          | in millionths, default 0 (Spec 14).|
 |        |                                          | If the current year-month is       |
 |        |                                          | dense, creates a row at            |
 |        |                                          | initialTarget in it.               |
@@ -319,6 +360,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 +--------+------------------------------------------+------------------------------------+
 ```
 
+The net worth record has its own routes: `/api/profile`, `/api/profile/people/...`,
+`/api/accounts/...`, and `/api/net-worth/...`. See `handler()` in `personal_finance_handler.py`.
+
 A change to a transaction uses `POST`, and not `PUT` or `DELETE`. A CloudFront cache policy can
 remove the body from the other two methods.
 
@@ -388,7 +432,7 @@ offset. The grace period ends at **midnight ET on day 8** of the new month.
 | `POST /api/budget/{YYYY-MM}/replace` | `{YYYY-MM}` must be the current month, GRACE, or — via override — LOCKED |
 | `POST /api/budget/{YYYY-MM}/pin` | `{YYYY-MM}` must be strictly in the future — i.e., EDITABLE and `yearMonth > current_ym` (one of the next 12 months). Pinning the current month, the grace month, or any locked month is rejected with `409`; those months are dense and `/replace` is the right endpoint. Override does not unlock `/pin` for non-future months — it has no use here |
 | `POST /api/transactions` | `transactionDate`'s year-month must be EDITABLE or GRACE |
-| `POST /api/transactions/update` | Both the old and the new `transactionDate`'s year-months must be EDITABLE or GRACE (an update that moves a row across months must satisfy both) |
+| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. An update cannot change `transactionDate`; it changes only `description`, `amount`, and `categoryId` |
 | `POST /api/transactions/delete` | Each item's `yearMonth` must be EDITABLE or GRACE |
 | `POST /api/transactions/commit` | Every row's `transactionDate` year-month must be EDITABLE or GRACE; see **CSV commit semantics** |
 
@@ -548,7 +592,7 @@ previous month while it is in grace, or any locked month through the admin overr
 
 ```
 {
-  "rows": [{ "categoryId", "amount": number | null }, ...],
+  "targets": [{ "categoryId", "amount": number | null }, ...],
   "explanation": "...",
   "override": false
 }
@@ -583,7 +627,7 @@ and not a `DELETE`.
 
 ```
 {
-  "rows": [{ "categoryId", "amount": number | null }, ...],
+  "targets": [{ "categoryId", "amount": number | null }, ...],
   "explanation": "...",
   "override": false
 }
@@ -951,37 +995,41 @@ changes what is wrong, and commits.
 
 ### Upload response shape
 
-`POST /api/transactions/upload` returns each row, and a note on each row about what is wrong with
-it. The review page can then show every problem before the user clicks Commit:
+`POST /api/transactions/upload` takes `{csvData}`. It returns three keys. The review page can then
+show every problem before the user clicks Commit:
 
 ```
 {
-  "rows": [
+  "columnMapping": { "date": "...", "description": "...", "amount": "...", "amount_invert": bool },
+  "transactions": [
     {
       "transactionDate": "2024-03-15",
       "description": "...",
       "amount": 12340000,
-      "categoryId": "01HQ...",         // null if LLM could not assign
-      "validation": {
-        "editability": "EDITABLE" | "GRACE" | "LOCKED",
-        "issues": ["missing_category", "locked_month"]
-      }
+      "categoryId": "01HQ...",        // "" if the LLM could not assign one
+      "categoryName": "..."
     },
+    ...
+  ],
+  "validations": [
+    { "index": 0, "issues": ["missing_category", "locked_month"] },
     ...
   ]
 }
 ```
 
-The `issues` array holds two values, and no others:
+`validations[i]` belongs to `transactions[i]`. The `issues` array holds two values, and no others:
 
 - `missing_category` — the LLM gave no `categoryId`, or it gave one that matches no category. The
   user must choose one on the row.
 - `locked_month` — the year-month of `transactionDate` is `LOCKED`, as the editability function
   says. The user must change the date, or turn on the admin override.
 
-This endpoint sends no other issue string. A row that the app cannot read at all — a date in the
-wrong form, or an amount that is not a number — makes the whole upload fail. The app then returns
-one error at the top level, which names the bad rows.
+`_validate_commit_rows()` makes these checks for both the upload and the commit.
+
+A CSV row with too few columns, an empty amount, or an amount that is not a number is **dropped
+with no error**. If no row is left, the upload returns `400`. If the LLM cannot find the three
+columns, the upload also returns `400`.
 
 The client blocks any row whose `issues` array is not empty. The user must correct it on the row,
 by a choice of category or a change of date, or must turn on the admin override. The UI does not
@@ -1026,13 +1074,21 @@ the path for a CSV commit.
 +-----------------------------+-----------------------------------+
 | Variable                    | Purpose                           |
 +-----------------------------+-----------------------------------+
+| STAGE                       | "dev" or "prod"; builds the admin |
+|                             | group name                        |
+| CATEGORY_GROUP_TABLE_NAME   | DynamoDB CategoryGroup table      |
 | CATEGORY_TABLE_NAME         | DynamoDB Category table           |
 | BUDGET_TABLE_NAME           | DynamoDB Budget table             |
 | TRANSACTIONS_TABLE_NAME     | DynamoDB Transactions table       |
 | BUDGET_AUDIT_LOG_TABLE_NAME | DynamoDB audit log table          |
+| PROFILE_TABLE_NAME          | DynamoDB Profile table            |
+| ACCOUNT_TABLE_NAME          | DynamoDB Account table            |
+| NETWORTH_SNAPSHOT_TABLE_NAME| DynamoDB NetWorthSnapshot table   |
 | SSM_API_KEY_PARAM           | SSM path to the Anthropic API key |
 +-----------------------------+-----------------------------------+
 ```
+
+The scheduled densify Lambda gets only `CATEGORY_TABLE_NAME`, `BUDGET_TABLE_NAME`, and `STAGE`.
 
 Every environment variable goes through `get_env_var()`. That function raises an error if the value
 is absent or blank.
@@ -1041,8 +1097,13 @@ is absent or blank.
 
 React and TypeScript, built by Vite.
 
-The pages are `BudgetPage`, `TransactionsPage`, `CategoriesPage`, `SummaryPage`, `UploadPage`,
-`AuditLogPage`, `AdminToolsPage`, and `CallbackPage`.
+The pages are `SummaryPage`, `BudgetPage`, `TransactionsPage`, `UploadPage`, `CategoriesPage`,
+`AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. The net worth record adds `AccountsPage` and
+`NetWorthEntryPage`. `App.tsx` holds the routes. `components/Layout.tsx` holds the navigation, with
+one list of links for the budget (`BUDGET_LINKS`) and one for the net worth record.
+
+`types.ts` holds the response types. `parsers.ts` checks each response at run time before the
+page uses it, so a new field in a response needs a change in both files.
 
 The shared parts are `auth.ts`, which holds the PKCE flow and permits one token request at a time,
 and `api.ts`, which holds the typed wrappers. The shared components are `MonthPicker`,
@@ -1076,9 +1137,11 @@ shows the `override` flag on each one.
 ## Testing
 
 The Python unit tests are in `lambda/tests/`. These files hold the budget tests:
-`test_budget_handler.py`, `test_budget_categories.py`, `test_budget_budget.py`,
-`test_budget_transactions.py`, `test_budget_summary.py`, `test_budget_audit.py`, and
-`test_budget_csv_import.py`. Every DynamoDB call and every Anthropic call is a mock. Run
+`test_personal_finance_handler.py`, `test_budget_auth.py`, `test_budget_categories.py`,
+`test_budget_category_groups.py`, `test_budget_budget.py`, `test_budget_densify.py`,
+`test_budget_editability.py`, `test_budget_transactions.py`, `test_budget_summary.py`,
+`test_budget_audit.py`, and `test_budget_csv_import.py`. The net worth tests are in
+`test_networth_*.py`. Every DynamoDB call and every Anthropic call is a mock (`MagicMock`). Run
 `uv run pytest` from `lambda/`.
 
 The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
