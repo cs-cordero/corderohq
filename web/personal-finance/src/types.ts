@@ -148,24 +148,48 @@ export interface ColumnMapping {
     amount_invert?: boolean;
 }
 
+// Where a suggestion on the review screen came from.
+export type SuggestedBy = "PAIR" | "LAST_FOUR" | "BANK" | "LLM" | "DEFAULT";
+
+// The other side of a transfer: a saved transaction, or another row of the same upload.
+export type PairWith = { yearMonth: string; sortId: string } | { uploadIndex: number } | null;
+
 export interface ParsedTransaction {
     transactionDate: string;
     description: string;
     amount: number;
-    categoryId: string;
+    categoryId: string; // "" when there is no category
     categoryName: string;
+    accountId: string;
+    disposition: Disposition;
+    suggestedBy: SuggestedBy;
+    pairWith: PairWith;
+    fingerprint: string;
+    duplicate: boolean; // the table holds this row already
+    note?: string; // set on the review screen only
 }
 
 // A closed set, so that the UI can show something different for each issue. If you add an
 // issue here, you must also change `_validate_commit_rows` in the backend.
 export type RowValidationIssue = "missing_category" | "locked_month";
 
+// The reasons to look at a row. Unlike an issue, a reason does not block the commit.
+export type ReviewReason = "no_pair_found" | "llm_guess" | "many_pairs";
+
+export const REVIEW_REASON_LABELS: Record<ReviewReason, string> = {
+    no_pair_found: "Transfer? No other side found",
+    llm_guess: "Guess — please check",
+    many_pairs: "More than one possible other side",
+};
+
 export interface RowValidation {
     index: number;
     issues: RowValidationIssue[];
+    review: ReviewReason[];
 }
 
 export interface UploadResult {
+    accountId: string;
     columnMapping: ColumnMapping;
     transactions: ParsedTransaction[];
     validations: RowValidation[];
@@ -174,6 +198,7 @@ export interface UploadResult {
 export interface CommitResult {
     count: number;
     transactions: Transaction[];
+    skippedDuplicates: number[]; // indices into the committed batch
 }
 
 export interface CommitValidationError {

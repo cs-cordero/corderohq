@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 
-from corderohq.budget.csv_import import categorize_transactions, map_columns
+from corderohq.budget.csv_import import assign_fingerprints, categorize_transactions, map_columns
 
 
 def _mock_claude_response(text: str) -> MagicMock:
@@ -84,3 +84,23 @@ class TestCategorizeTransactions:
         assert len(result) == 2
         assert result[0]["categoryId"] == "cat1"
         assert result[1]["categoryId"] == "cat2"
+
+
+class TestFingerprints:
+    def test_same_row_in_two_files_gets_the_same_fingerprint(self) -> None:
+        row = {"transactionDate": "2026-06-01", "amount": 5_000_000, "description": "Coffee  shop"}
+        assert assign_fingerprints([row], "acct1") == assign_fingerprints([dict(row)], "acct1")
+
+    def test_two_equal_rows_in_one_file_get_different_fingerprints(self) -> None:
+        row = {"transactionDate": "2026-06-01", "amount": 5_000_000, "description": "Coffee"}
+        first, second = assign_fingerprints([row, dict(row)], "acct1")
+        assert first != second
+
+    def test_description_case_and_spaces_do_not_matter(self) -> None:
+        a = {"transactionDate": "2026-06-01", "amount": 1, "description": "coffee   shop"}
+        b = {"transactionDate": "2026-06-01", "amount": 1, "description": "COFFEE SHOP"}
+        assert assign_fingerprints([a], "acct1") == assign_fingerprints([b], "acct1")
+
+    def test_account_changes_the_fingerprint(self) -> None:
+        row = {"transactionDate": "2026-06-01", "amount": 1, "description": "x"}
+        assert assign_fingerprints([row], "acct1") != assign_fingerprints([row], "acct2")

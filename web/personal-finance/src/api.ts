@@ -184,13 +184,22 @@ export const deleteTransactions = (items: { yearMonth: string; sortId: string }[
         method: "POST",
         ...jsonBody({ items, ...(override ? { override: true } : {}) }),
     });
-export const uploadTransactions = (csvData: string) =>
+export const uploadTransactions = (csvData: string, accountId: string) =>
     request("/transactions/upload", parseUploadResult, {
         method: "POST",
-        ...jsonBody({ csvData }),
+        ...jsonBody({ csvData, accountId }),
     });
 export const commitTransactions = (
-    rows: { transactionDate: string; description: string; amount: number; categoryId: string }[],
+    rows: {
+        transactionDate: string;
+        description: string;
+        amount: number;
+        disposition: Disposition;
+        categoryId?: string;
+        accountId: string;
+        note?: string;
+        fingerprint: string;
+    }[],
     override = false,
 ) =>
     request("/transactions/commit", parseCommitResult, {

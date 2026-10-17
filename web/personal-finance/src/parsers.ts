@@ -31,11 +31,14 @@ import type {
     NetWorthTotals,
     OneTimeLine,
     Paycheck,
+    PairWith,
     ParsedTransaction,
     Person,
     PinResult,
+    ReviewReason,
     RowValidation,
     RowValidationIssue,
+    SuggestedBy,
     Summary,
     SummaryCategory,
     Transaction,
@@ -345,22 +348,48 @@ function parseColumnMapping(raw: unknown): ColumnMapping {
     };
 }
 
+const _SUGGESTED_BY = new Set<string>(["PAIR", "LAST_FOUR", "BANK", "LLM", "DEFAULT"]);
+
+function parsePairWith(raw: unknown): PairWith {
+    if (raw === null || raw === undefined) return null;
+    const obj = requireObject(raw, "ParsedTransaction.pairWith");
+    if (typeof obj.uploadIndex === "number") return { uploadIndex: obj.uploadIndex };
+    return {
+        yearMonth: requireString(obj, "yearMonth", "ParsedTransaction.pairWith"),
+        sortId: requireString(obj, "sortId", "ParsedTransaction.pairWith"),
+    };
+}
+
 function parseParsedTransaction(raw: unknown): ParsedTransaction {
     const obj = requireObject(raw, "ParsedTransaction");
+    const suggestedBy = requireString(obj, "suggestedBy", "ParsedTransaction");
+    if (!_SUGGESTED_BY.has(suggestedBy)) {
+        throw new Error(`ParsedTransaction.suggestedBy: unexpected value '${suggestedBy}'`);
+    }
     return {
         transactionDate: requireString(obj, "transactionDate", "ParsedTransaction"),
         description: requireString(obj, "description", "ParsedTransaction"),
         amount: requireNumber(obj, "amount", "ParsedTransaction"),
-        categoryId: requireString(obj, "categoryId", "ParsedTransaction"),
-        categoryName: requireString(obj, "categoryName", "ParsedTransaction"),
+        categoryId: optionalString(obj, "categoryId", "ParsedTransaction") ?? "",
+        categoryName: optionalString(obj, "categoryName", "ParsedTransaction") ?? "",
+        accountId: requireString(obj, "accountId", "ParsedTransaction"),
+        disposition: parseDisposition(obj, "ParsedTransaction"),
+        suggestedBy: suggestedBy as SuggestedBy,
+        pairWith: parsePairWith(obj.pairWith),
+        fingerprint: requireString(obj, "fingerprint", "ParsedTransaction"),
+        duplicate: requireBoolean(obj, "duplicate", "ParsedTransaction"),
     };
 }
 
 const _ROW_VALIDATION_ISSUES = new Set<string>(["missing_category", "locked_month"]);
+const _REVIEW_REASONS = new Set<string>(["no_pair_found", "llm_guess", "many_pairs"]);
 
 function parseRowValidation(raw: unknown): RowValidation {
     const obj = requireObject(raw, "RowValidation");
     const issuesRaw = stringArray(obj.issues, "RowValidation.issues");
+    // The commit's 409 response has no `review` list. An unknown reason is dropped, because a
+    // reason only puts a row first on the review screen.
+    const reviewRaw = obj.review === undefined ? [] : stringArray(obj.review, "RowValidation.review");
     return {
         index: requireNumber(obj, "index", "RowValidation"),
         issues: issuesRaw.map((s) => {
@@ -369,12 +398,14 @@ function parseRowValidation(raw: unknown): RowValidation {
             }
             return s as RowValidationIssue;
         }),
+        review: reviewRaw.filter((s) => _REVIEW_REASONS.has(s)) as ReviewReason[],
     };
 }
 
 export function parseUploadResult(raw: unknown): UploadResult {
     const obj = requireObject(raw, "UploadResult");
     return {
+        accountId: requireString(obj, "accountId", "UploadResult"),
         columnMapping: parseColumnMapping(obj.columnMapping),
         transactions: arrayOf(obj.transactions, parseParsedTransaction, "UploadResult.transactions"),
         validations: arrayOf(obj.validations, parseRowValidation, "UploadResult.validations"),
@@ -386,6 +417,17 @@ export function parseCommitResult(raw: unknown): CommitResult {
     return {
         count: requireNumber(obj, "count", "CommitResult"),
         transactions: arrayOf(obj.transactions, parseTransaction, "CommitResult.transactions"),
+        skippedDuplicates:
+            obj.skippedDuplicates === undefined
+                ? []
+                : arrayOf(
+                      obj.skippedDuplicates,
+                      (item) => {
+                          if (typeof item !== "number") throw new Error("CommitResult.skippedDuplicates: not a number");
+                          return item;
+                      },
+                      "CommitResult.skippedDuplicates",
+                  ),
     };
 }
 

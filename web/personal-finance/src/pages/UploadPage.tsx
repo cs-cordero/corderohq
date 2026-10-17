@@ -1,15 +1,36 @@
-import { useCallback, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { useAdmin } from "../admin";
-import { ApiError, commitTransactions, fetchCategories, uploadTransactions } from "../api";
+import { ApiError, commitTransactions, fetchAccounts, fetchCategories, uploadTransactions } from "../api";
 import LoadingOverlay from "../components/LoadingOverlay";
 import StatusMessage from "../components/StatusMessage";
 import { formatCurrency } from "../format";
 import { useStatus } from "../hooks";
 import { parseCommitValidationsFromError } from "../parsers";
-import type { Category, ParsedTransaction, RowValidation, RowValidationIssue } from "../types";
+import {
+    BUDGET_ROLE_LABELS,
+    DISPOSITION_LABELS,
+    DISPOSITIONS,
+    REVIEW_REASON_LABELS,
+    budgetRoleOf,
+    type Account,
+    type Category,
+    type Disposition,
+    type ParsedTransaction,
+    type RowValidation,
+    type RowValidationIssue,
+    type SuggestedBy,
+} from "../types";
 
 type SortKey = "transactionDate" | "description" | "amount" | "categoryName";
 type SortDir = "asc" | "desc";
+
+const SUGGESTED_BY_LABELS: Record<SuggestedBy, string> = {
+    PAIR: "matched the other side of a transfer",
+    LAST_FOUR: "found an account number",
+    BANK: "from the bank's category",
+    LLM: "from the LLM",
+    DEFAULT: "default",
+};
 
 function yearMonthFromDate(dateStr: string): string {
     return dateStr.slice(0, 7);
@@ -27,8 +48,11 @@ function issueLabel(issue: RowValidationIssue): string {
 export default function UploadPage() {
     const { adminModeOn } = useAdmin();
     const [csvFile, setCsvFile] = useState<File | null>(null);
+    const [accounts, setAccounts] = useState<Account[]>([]);
+    const [accountId, setAccountId] = useState("");
     const [transactions, setTransactions] = useState<ParsedTransaction[]>([]);
     const [validations, setValidations] = useState<RowValidation[]>([]);
+    // The rows that the commit leaves out. A row that the table holds already starts here.
     const [removed, setRemoved] = useState<Set<number>>(new Set());
     const [categories, setCategories] = useState<Category[]>([]);
     const { status, showLoading, showSuccess, showError, clear } = useStatus();
@@ -37,53 +61,63 @@ export default function UploadPage() {
     const [sortKey, setSortKey] = useState<SortKey>("transactionDate");
     const [sortDir, setSortDir] = useState<SortDir>("asc");
 
+    // Only an account with a budget role can take an upload.
+    const uploadAccounts = useMemo(() => accounts.filter((a) => budgetRoleOf(a) !== null), [accounts]);
+
+    useEffect(() => {
+        fetchAccounts()
+            .then(setAccounts)
+            .catch((err: unknown) => showError(err));
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
     const handleUpload = useCallback(async () => {
-        if (!csvFile) return;
+        if (!csvFile || !accountId) return;
         showLoading("Uploading and analyzing...");
         try {
             const text = await csvFile.text();
-            const [result, cats] = await Promise.all([uploadTransactions(text), fetchCategories()]);
+            const [result, cats] = await Promise.all([uploadTransactions(text, accountId), fetchCategories()]);
             setTransactions(result.transactions);
             setValidations(result.validations);
-            setRemoved(new Set());
+            setRemoved(new Set(result.transactions.flatMap((t, i) => (t.duplicate ? [i] : []))));
             setCategories(cats);
             setStep("review");
-            showSuccess(`Found ${result.transactions.length} transactions`);
-            setTimeout(clear, 3000);
+            const duplicates = result.transactions.filter((t) => t.duplicate).length;
+            showSuccess(
+                `Found ${result.transactions.length} transactions` +
+                    (duplicates > 0 ? `; ${duplicates} exist already and are not selected` : ""),
+            );
+            setTimeout(clear, 5000);
         } catch (err) {
             showError(err);
         }
-    }, [csvFile]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [csvFile, accountId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const reviewByIndex = useMemo(() => new Map(validations.map((v) => [v.index, v.review])), [validations]);
 
     // Validations come back keyed by row index. Editing a row's category or removing
     // a row can resolve issues client-side, so we recompute the displayed status from
     // the latest state rather than relying on the server's original list.
     const liveIssues = useMemo<Map<number, RowValidationIssue[]>>(() => {
         const m = new Map<number, RowValidationIssue[]>();
-        for (const v of validations) {
-            const txn = transactions[v.index];
-            if (!txn) continue;
+        transactions.forEach((txn, index) => {
             const issues: RowValidationIssue[] = [];
-            for (const issue of v.issues) {
-                if (issue === "missing_category") {
-                    if (!txn.categoryId) issues.push("missing_category");
-                } else if (issue === "locked_month") {
-                    // locked_month is server-decided; we don't recompute it because
-                    // the client doesn't know the exact editability state machine.
-                    // Admin mode optimistically suppresses it — backend re-validates.
-                    if (!adminModeOn) issues.push("locked_month");
-                }
-            }
-            if (issues.length) m.set(v.index, issues);
-        }
+            // A Budget row needs a category. The other dispositions do not.
+            if (txn.disposition === "BUDGET" && !txn.categoryId) issues.push("missing_category");
+            const serverIssues = validations.find((v) => v.index === index)?.issues ?? [];
+            // locked_month is server-decided; we don't recompute it because
+            // the client doesn't know the exact editability state machine.
+            // Admin mode optimistically suppresses it — backend re-validates.
+            if (serverIssues.includes("locked_month") && !adminModeOn) issues.push("locked_month");
+            if (issues.length) m.set(index, issues);
+        });
         return m;
     }, [validations, transactions, adminModeOn]);
 
-    const updateTxn = (index: number, field: keyof ParsedTransaction, value: string) => {
+    const updateTxn = (index: number, change: Partial<ParsedTransaction>) => {
         const updated = [...transactions];
-        updated[index] = { ...updated[index], [field]: value };
-        if (field === "categoryId") {
-            const cat = categories.find((c) => c.categoryId === value);
+        updated[index] = { ...updated[index], ...change };
+        if (change.categoryId !== undefined) {
+            const cat = categories.find((c) => c.categoryId === change.categoryId);
             updated[index].categoryName = cat?.name ?? "";
         }
         setTransactions(updated);
@@ -117,23 +151,31 @@ export default function UploadPage() {
                 transactionDate: t.transactionDate,
                 description: t.description,
                 amount: t.amount,
-                categoryId: t.categoryId,
+                disposition: t.disposition,
+                ...(t.disposition !== "SKIP" && t.categoryId ? { categoryId: t.categoryId } : {}),
+                accountId: t.accountId,
+                ...(t.note?.trim() ? { note: t.note.trim() } : {}),
+                fingerprint: t.fingerprint,
             }));
             const result = await commitTransactions(rows, adminModeOn);
             setStep("done");
-            showSuccess(`Saved ${result.count} transactions`);
+            const skipped = result.skippedDuplicates.length;
+            showSuccess(
+                `Saved ${result.count} transactions` +
+                    (skipped > 0 ? `; skipped ${skipped} that the table holds already` : ""),
+            );
         } catch (err) {
             // Server returned 409 with full validation list — surface it back into the UI.
             if (err instanceof ApiError && err.status === 409) {
                 const v = parseCommitValidationsFromError(err.responseBody);
                 if (v) {
                     // Server validations are keyed by index into the committed batch (filtered).
-                    // Re-key to the original transaction indices.
+                    // Re-key to the original transaction indices, and keep the review reasons.
                     const originalIndices = activeRowsWithIndex.map((t) => t._i);
-                    const remappedValidations: RowValidation[] = v.map((rv) => ({
-                        index: originalIndices[rv.index] ?? rv.index,
-                        issues: rv.issues,
-                    }));
+                    const remappedValidations: RowValidation[] = v.map((rv) => {
+                        const index = originalIndices[rv.index] ?? rv.index;
+                        return { index, issues: rv.issues, review: reviewByIndex.get(index) ?? [] };
+                    });
                     setValidations(remappedValidations);
                     showError("Commit rejected — fix the highlighted rows and try again.");
                     return;
@@ -177,6 +219,18 @@ export default function UploadPage() {
         return indices;
     }, [transactions, sortKey, sortDir]);
 
+    // Three lists: the rows to look at first, then the Budget rows, then the Off-budget and Skip
+    // rows. A row moves to another list when the user changes its disposition.
+    const sections = useMemo(() => {
+        const needsReview = sortedIndices.filter((i) => (reviewByIndex.get(i) ?? []).length > 0);
+        const rest = sortedIndices.filter((i) => (reviewByIndex.get(i) ?? []).length === 0);
+        return [
+            { title: "Look at these first", indices: needsReview },
+            { title: "Budget", indices: rest.filter((i) => transactions[i].disposition === "BUDGET") },
+            { title: "Off-budget and Skip", indices: rest.filter((i) => transactions[i].disposition !== "BUDGET") },
+        ].filter((s) => s.indices.length > 0);
+    }, [sortedIndices, reviewByIndex, transactions]);
+
     const handleSort = (key: SortKey) => {
         if (sortKey === key) {
             setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -191,6 +245,87 @@ export default function UploadPage() {
         return sortDir === "asc" ? " ↑" : " ↓";
     };
 
+    const renderRow = (i: number) => {
+        const txn = transactions[i];
+        const isRemoved = removed.has(i);
+        const issues = liveIssues.get(i) ?? [];
+        const review = reviewByIndex.get(i) ?? [];
+        const negative = txn.amount < 0;
+        return (
+            <tr
+                key={i}
+                className={[isRemoved ? "removed-row" : "", issues.length > 0 ? "row-has-issue" : ""].join(" ")}
+            >
+                <td>{txn.transactionDate}</td>
+                <td>{txn.description}</td>
+                <td className={`num ${negative ? "amount-refund" : ""}`}>
+                    {formatCurrency(txn.amount)}
+                    {negative && <span className="badge badge-refund">money in</span>}
+                </td>
+                <td>
+                    <select
+                        value={txn.disposition}
+                        onChange={(e) => updateTxn(i, { disposition: e.target.value as Disposition })}
+                        title={`Suggestion ${SUGGESTED_BY_LABELS[txn.suggestedBy]}`}
+                    >
+                        {DISPOSITIONS.map((d) => (
+                            <option key={d} value={d}>
+                                {DISPOSITION_LABELS[d]}
+                            </option>
+                        ))}
+                    </select>
+                </td>
+                <td>
+                    {txn.disposition !== "SKIP" && (
+                        <select value={txn.categoryId} onChange={(e) => updateTxn(i, { categoryId: e.target.value })}>
+                            <option value="">{txn.disposition === "BUDGET" ? "Uncategorized" : "No category"}</option>
+                            {categories.map((c) => (
+                                <option key={c.categoryId} value={c.categoryId}>
+                                    {c.name}
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                </td>
+                <td>
+                    <input
+                        type="text"
+                        maxLength={200}
+                        value={txn.note ?? ""}
+                        placeholder="Note"
+                        onChange={(e) => updateTxn(i, { note: e.target.value })}
+                    />
+                </td>
+                <td className="row-issues">
+                    {txn.duplicate && (
+                        <span className="badge badge-duplicate" title="The table holds this row already">
+                            duplicate
+                        </span>
+                    )}
+                    {review.map((reason) => (
+                        <span key={reason} className="badge badge-review">
+                            {REVIEW_REASON_LABELS[reason]}
+                        </span>
+                    ))}
+                    {issues.map((issue) => (
+                        <span
+                            key={issue}
+                            className={`badge badge-issue badge-issue-${issue}`}
+                            title={`${issue} (${yearMonthFromDate(txn.transactionDate)})`}
+                        >
+                            {issueLabel(issue)}
+                        </span>
+                    ))}
+                </td>
+                <td className="actions">
+                    <button className={`small-btn ${isRemoved ? "" : "delete-btn"}`} onClick={() => toggleRemove(i)}>
+                        {isRemoved ? "Restore" : "Remove"}
+                    </button>
+                </td>
+            </tr>
+        );
+    };
+
     return (
         <div className="page">
             <h1>Upload Transactions</h1>
@@ -201,18 +336,37 @@ export default function UploadPage() {
                 <div className="upload-section">
                     <p className="hint">Upload a CSV from your bank or credit card statement.</p>
                     <div className="upload-controls">
+                        <select value={accountId} onChange={(e) => setAccountId(e.target.value)}>
+                            <option value="">Select the account of this CSV...</option>
+                            {uploadAccounts.map((a) => {
+                                const role = budgetRoleOf(a);
+                                return (
+                                    <option key={a.accountId} value={a.accountId}>
+                                        {a.name}
+                                        {role ? ` — ${BUDGET_ROLE_LABELS[role]}` : ""}
+                                    </option>
+                                );
+                            })}
+                        </select>
                         <input type="file" accept=".csv" onChange={(e) => setCsvFile(e.target.files?.[0] ?? null)} />
-                        <button className="primary-btn" onClick={handleUpload} disabled={!csvFile}>
+                        <button className="primary-btn" onClick={handleUpload} disabled={!csvFile || !accountId}>
                             Upload & Analyze
                         </button>
                     </div>
+                    {uploadAccounts.length === 0 && (
+                        <p className="hint">
+                            No account can take an upload yet. On the Accounts page, add an account and give it a
+                            budget role.
+                        </p>
+                    )}
                 </div>
             )}
 
             {step === "review" && (
                 <>
                     <p className="hint">
-                        Review the categorized transactions below. Edit categories, remove rows, then commit.
+                        Review the rows below. Change the type, the category, or the note, remove rows, then commit.
+                        Off-budget rows count only in the Off-budget total. Skip rows count nowhere.
                         {adminModeOn && (
                             <span className="hint-admin">
                                 {" "}
@@ -238,68 +392,21 @@ export default function UploadPage() {
                                 <th className="sortable num" onClick={() => handleSort("amount")}>
                                     Amount{sortIndicator("amount")}
                                 </th>
+                                <th>Type</th>
                                 <th className="sortable" onClick={() => handleSort("categoryName")}>
                                     Category{sortIndicator("categoryName")}
                                 </th>
+                                <th>Note</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {sortedIndices.map((i) => {
-                                const txn = transactions[i];
-                                const isRemoved = removed.has(i);
-                                const issues = liveIssues.get(i) ?? [];
-                                const negative = txn.amount < 0;
-                                return (
-                                    <tr
-                                        key={i}
-                                        className={[
-                                            isRemoved ? "removed-row" : "",
-                                            issues.length > 0 ? "row-has-issue" : "",
-                                        ].join(" ")}
-                                    >
-                                        <td>{txn.transactionDate}</td>
-                                        <td>{txn.description}</td>
-                                        <td className={`num ${negative ? "amount-refund" : ""}`}>
-                                            {formatCurrency(txn.amount)}
-                                            {negative && <span className="badge badge-refund">refund</span>}
-                                        </td>
-                                        <td>
-                                            <select
-                                                value={txn.categoryId}
-                                                onChange={(e) => updateTxn(i, "categoryId", e.target.value)}
-                                            >
-                                                <option value="">Uncategorized</option>
-                                                {categories.map((c) => (
-                                                    <option key={c.categoryId} value={c.categoryId}>
-                                                        {c.name}
-                                                    </option>
-                                                ))}
-                                            </select>
-                                        </td>
-                                        <td className="row-issues">
-                                            {issues.map((issue) => (
-                                                <span
-                                                    key={issue}
-                                                    className={`badge badge-issue badge-issue-${issue}`}
-                                                    title={`${issue} (${yearMonthFromDate(txn.transactionDate)})`}
-                                                >
-                                                    {issueLabel(issue)}
-                                                </span>
-                                            ))}
-                                        </td>
-                                        <td className="actions">
-                                            <button
-                                                className={`small-btn ${isRemoved ? "" : "delete-btn"}`}
-                                                onClick={() => toggleRemove(i)}
-                                            >
-                                                {isRemoved ? "Restore" : "Remove"}
-                                            </button>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
+                            {sections.map((section) => (
+                                <SectionRows key={section.title} title={section.title}>
+                                    {section.indices.map(renderRow)}
+                                </SectionRows>
+                            ))}
                         </tbody>
                     </table>
                     <div className="toolbar">
@@ -322,5 +429,16 @@ export default function UploadPage() {
                 </div>
             )}
         </div>
+    );
+}
+
+function SectionRows({ title, children }: { title: string; children: ReactNode }) {
+    return (
+        <>
+            <tr className="summary-group-header">
+                <td colSpan={8}>{title}</td>
+            </tr>
+            {children}
+        </>
     );
 }

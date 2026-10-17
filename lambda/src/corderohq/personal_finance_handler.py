@@ -28,7 +28,7 @@ from corderohq.aws.dynamodb import (
     compute_summary,
 )
 from corderohq.budget.auth import is_budget_admin
-from corderohq.budget.csv_import import categorize_transactions, map_columns
+from corderohq.budget.csv_import import assign_fingerprints, categorize_transactions, map_columns
 from corderohq.budget.densify import carry_map, densify, resolve_future_targets, walk_back_for
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
@@ -47,7 +47,7 @@ from corderohq.budget.income import (
     validate_one_time_amount,
     validate_paycheck,
 )
-from corderohq.networth.models import validate_asset_class
+from corderohq.networth.models import budget_role_of, validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -1578,6 +1578,8 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
         err = _check_account_exists(fields.account_id)
         if err:
             return err
+        if row.get("fingerprint") is not None and not isinstance(row["fingerprint"], str):
+            return _response(400, f"row {i}: fingerprint must be a string")
         checked = {key: value for key, value in row.items() if key not in DISPOSITION_ATTRIBUTES}
         checked.update(fields.stored_values())
         checked_rows.append(checked)
@@ -1598,19 +1600,44 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
             ),
         )
 
+    # Drop each row that the table holds already, by its fingerprint. A retry after a failure
+    # then writes only the rows that are not there yet.
+    existing_fingerprints = _existing_fingerprints({str(row["transactionDate"])[:7] for row in checked_rows})
+    skipped_duplicates: list[int] = []
     items_to_create: list[dict[str, Any]] = []
-    for row in checked_rows:
+    for index, row in enumerate(checked_rows):
+        if row.get("fingerprint") in existing_fingerprints:
+            skipped_duplicates.append(index)
+            continue
         item: dict[str, Any] = {
             "yearMonth": str(row["transactionDate"])[:7],
             "transactionDate": row["transactionDate"],
             "description": row["description"],
             "amount": row["amount"],
         }
-        item.update({name: row[name] for name in DISPOSITION_ATTRIBUTES if name in row})
+        item.update({name: row[name] for name in (*DISPOSITION_ATTRIBUTES, "fingerprint") if name in row})
         items_to_create.append(item)
-    created = _TRANSACTIONS_TABLE.batch_create(items_to_create)
+    created = _TRANSACTIONS_TABLE.batch_create(items_to_create) if items_to_create else []
 
-    return _json_response(200, json.dumps({"count": len(created), "transactions": created}, default=_json_default))
+    return _json_response(
+        200,
+        json.dumps(
+            {"count": len(created), "transactions": created, "skippedDuplicates": skipped_duplicates},
+            default=_json_default,
+        ),
+    )
+
+
+def _existing_fingerprints(year_months: set[str]) -> set[str]:
+    """Return the fingerprints of the saved transactions in the given months."""
+    fingerprints: set[str] = set()
+    for year_month in sorted(year_months):
+        if not YEAR_MONTH_PATTERN.match(year_month):
+            continue
+        for txn in _TRANSACTIONS_TABLE.list_for_month(year_month):
+            if isinstance(txn.get("fingerprint"), str):
+                fingerprints.add(txn["fingerprint"])
+    return fingerprints
 
 
 def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -1621,6 +1648,17 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     csv_data = body.get("csvData", "")
     if not csv_data:
         return _response(400, "csvData is required")
+
+    # Each upload belongs to one account, and the account needs a budget role. The role and the
+    # direction of the money set the suggested disposition of each row.
+    account_id = body.get("accountId")
+    if not isinstance(account_id, str) or not account_id:
+        return _response(400, "accountId is required")
+    account = _ACCOUNT_TABLE.get(account_id)
+    if account is None:
+        return _response(400, f"accountId '{account_id}' does not exist")
+    if budget_role_of(account) is None:
+        return _response(400, "the account has no budget role; set one on the Accounts page")
 
     # Parse CSV
     reader = csv.reader(io.StringIO(csv_data))
@@ -1700,16 +1738,31 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
             txn["categoryId"] = ""
             txn["categoryName"] = ""
 
+    # Mark each row that the table holds already, such as from an earlier CSV with dates that
+    # overlap. The review screen leaves those rows unselected.
+    fingerprints = assign_fingerprints(parsed_transactions, account_id)
+    existing_fingerprints = _existing_fingerprints({str(t["transactionDate"])[:7] for t in parsed_transactions})
+    for txn, row_fingerprint in zip(parsed_transactions, fingerprints, strict=True):
+        txn["accountId"] = account_id
+        txn["fingerprint"] = row_fingerprint
+        txn["duplicate"] = row_fingerprint in existing_fingerprints
+        txn.setdefault("disposition", DISPOSITION_BUDGET)
+        txn.setdefault("suggestedBy", "LLM")
+        txn.setdefault("pairWith", None)
+
     # Per-row pre-validation surfaces missing_category / locked_month issues so the
     # review UI can render specific annotations without round-tripping through
-    # /commit just to learn what's wrong.
+    # /commit just to learn what's wrong. `review` reasons do not block the commit.
     valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.list_all()}
     validations = _validate_commit_rows(parsed_transactions, valid_category_ids, override_active=False, now=now)
+    for validation, txn in zip(validations, parsed_transactions, strict=True):
+        validation["review"] = txn.pop("review", [])
 
     return _json_response(
         200,
         json.dumps(
             {
+                "accountId": account_id,
                 "columnMapping": column_mapping,
                 "transactions": parsed_transactions,
                 "validations": validations,

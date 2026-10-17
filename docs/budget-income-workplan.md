@@ -294,17 +294,20 @@ Checks:
 **Before you start:** design sections **Step 4: import fingerprints**, **Upload response**, and
 **Commit**.
 
-- [ ] `_post_transactions_upload()`: require `accountId`, with a budget role. Return `accountId`.
-- [ ] Fingerprints: the function, the `n` count, and the `duplicate` flag from the saved rows.
-- [ ] For now, the suggested disposition is BUDGET for each row, and `suggestedBy` is `LLM`.
+- [x] `_post_transactions_upload()`: require `accountId`, with a budget role. Return `accountId`.
+- [x] Fingerprints: the function, the `n` count, and the `duplicate` flag from the saved rows.
+- [x] For now, the suggested disposition is BUDGET for each row, and `suggestedBy` is `LLM`.
       CP9 replaces this.
-- [ ] `_post_transactions_commit()`: store the new fields. Drop the rows with a fingerprint that
-      exists, and return them as `skippedDuplicates`.
-- [ ] `UploadPage.tsx`: the account picker (required). The disposition picker, the category
+- [x] `_post_transactions_commit()`: store the new fields. Drop the rows with a fingerprint that
+      exists, and return them as `skippedDuplicates` (indices into the committed batch).
+- [x] The review screen already has the CP9 parts that it can show: the `review` reasons, the
+      "Look at these first" list, and the source of each suggestion (as a tooltip on the type).
+      CP9 fills them in on the server.
+- [x] `UploadPage.tsx`: the account picker (required). The disposition picker, the category
       picker, and the note on each row. Duplicate rows unselected, with a chip. Skip and
       Off-budget rows in a separate list.
-- [ ] `types.ts` and `parsers.ts`: `ParsedTransaction`, `RowValidation`, and the commit result.
-- [ ] Tests: the fingerprint (same file, two equal rows; a second upload of the same file), and
+- [x] `types.ts` and `parsers.ts`: `ParsedTransaction`, `RowValidation`, and the commit result.
+- [x] Tests: the fingerprint (same file, two equal rows; a second upload of the same file), and
       the commit that drops duplicates.
 
 Checks:
@@ -383,3 +386,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP4 code written. The user asked for one big check after many CPs.
 - 2026-10-17: CP5 code written.
 - 2026-10-17: CP6 code written. The migration script is not run yet.
+- 2026-10-17: CP7 code written.

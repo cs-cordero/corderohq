@@ -997,6 +997,18 @@ textarea:focus {
     margin-left: 0.5rem;
 }
 
+/* Upload review: a row that the table holds already, and a row to look at first. */
+.badge-duplicate {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.badge-review {
+    background: #fef3c7;
+    color: #92400e;
+    margin-right: 0.25rem;
+}
+
 .amount-refund {
     color: #1e40af;
     font-weight: 600;

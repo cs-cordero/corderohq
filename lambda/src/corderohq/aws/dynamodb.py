@@ -643,8 +643,8 @@ class TransactionsTable:
         """Create multiple transactions in a batch. Returns created items.
 
         Each dict must have yearMonth, transactionDate, description, and amount. The keys
-        disposition, categoryId, accountId, and note are copied when they are present. The caller
-        checks the disposition rules first.
+        disposition, categoryId, accountId, note, and fingerprint are copied when they are
+        present. The caller checks the disposition rules first.
         """
         now = datetime.now(tz=UTC).isoformat()
         items: list[dict[str, Any]] = []
@@ -660,7 +660,7 @@ class TransactionsTable:
                     "amount": txn["amount"],
                     "createdAt": now,
                 }
-                for name in DISPOSITION_ATTRIBUTES:
+                for name in (*DISPOSITION_ATTRIBUTES, "fingerprint"):
                     if txn.get(name) is not None:
                         item[name] = txn[name]
                 batch.put_item(Item=item)

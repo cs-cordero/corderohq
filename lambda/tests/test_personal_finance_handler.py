@@ -2317,3 +2317,68 @@ class TestTransactionDispositions:
             None,
         )
         assert result["statusCode"] == 200
+
+
+class TestUploadAndCommitWithAccount:
+    """The upload needs an account with a budget role. Fingerprints mark rows that exist already."""
+
+    _CSV = "Date,Description,Amount\n2026-06-10,Coffee,5.00\n2026-06-10,Coffee,5.00\n"
+
+    def _upload(self, account: dict | None, existing: list[dict]) -> dict:
+        with (
+            patch("corderohq.personal_finance_handler._ACCOUNT_TABLE") as mock_at,
+            patch("corderohq.personal_finance_handler._CATEGORY_TABLE") as mock_ct,
+            patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE") as mock_tt,
+            patch("corderohq.personal_finance_handler.map_columns") as mock_map,
+            patch("corderohq.personal_finance_handler.categorize_transactions") as mock_categorize,
+        ):
+            mock_at.get.return_value = account
+            mock_ct.list_active.return_value = [{"categoryId": "cat1", "name": "Food", "active": True}]
+            mock_ct.list_all.return_value = [{"categoryId": "cat1", "name": "Food", "active": True}]
+            mock_tt.list_for_month.return_value = existing
+            mock_map.return_value = {"date": "Date", "description": "Description", "amount": "Amount"}
+            mock_categorize.return_value = [
+                {"index": 0, "categoryId": "cat1", "categoryName": "Food"},
+                {"index": 1, "categoryId": "cat1", "categoryName": "Food"},
+            ]
+            body = {"csvData": self._CSV, "accountId": "acct1"}
+            return handler(_make_event("POST", "/api/transactions/upload", body=body), None)
+
+    def test_upload_needs_an_account_id(self) -> None:
+        result = handler(_make_event("POST", "/api/transactions/upload", body={"csvData": self._CSV}), None)
+        assert result["statusCode"] == 400
+
+    def test_upload_needs_a_budget_role(self) -> None:
+        result = self._upload({"accountId": "acct1", "accountType": "401k"}, [])
+        assert result["statusCode"] == 400
+
+    def test_upload_returns_fingerprints_and_marks_duplicates(self) -> None:
+        first = json.loads(self._upload({"accountId": "acct1", "accountType": "checking"}, [])["body"])
+        rows = first["transactions"]
+        assert first["accountId"] == "acct1"
+        assert [r["duplicate"] for r in rows] == [False, False]
+        assert rows[0]["fingerprint"] != rows[1]["fingerprint"]
+        assert {r["disposition"] for r in rows} == {"BUDGET"}
+        assert first["validations"][0]["review"] == []
+
+        saved = [{"fingerprint": rows[0]["fingerprint"]}]
+        second = json.loads(self._upload({"accountId": "acct1", "accountType": "checking"}, saved)["body"])
+        assert [r["duplicate"] for r in second["transactions"]] == [True, False]
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
+    def test_commit_drops_rows_that_exist_already(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
+        mock_ct.list_all.return_value = [{"categoryId": "cat1", "name": "Food", "active": True}]
+        mock_tt.list_for_month.return_value = [{"fingerprint": "f-old"}]
+        mock_tt.batch_create.return_value = [{"yearMonth": _EDITABLE_MONTH}]
+        rows = [
+            {"transactionDate": f"{_EDITABLE_MONTH}-10", "description": "a", "amount": 1, "categoryId": "cat1"},
+            {"transactionDate": f"{_EDITABLE_MONTH}-11", "description": "b", "amount": 2, "categoryId": "cat1"},
+        ]
+        rows[0]["fingerprint"] = "f-old"
+        rows[1]["fingerprint"] = "f-new"
+        result = handler(_make_event("POST", "/api/transactions/commit", body={"rows": rows}), None)
+        assert result["statusCode"] == 200
+        assert json.loads(result["body"])["skippedDuplicates"] == [0]
+        written = mock_tt.batch_create.call_args.args[0]
+        assert [w["fingerprint"] for w in written] == ["f-new"]
