@@ -10,8 +10,18 @@ uploads a CSV export from a bank or a credit card, and the app fills in the tran
 can then compare the actual amounts against the budget. The app records each budget change in an
 audit log, and each change needs an explanation.
 
-For a CSV import, an LLM finds the date column, the description column, and the amount column. It
-then gives a category to each transaction, from the categories the user has active.
+The budget also has an **income plan**. Each income source (one job of one person) has a paycheck
+with gross pay and deductions, and the app calculates the net pay. The top line of the budget is
+**left to assign**: the planned net income minus the budget targets. The goal is `$0`, so every
+dollar of net pay has a job. See **Income Plan and Left to Assign**.
+
+Each transaction has a **disposition**: Budget (a normal expense), Off-budget (such as work travel
+that an employer pays back), or Skip (such as a paycheck or a transfer). Only Budget rows are
+actuals. See **Transaction Dispositions**.
+
+For a CSV import, the user chooses the account of the file. An LLM finds the columns from the
+header names, and gives a kind and a category to each unique description. The app then suggests a
+disposition from the direction of the money. See **LLM-Driven CSV Import**.
 
 Each new feature goes in this same app, in a folder of its own.
 
@@ -34,8 +44,11 @@ web/personal-finance/    React + TypeScript frontend (Vite)
 lambda/src/corderohq/
     personal_finance_handler.py  Lambda entrypoint + HTTP routing
     scheduled_densify.py   Lambda that the monthly schedule calls (see Densification)
-    budget/csv_import.py   LLM-driven CSV column mapping + categorization
-    budget/densify.py      Densify step and future-month walk-back
+    budget/csv_import.py   LLM-driven CSV column mapping + categorization, local checks, fingerprints
+    budget/directions.py   The direction table: a suggested disposition for each CSV row
+    budget/dispositions.py The Budget / Off-budget / Skip rules of a transaction
+    budget/income.py       Paycheck rules, net pay, and the IncomePlan row IDs
+    budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
     budget/editability.py  The editability state function
     budget/auth.py         Admin group check
     networth/              Net worth models and snapshot logic
@@ -128,11 +141,34 @@ it.
 |                        |                    |            | transactionDate,            |
 |                        |                    |            | description, amount         |
 |                        |                    |            | (signed millionths;         |
-|                        |                    |            | positive = expense,         |
-|                        |                    |            | negative = income or        |
-|                        |                    |            | return), categoryId. Sort   |
-|                        |                    |            | key sorts chronologically   |
+|                        |                    |            | positive = money out,       |
+|                        |                    |            | negative = money in),       |
+|                        |                    |            | disposition (BUDGET /       |
+|                        |                    |            | OFF_BUDGET / SKIP; absent   |
+|                        |                    |            | means BUDGET), categoryId   |
+|                        |                    |            | (required for BUDGET,       |
+|                        |                    |            | absent for SKIP), accountId |
+|                        |                    |            | (optional), note (optional, |
+|                        |                    |            | 200 chars), fingerprint     |
+|                        |                    |            | (CSV rows only). Sort key   |
+|                        |                    |            | sorts chronologically       |
 |                        |                    |            | within a month.             |
++------------------------+--------------------+------------+-----------------------------+
+| IncomeSource-{stage}   | incomeSourceId     | —          | ULID. Fields: personId,     |
+|                        |                    |            | label, frequency (display   |
+|                        |                    |            | only), active, sortOrder,   |
+|                        |                    |            | timestamps.                 |
++------------------------+--------------------+------------+-----------------------------+
+| IncomePlan-{stage}     | yearMonth          | lineId     | "SRC#{incomeSourceId}": a   |
+|                        |                    |            | paycheck row (lineType      |
+|                        |                    |            | PAYCHECK; paychecksPerMonth,|
+|                        |                    |            | gross, deductions[{label,   |
+|                        |                    |            | kind, amount}]). Dense/     |
+|                        |                    |            | sparse like Budget rows.    |
+|                        |                    |            | "ONE#{ULID}": a one-time    |
+|                        |                    |            | line (lineType ONE_TIME;    |
+|                        |                    |            | label, amount). Never       |
+|                        |                    |            | carries forward.            |
 +------------------------+--------------------+------------+-----------------------------+
 | BudgetAuditLog-{stage} | entityType         | sortId     | Single-partition design so  |
 |                        | (always "AUDIT")   |            | recent-N queries are one    |
@@ -146,7 +182,10 @@ it.
 |                        |                    |            | changedAt (ISO-8601 UTC     |
 |                        |                    |            | timestamp), effectiveYear-  |
 |                        |                    |            | Month (nullable),           |
-|                        |                    |            | categoryId, action (CREATE/ |
+|                        |                    |            | categoryId (a budget entry) |
+|                        |                    |            | or incomeLineId and         |
+|                        |                    |            | incomeSourceId (an income   |
+|                        |                    |            | entry), action (CREATE/     |
 |                        |                    |            | UPDATE/PIN/UNPIN/CATEGORY_  |
 |                        |                    |            | HARD_DELETE), explanation,  |
 |                        |                    |            | user ({sub, email,          |
@@ -178,6 +217,15 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb.py`.
 |                          |                       |            | assetClasses, owners,      |
 |                          |                       |            | active, sortOrder, and     |
 |                          |                       |            | more. See networth/models. |
+|                          |                       |            | For the CSV import:        |
+|                          |                       |            | budgetRole (SPENDING /     |
+|                          |                       |            | HOLDING; absent means the  |
+|                          |                       |            | default for the type) and  |
+|                          |                       |            | lastFour (list of 4-digit  |
+|                          |                       |            | strings). Every liability  |
+|                          |                       |            | (credit_card, mortgage,    |
+|                          |                       |            | other_liability) has the   |
+|                          |                       |            | fixed asset class `debt`.  |
 | NetWorthSnapshot-{stage} | yearMonth             | accountId  | One row for each account   |
 |                          |                       |            | in each month.             |
 +--------------------------+-----------------------+------------+----------------------------+
@@ -334,31 +382,42 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions                        | Create one transaction.            |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions/upload                 | Body {csvData}. Returns parsed +   |
-|        |                                          | auto-categorized transactions plus |
-|        |                                          | per-row validation annotations     |
-|        |                                          | (editability, missing category)    |
-|        |                                          | for review. Nothing is committed.  |
+| POST   | /api/transactions/upload                 | Body {csvData, accountId,          |
+|        |                                          | flipSigns?}. Returns the parsed    |
+|        |                                          | rows with a suggested disposition  |
+|        |                                          | and category, fingerprints,        |
+|        |                                          | duplicate flags, and per-row       |
+|        |                                          | issues and review reasons. Nothing |
+|        |                                          | is committed. See **LLM-Driven CSV |
+|        |                                          | Import**.                          |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions/commit                 | Body {rows, override?}. Atomic     |
-|        |                                          | batch insert; rejects entire batch |
-|        |                                          | if any row falls in a locked       |
-|        |                                          | month without an effective         |
-|        |                                          | override.                          |
+| POST   | /api/transactions/commit                 | Body {rows, override?}. Checks     |
+|        |                                          | every row first; rejects the batch |
+|        |                                          | if any row has an issue. Drops     |
+|        |                                          | each row whose fingerprint exists  |
+|        |                                          | (skippedDuplicates).               |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions/update                 | Update mutable fields              |
-|        |                                          | (description, amount, categoryId). |
+| POST   | /api/transactions/update                 | Update mutable fields (description,|
+|        |                                          | amount, disposition, categoryId,   |
+|        |                                          | accountId, note).                  |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/delete                 | Body {items: [{yearMonth, sortId}, |
 |        |                                          | ...]}. Batch delete.               |
 +--------+------------------------------------------+------------------------------------+
 | GET    | /api/summary?month=YYYY-MM               | Per-category budgeted vs. actual + |
-|        |                                          | totals.                            |
+|        |                                          | totals, offBudget, totalsWith-     |
+|        |                                          | OffBudget, and income {planned-    |
+|        |                                          | NetIncome, leftToAssign}.          |
 +--------+------------------------------------------+------------------------------------+
 | GET    | /api/audit-log?limit=N                   | Recent audit entries. Default N=10,|
 |        |                                          | server cap N=200.                  |
 +--------+------------------------------------------+------------------------------------+
 ```
+
+The income plan has its own routes, which copy the budget routes: `/api/income-sources` (list,
+create, `/reorder`, `/{id}` rename, `/{id}/deactivate`, `/{id}/reactivate`) and
+`/api/income/{YYYY-MM}` (GET, `/replace`, `/pin`, `/one-time`, `/one-time/update`,
+`/one-time/delete`). See **Income Plan and Left to Assign**.
 
 The net worth record has its own routes: `/api/profile`, `/api/profile/people/...`,
 `/api/accounts/...`, and `/api/net-worth/...`. See `handler()` in `personal_finance_handler.py`.
@@ -369,9 +428,11 @@ remove the body from the other two methods.
 Every response carries strict security headers: `HSTS`, `X-Content-Type-Options`,
 `X-Frame-Options`, and `Cache-Control: no-store`.
 
-Six endpoints have an **editability gate**: `POST /api/budget/{YYYY-MM}/replace`,
+These endpoints have an **editability gate**: `POST /api/budget/{YYYY-MM}/replace`,
 `POST /api/budget/{YYYY-MM}/pin`, `POST /api/transactions`, `POST /api/transactions/update`,
-`POST /api/transactions/delete`, and `POST /api/transactions/commit`. Each one accepts an optional
+`POST /api/transactions/delete`, `POST /api/transactions/commit`, and the income plan writes
+(`/api/income/{YYYY-MM}/replace`, `/pin`, and the three `/one-time` routes). The income `/pin`
+copies the budget `/pin`: it takes no override. Each one accepts an optional
 `override: true` flag in the body. The handler obeys that flag only if the JWT shows that the user
 is in the admin group — see **Editability and the Admin Override**. If it does not, the handler
 returns `403`. The flag does nothing on a `GET` endpoint, because any signed-in user may read
@@ -500,6 +561,23 @@ The shape of the `changes` field on a `BudgetAuditLog-{stage}` row depends on th
 - `CATEGORY_HARD_DELETE` — `{budgetRowsDeleted: number, transactionsDeleted: number, name: string}`.
   This holds counts and a snapshot, and not a before-and-after pair, because the category and its
   data are gone.
+
+### Audit entries of the income plan
+
+The income plan writes these actions to the same log. An income entry has no `categoryId`. It has
+`incomeLineId`, and a paycheck entry also has `incomeSourceId`.
+
+| Action | Made by | `changes` |
+|---|---|---|
+| `INCOME_CREATE` | the create of an income source; `/replace` writes a new paycheck row | `{paycheck: {before: null, after: P}}` (the create also has `label`) |
+| `INCOME_UPDATE` | `/replace` changes a paycheck row | `{paycheck: {before: P, after: P}}` |
+| `INCOME_PIN` | `/pin` writes a future paycheck | `{paycheck: {before: P \| null, after: P}}` |
+| `INCOME_UNPIN` | `/pin` with `paycheck: null`; a deactivation that drops a pin | `{paycheck: {before: P, after: null}}` |
+| `ONE_TIME_CREATE` / `_UPDATE` / `_DELETE` | the `/one-time` routes | `{line: {before: L \| null, after: L \| null}}` |
+
+`P` is `{paychecksPerMonth, gross, deductions}`. `L` is `{label, amount}`. The entry holds the label
+of a one-time line, because the line can be deleted later. The rename, the reorder, and the
+reactivation of an income source make no entry, the same as for a category.
 
 ### Audit entry `override` field
 
@@ -787,6 +865,75 @@ both of these:
 - **Two tabs that change the same thing.** The last write wins. There is no ETag and no version
   check. This is acceptable for one household.
 
+### The generic densify step
+
+`budget/densify.py` does not import any table class. It works on a small protocol,
+`DenseSparseStore`, where each row is `(yearMonth, key, value)`, and each caller passes the
+active keys:
+
+- `BudgetCarryStore(budget_table)`: the key is a `categoryId`, and the value is the amount.
+  The cold-start value is `0`.
+- `IncomePlanCarryStore(income_plan_table)`: the key is an `incomeSourceId`, and the value is the
+  paycheck. It reads only the `SRC#` rows, so a one-time line never carries forward. The
+  cold-start value is `None`, and the store writes no row for `None`: an income source always gets
+  its first paycheck row when it is made.
+
+`_ensure_hydrated()` and the scheduled Lambda densify both tables. `compute_summary()` and
+`compute_income()` use the shared walk-back functions (`walk_back_for()`,
+`value_at_or_before()`).
+
+## Income Plan and Left to Assign
+
+An **income source** is one job of one person (`IncomeSource-{stage}`). A person can have any
+number of them. Each dense month holds one **paycheck row** for each active income source, in
+`IncomePlan-{stage}`, with the same month rules as a Budget row: dense past and current months,
+sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
+entry with an explanation for each change.
+
+A paycheck is `{paychecksPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount
+for one paycheck. The kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`;
+they are for display only. `budget/income.py` checks a paycheck (`validate_paycheck()`), and
+calculates `net = gross − sum(deductions)` and `monthlyNet = net × paychecksPerMonth`. The app never
+stores the net pay. The plan uses the same `paychecksPerMonth` (usually 2) in every month, so a
+third paycheck is not in the plan.
+
+A **one-time income line** (`ONE#{ULID}`) is a net amount in one month only, such as a bonus, an
+RSU payout, a DCFSA payout, or a third paycheck. It never carries forward.
+
+`compute_income()` returns one month: the paychecks, the one-time lines, and
+`plannedNetIncome = sum(monthlyNet) + sum(one-time amounts)`. Membership copies the summary:
+
+- **A future month** — each active income source, with a pin or a value from the walk back.
+- **The current month and the grace month** — each active income source with a paycheck row.
+- **A locked month** — each income source with a paycheck row, active or not.
+
+**Left to assign** = `plannedNetIncome − totals.budgeted`. `GET /api/summary` returns it in
+`income`. The budget page fetches `GET /api/income/{YYYY-MM}` and calculates it live from the form,
+for the active categories. It never blocks a save, and no transaction changes it.
+
+`/replace` needs every income source with a row in that month, and it does not take a `null`
+paycheck: to stop a source, deactivate it. `/pin` takes `null` to remove a pin, and returns the
+month and the same two warnings as the budget `/pin`. A deactivation drops the future pins after a
+confirmation, the same as for a category. There is no hard delete for an income source.
+
+## Transaction Dispositions
+
+Each transaction has a disposition (`budget/dispositions.py`):
+
+| Disposition | What | In the summary | Category |
+|---|---|---|---|
+| `BUDGET` (absent means this) | a normal expense or refund | in its category | required |
+| `OFF_BUDGET` | work travel that an employer pays back; a payment with money from a fund | in the Off-budget total only | optional |
+| `SKIP` | paychecks, bonuses, interest, transfers, card payments | nowhere | none |
+
+- `compute_summary()` counts only BUDGET rows, in each category and in the membership rules. The
+  OFF_BUDGET rows add up to `offBudget.actual`, which is not in `totals`. `totalsWithOffBudget`
+  adds the two. The `/replace` body rule reads BUDGET rows only.
+- `resolve_disposition_fields()` checks the rules for a create, an update, and a commit. A change
+  to SKIP removes the category. An empty note removes the note.
+- The ledger hides SKIP rows by default. The summary page shows the Off-budget row and the
+  "Total + off-budget" row below the Total row.
+
 ## Hard delete semantics
 
 `DELETE /api/categories/{id}` means something different from a deactivation. Of all the operations
@@ -981,59 +1128,76 @@ the claim for that stage.
 
 ## LLM-Driven CSV Import (`budget/csv_import.py`)
 
-Each upload makes two calls to the Anthropic API. Both read the API key from SSM, at
-`/budget/{stage}/anthropic-api-key`:
+Each upload belongs to one **account**, which the user chooses. The account needs a budget role:
+SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, a 529). The role comes
+from `Account.budgetRole`, or else from the default for the account type (`budget_role_of()` in
+`networth/models.py`).
 
-1. **Find the columns** — from the CSV headers and about 5 sample rows, find which column holds the
-   date, the description, and the amount. Also find whether the amounts need their sign changed,
-   because some statements use a negative number for a purchase.
-2. **Give a category** — from every transaction description, and from the categories the user has
-   active, give the best category to each row.
+The upload sends as little data as possible to the Anthropic API. Each call reads the API key from
+SSM:
 
-The upload endpoint returns the rows with their columns and categories. The user then reads them,
-changes what is wrong, and commits.
+1. **Find the columns.** `detect_column_types()` finds a type for each column locally: date,
+   number, or text. `map_columns()` sends the header row and the types, and no cell values. The LLM
+   returns `date`, `description`, `amount`, an optional `bankCategory`, and an optional
+   `amount_invert`.
+2. **Set the sign.** The app stores money out as positive. After the LLM's `amount_invert`, a
+   local check flips every sign when most rows of a spending account came in negative
+   (`spending_account_needs_flip()`). The "flip all signs" button on the review screen sends the
+   file again with `flipSigns: true`. The response reports all three in `signCheck`.
+3. **Give a kind and a category.** `categorize_transactions()` sends each unique description one
+   time, with the active category names. It returns a `kind` (expense, refund, income,
+   card_payment, own_transfer) and a category for each one, and maps them back to every row.
+4. **Suggest a disposition.** `budget/directions.py` finds the other side of each row: a saved
+   transaction in another account with the opposite amount within 4 days (PAIR), a 4-digit group
+   in the description that is in the `lastFour` of one other account (LAST_FOUR), the bank's
+   category (BANK, from a generic word list), or the kind (LLM). The direction table then gives
+   the disposition. A transfer between two own accounts counts one time at most, on the side where
+   the money leaves a spending account. When the app is not sure, it suggests SKIP and marks the
+   row. See `docs/budget-specs.md` Spec 52 for the table.
+5. **Mark duplicates.** Each row gets a fingerprint: a SHA-256 of the account, the date, the
+   amount, the normalized description, and its count among equal rows in the file. A row whose
+   fingerprint is in the table already is a duplicate.
+
+The upload loads the saved transactions of each upload month, and of the month before and after
+it, for the duplicates and the pair match.
 
 ### Upload response shape
 
-`POST /api/transactions/upload` takes `{csvData}`. It returns three keys. The review page can then
-show every problem before the user clicks Commit:
-
 ```
 {
-  "columnMapping": { "date": "...", "description": "...", "amount": "...", "amount_invert": bool },
+  "accountId": "01J...",
+  "signCheck": { "llmInverted": bool, "locallyFlipped": bool, "userFlipped": bool },
+  "columnMapping": { "date", "description", "amount", "bankCategory"?, "amount_invert"? },
   "transactions": [
     {
-      "transactionDate": "2024-03-15",
-      "description": "...",
-      "amount": 12340000,
-      "categoryId": "01HQ...",        // "" if the LLM could not assign one
-      "categoryName": "..."
-    },
-    ...
+      "transactionDate", "description", "amount", "categoryId", "categoryName", "accountId",
+      "disposition": "BUDGET" | "OFF_BUDGET" | "SKIP",
+      "suggestedBy": "PAIR" | "LAST_FOUR" | "BANK" | "LLM" | "DEFAULT",
+      "pairWith": { "yearMonth", "sortId" } | null,
+      "fingerprint": "…",
+      "duplicate": bool
+    }
   ],
   "validations": [
-    { "index": 0, "issues": ["missing_category", "locked_month"] },
-    ...
+    { "index": 0, "issues": ["missing_category", "locked_month"],
+      "review": ["no_pair_found", "llm_guess", "many_pairs", "unknown_direction"] }
   ]
 }
 ```
 
-`validations[i]` belongs to `transactions[i]`. The `issues` array holds two values, and no others:
+An **issue** blocks the commit. `missing_category` applies to a BUDGET row with no known category,
+and to an OFF_BUDGET row with an unknown category. `locked_month` applies to a row in a LOCKED
+month. A **review reason** does not block the commit. It puts the row in the "Look at these first"
+list of the review screen.
 
-- `missing_category` — the LLM gave no `categoryId`, or it gave one that matches no category. The
-  user must choose one on the row.
-- `locked_month` — the year-month of `transactionDate` is `LOCKED`, as the editability function
-  says. The user must change the date, or turn on the admin override.
+A CSV row with too few columns, or an amount that is not a number, is **dropped with no error**.
+If no row is left, the upload returns `400`. If the LLM cannot find the three columns, the upload
+also returns `400`. The upload stores the date text of the bank as it is, and the year-month is
+its first 7 characters.
 
-`_validate_commit_rows()` makes these checks for both the upload and the commit.
-
-A CSV row with too few columns, an empty amount, or an amount that is not a number is **dropped
-with no error**. If no row is left, the upload returns `400`. If the LLM cannot find the three
-columns, the upload also returns `400`.
-
-The client blocks any row whose `issues` array is not empty. The user must correct it on the row,
-by a choice of category or a change of date, or must turn on the admin override. The UI does not
-permit Commit until every row is valid, or until the override is on.
+The review screen shows three lists: the rows to look at first, the BUDGET rows, and the
+OFF_BUDGET and SKIP rows. A duplicate row starts unselected. The user can change the disposition,
+the category, and the note of each row before the commit.
 
 ### CSV commit semantics
 
@@ -1058,10 +1222,11 @@ What the handler does:
    Transactions table with `BatchWriteItem`. If the retries for a part-written batch run out, the
    request returns `500`.
 
-**A retry is not idempotent.** Each request makes new ULIDs. So a retry after a `500` can write a
-second copy of a row that the first attempt wrote before it failed. This is an accepted trade-off,
-and it keeps the server simple. This failure is rare. A user who meets it must read the ledger and
-remove the copies by hand, and may need the admin override for a locked month.
+**A retry is safe for CSV rows.** Just before it writes, the commit loads the months of the batch
+and drops each row whose fingerprint exists, and it lists them in `skippedDuplicates`. A retry
+after a `500` therefore writes only the rows that are not there yet. Two commits at the same time
+can still both write; that is acceptable for one household. A row with no fingerprint (a manual
+row, or a row from before fingerprints) is never dropped.
 
 The older path, `POST /api/transactions`, stays. The UI uses it to add one transaction. It is not
 the path for a CSV commit.
@@ -1084,11 +1249,14 @@ the path for a CSV commit.
 | PROFILE_TABLE_NAME          | DynamoDB Profile table            |
 | ACCOUNT_TABLE_NAME          | DynamoDB Account table            |
 | NETWORTH_SNAPSHOT_TABLE_NAME| DynamoDB NetWorthSnapshot table   |
+| INCOME_SOURCE_TABLE_NAME    | DynamoDB IncomeSource table       |
+| INCOME_PLAN_TABLE_NAME      | DynamoDB IncomePlan table         |
 | SSM_API_KEY_PARAM           | SSM path to the Anthropic API key |
 +-----------------------------+-----------------------------------+
 ```
 
-The scheduled densify Lambda gets only `CATEGORY_TABLE_NAME`, `BUDGET_TABLE_NAME`, and `STAGE`.
+The scheduled densify Lambda gets `CATEGORY_TABLE_NAME`, `BUDGET_TABLE_NAME`,
+`INCOME_SOURCE_TABLE_NAME`, `INCOME_PLAN_TABLE_NAME`, and `STAGE`.
 
 Every environment variable goes through `get_env_var()`. That function raises an error if the value
 is absent or blank.
@@ -1097,8 +1265,10 @@ is absent or blank.
 
 React and TypeScript, built by Vite.
 
-The pages are `SummaryPage`, `BudgetPage`, `TransactionsPage`, `UploadPage`, `CategoriesPage`,
-`AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. The net worth record adds `AccountsPage` and
+The pages are `SummaryPage`, `BudgetPage`, `IncomePage`, `TransactionsPage`, `UploadPage`,
+`CategoriesPage`, `AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. `IncomePage` shows the
+paycheck breakdown of each income source for a month, the one-time lines, and the income sources.
+The summary page and the budget page show the shared `LeftToAssign` line at the top. The net worth record adds `AccountsPage` and
 `NetWorthEntryPage`. `App.tsx` holds the routes. `components/Layout.tsx` holds the navigation, with
 one list of links for the budget (`BUDGET_LINKS`) and one for the net worth record.
 
@@ -1140,13 +1310,28 @@ The Python unit tests are in `lambda/tests/`. These files hold the budget tests:
 `test_personal_finance_handler.py`, `test_budget_auth.py`, `test_budget_categories.py`,
 `test_budget_category_groups.py`, `test_budget_budget.py`, `test_budget_densify.py`,
 `test_budget_editability.py`, `test_budget_transactions.py`, `test_budget_summary.py`,
-`test_budget_audit.py`, and `test_budget_csv_import.py`. The net worth tests are in
+`test_budget_audit.py`, `test_budget_csv_import.py`, `test_budget_dispositions.py`,
+`test_budget_income.py`, and `test_budget_directions.py`. The net worth tests are in
 `test_networth_*.py`. Every DynamoDB call and every Anthropic call is a mock (`MagicMock`). Run
 `uv run pytest` from `lambda/`.
 
 The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 
 ## Key Design Decisions
+
+- **A plan-based budget** — Left to assign = planned net income − targets. The plan counts the
+  same number of paychecks every month, so extra money (a third paycheck, a bonus) is not in the
+  plan unless the user adds a one-time line. The app does not track actual income.
+- **The income plan obeys the budget's month rules** — A locked month shows the same left to
+  assign amount for ever. One generic densify step serves both tables.
+- **One disposition for "the budget must not count this"** — Off-budget covers work travel and
+  payments from a fund. Skip covers money that is not an expense. Only Budget rows are actuals.
+- **The boundary rule for the CSV import** — Money counts only when it crosses the boundary
+  between the outside world, the spending accounts, and the holding accounts. When unsure, the
+  import suggests Skip and marks the row, because a double count is harder to see than a missed
+  transfer.
+- **As little data to the LLM as possible** — Header names and column types for the mapping, and
+  unique descriptions for the categories. No amounts, dates, or account names.
 
 - **Two stacks** — The DynamoDB tables stay apart from the web stack. The data then survives a
   deploy of the app, and the prod removal policy can be `RETAIN` without a tie to the Lambda.

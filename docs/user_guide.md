@@ -200,7 +200,47 @@ npm run lint
 npm run format:check
 ```
 
+### The personal finance app: income, accounts, and uploads
+
+The budget's top line is **left to assign**: the planned net income minus the budget targets. The
+goal is `$0`. The summary page and the Allocations page show it.
+
+1. **Set up the income.** On the Income page, add one income source for each job of each person.
+   Type the gross pay and each deduction from a paystub. The app calculates the net pay. Set the
+   paychecks per month that the plan counts, usually 2 for pay every two weeks. The first paycheck
+   goes in the current month and carries forward.
+2. **Change a paycheck.** Change it in the month where the change starts. A change in the current
+   month carries forward. A change in a future month is a pin.
+3. **Add extra money.** For a bonus, an RSU payout, a third paycheck, or a DCFSA payout that you
+   want to budget, add a one-time income line in that month. Extra money with no line is not part
+   of the plan.
+4. **Set up the accounts for uploads.** On the Accounts page, each account that takes a CSV upload
+   needs a budget role. Checking and credit card accounts are "Spending" by default. Savings,
+   brokerage, and 529 accounts are "Holding" by default. Add the last four digits of each account,
+   so that the upload can find a transfer to it.
+5. **Upload a CSV.** On the Upload page, choose the account of the file first. The review screen
+   suggests a type for each row: Budget, Off-budget, or Skip. Look at the first list ("Look at
+   these first"), change what is wrong, and commit. A row that you uploaded before starts
+   unselected. If the signs of the amounts look wrong, click "Flip all signs".
+6. **Mark a transaction as Off-budget** for work travel that your employer pays back, or for a
+   payment with money from a savings fund. Add a note with the reason. The summary shows the
+   Off-budget total below the Total.
+
 ## Scripts
+
+### Move every liability to the debt asset class
+
+Run this one time on each stage, after the code with the `debt` class and the `credit_card` type is
+deployed to that stage. Without `--apply`, it only prints what it would change:
+
+```bash
+uv run python lambda/scripts/migrate_liabilities_to_debt.py --stage dev
+uv run python lambda/scripts/migrate_liabilities_to_debt.py --stage dev --apply --to-credit-card <accountId>
+```
+
+It moves each mortgage and each other liability, and its net worth history, from the `other` class
+to `debt`. `--to-credit-card` changes an `other_liability` account to a credit card. Repeat the
+flag for each card. Get the account IDs from the Accounts page or the DynamoDB console.
 
 ### Dry run
 

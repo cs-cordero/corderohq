@@ -371,11 +371,13 @@ Checks:
 
 ## CP10 — Documentation
 
-- [ ] Move the final design into `docs/personal-finance-architecture.md`: the data model, the
+- [x] Move the final design into `docs/personal-finance-architecture.md`: the data model, the
       routes, the month rules for income, the audit actions, the CSV import, the environment
       variables, and the frontend pages.
-- [ ] `docs/user_guide.md`: how to set up income sources, accounts, and dispositions.
-- [ ] Delete `docs/budget-income-design.md` and this workplan.
+- [x] `docs/user_guide.md`: how to set up income sources, accounts, and dispositions, and how to
+      run the migration script.
+- [ ] Delete `docs/budget-income-design.md` and this workplan. **Wait** until every open check in
+      CP1 to CP9 passes: these two files hold the list of open checks.
 
 ---
 
@@ -401,3 +403,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP8 code written. Found an older problem: the upload stores the date text of the
   bank as it is, so a format such as `03/15/2026` gives a wrong year-month. Not fixed.
 - 2026-10-17: CP9 code written.
+- 2026-10-17: CP10 docs written. The design doc and this workplan stay until the open checks pass.
