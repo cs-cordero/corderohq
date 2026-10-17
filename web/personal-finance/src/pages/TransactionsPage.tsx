@@ -372,11 +372,7 @@ export default function TransactionsPage() {
                     ))}
                 </select>
                 <label>
-                    <input
-                        type="checkbox"
-                        checked={showSkipped}
-                        onChange={(e) => setShowSkipped(e.target.checked)}
-                    />{" "}
+                    <input type="checkbox" checked={showSkipped} onChange={(e) => setShowSkipped(e.target.checked)} />{" "}
                     Show skipped rows
                 </label>
                 {(filterDescription || filterCategory) && (
