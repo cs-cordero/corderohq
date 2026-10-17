@@ -2338,8 +2338,8 @@ class TestUploadAndCommitWithAccount:
             mock_tt.list_for_month.return_value = existing
             mock_map.return_value = {"date": "Date", "description": "Description", "amount": "Amount"}
             mock_categorize.return_value = [
-                {"index": 0, "categoryId": "cat1", "categoryName": "Food"},
-                {"index": 1, "categoryId": "cat1", "categoryName": "Food"},
+                {"index": 0, "kind": "expense", "categoryId": "cat1", "categoryName": "Food"},
+                {"index": 1, "kind": "expense", "categoryId": "cat1", "categoryName": "Food"},
             ]
             body = {"csvData": self._CSV, "accountId": "acct1"}
             return handler(_make_event("POST", "/api/transactions/upload", body=body), None)

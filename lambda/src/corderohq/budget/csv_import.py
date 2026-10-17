@@ -3,7 +3,7 @@
 import hashlib
 import json
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import anthropic
@@ -181,14 +181,18 @@ _TYPE_SAMPLE_SIZE = 50
 _TYPE_THRESHOLD = 0.8
 
 
-def _looks_like_date(value: str) -> bool:
+def parse_date(value: str) -> date | None:
+    """Return the date in a cell, in one of the common bank formats, or None."""
     for date_format in _DATE_FORMATS:
         try:
-            datetime.strptime(value, date_format)
+            return datetime.strptime(value.strip(), date_format).date()
         except ValueError:
             continue
-        return True
-    return False
+    return None
+
+
+def _looks_like_date(value: str) -> bool:
+    return parse_date(value) is not None
 
 
 def parse_amount(value: str) -> float | None:

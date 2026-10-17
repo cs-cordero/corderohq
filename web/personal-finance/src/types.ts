@@ -174,12 +174,13 @@ export interface ParsedTransaction {
 export type RowValidationIssue = "missing_category" | "locked_month";
 
 // The reasons to look at a row. Unlike an issue, a reason does not block the commit.
-export type ReviewReason = "no_pair_found" | "llm_guess" | "many_pairs";
+export type ReviewReason = "no_pair_found" | "llm_guess" | "many_pairs" | "unknown_direction";
 
 export const REVIEW_REASON_LABELS: Record<ReviewReason, string> = {
     no_pair_found: "Transfer? No other side found",
     llm_guess: "Guess — please check",
     many_pairs: "More than one possible other side",
+    unknown_direction: "Could not tell where the money went",
 };
 
 export interface RowValidation {

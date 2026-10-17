@@ -582,8 +582,10 @@ point of view of the upload account. The open question is the other side: the ou
 one of my accounts. The steps below run in order. The first step that gives an answer wins.
 
 1. **Pair match** (Spec 55). For each row, look for a transaction with the opposite sign, the
-   same absolute amount, a date at most 4 days away, and a different `accountId`. Look in the same
-   upload and in the saved transactions of the year-months in range (any disposition). If exactly
+   same absolute amount, a date at most 4 days away, and a different `accountId`. Look in the
+   saved transactions of each upload month and of the month before and after it (any
+   disposition). The same upload cannot hold the other side, because all its rows belong to one
+   account. If exactly
    one candidate is found, the other side is that account, with its role. If more than one is
    found, mark the row, and do not choose.
 2. **Last four digits.** If the description contains a 4-digit group that is in the `lastFour` of
@@ -630,6 +632,10 @@ Inputs: the role of the upload account, the direction (out or in), and the other
 | HOLDING | out | any own account | SKIP | no |
 | HOLDING | in | anything | SKIP | no |
 | any | any | unknown (no step gave an answer) | SKIP | **yes** |
+
+Built in CP9 as `budget/directions.py`. Two details: an account with no budget role (such as a
+mortgage) counts as the outside world, and a row where no step finds the other side gets SKIP
+and the reason `unknown_direction`.
 
 The principle: when the import is not sure, it suggests SKIP and marks the row. A missed savings
 transfer shows as a `$0` actual in a savings category, and the user sees it. A double count is hard

@@ -383,7 +383,7 @@ function parseParsedTransaction(raw: unknown): ParsedTransaction {
 }
 
 const _ROW_VALIDATION_ISSUES = new Set<string>(["missing_category", "locked_month"]);
-const _REVIEW_REASONS = new Set<string>(["no_pair_found", "llm_guess", "many_pairs"]);
+const _REVIEW_REASONS = new Set<string>(["no_pair_found", "llm_guess", "many_pairs", "unknown_direction"]);
 
 function parseRowValidation(raw: unknown): RowValidation {
     const obj = requireObject(raw, "RowValidation");

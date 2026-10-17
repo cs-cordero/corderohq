@@ -347,13 +347,19 @@ Checks:
 
 **Before you start:** design sections **Step 5** and **Step 7**.
 
-- [ ] The pair match: the same upload, and the saved rows of the year-months in range.
-- [ ] The last-four match.
-- [ ] The direction table, and the `review` reasons.
-- [ ] `UploadPage.tsx`: the rows marked for review first, with the reason. The source of each
+- [x] The pair match: the saved rows of the year-months in range (each upload month, and the
+      month before and after it). **Not the same upload:** every row of one upload belongs to the
+      same account, so the other side of a transfer can never be in it. The design said so by
+      mistake.
+- [x] The logic is a pure module, `budget/directions.py`, with no table access.
+- [x] The last-four match.
+- [x] The direction table, and the `review` reasons. New reason: `unknown_direction`, for a row
+      where no step finds the other side. An account with no budget role (a mortgage, a loan) is
+      outside the budget, so a payment to it is an expense.
+- [x] `UploadPage.tsx`: the rows marked for review first, with the reason. The source of each
       suggestion.
-- [ ] Tests: each row of the direction table; the pair match with none, one, and many candidates;
-      the last-four match.
+- [x] Tests (`test_budget_directions.py`): each row of the direction table; the pair match with
+      none, one, and many candidates; the last-four match.
 
 Checks:
 
@@ -394,3 +400,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP7 code written.
 - 2026-10-17: CP8 code written. Found an older problem: the upload stores the date text of the
   bank as it is, so a format such as `03/15/2026` gives a wrong year-month. Not fixed.
+- 2026-10-17: CP9 code written.

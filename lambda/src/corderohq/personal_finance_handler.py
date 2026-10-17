@@ -35,9 +35,18 @@ from corderohq.budget.csv_import import (
     detect_column_types,
     map_columns,
     parse_amount,
+    parse_date,
     spending_account_needs_flip,
 )
-from corderohq.budget.densify import carry_map, densify, resolve_future_targets, walk_back_for
+from corderohq.budget.densify import (
+    carry_map,
+    densify,
+    next_year_month,
+    prev_year_month,
+    resolve_future_targets,
+    walk_back_for,
+)
+from corderohq.budget.directions import suggest_dispositions
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
     DISPOSITION_BUDGET,
@@ -1636,16 +1645,33 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
     )
 
 
+def _saved_transactions(year_months: set[str]) -> list[dict[str, Any]]:
+    """Return the saved transactions of the given months. A month that is not YYYY-MM is skipped."""
+    result: list[dict[str, Any]] = []
+    for year_month in sorted(year_months):
+        if YEAR_MONTH_PATTERN.match(year_month):
+            result.extend(_TRANSACTIONS_TABLE.list_for_month(year_month))
+    return result
+
+
 def _existing_fingerprints(year_months: set[str]) -> set[str]:
     """Return the fingerprints of the saved transactions in the given months."""
-    fingerprints: set[str] = set()
-    for year_month in sorted(year_months):
-        if not YEAR_MONTH_PATTERN.match(year_month):
-            continue
-        for txn in _TRANSACTIONS_TABLE.list_for_month(year_month):
-            if isinstance(txn.get("fingerprint"), str):
-                fingerprints.add(txn["fingerprint"])
-    return fingerprints
+    return {str(t["fingerprint"]) for t in _saved_transactions(year_months) if isinstance(t.get("fingerprint"), str)}
+
+
+def _months_around(rows: list[dict[str, Any]]) -> set[str]:
+    """Return the month of each row, and the month before and after it.
+
+    A date that the code can read gives its month. Otherwise the first 7 characters are used,
+    the same as the commit does.
+    """
+    months: set[str] = set()
+    for row in rows:
+        parsed = parse_date(str(row["transactionDate"]))
+        year_month = parsed.strftime("%Y-%m") if parsed is not None else str(row["transactionDate"])[:7]
+        if YEAR_MONTH_PATTERN.match(year_month):
+            months.update({prev_year_month(year_month), year_month, next_year_month(year_month)})
+    return months
 
 
 def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -1742,17 +1768,27 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
         txn["categoryName"] = assignment.get("categoryName") or ""
         txn["_kind"] = assignment.get("kind")
 
-    # Mark each row that the table holds already, such as from an earlier CSV with dates that
-    # overlap. The review screen leaves those rows unselected.
+    # Load the saved transactions of each month of the upload, and of the month before and after
+    # it. A transfer can cross the end of a month. The fingerprints mark each row that the table
+    # holds already, such as from an earlier CSV with dates that overlap; the review screen leaves
+    # those rows unselected. The pair match looks for the other side of a transfer.
+    saved = _saved_transactions(_months_around(parsed_transactions))
+    existing_fingerprints = {str(t["fingerprint"]) for t in saved if isinstance(t.get("fingerprint"), str)}
+
+    # Step 4: suggest a disposition for each row, from the direction of the money.
+    suggestions = suggest_dispositions(parsed_transactions, account, _ACCOUNT_TABLE.list_all(), saved)
+    category_names = {str(c["categoryId"]): str(c["name"]) for c in categories}
     fingerprints = assign_fingerprints(parsed_transactions, account_id)
-    existing_fingerprints = _existing_fingerprints({str(t["transactionDate"])[:7] for t in parsed_transactions})
-    for txn, row_fingerprint in zip(parsed_transactions, fingerprints, strict=True):
+    for txn, row_fingerprint, suggestion in zip(parsed_transactions, fingerprints, suggestions, strict=True):
         txn["accountId"] = account_id
         txn["fingerprint"] = row_fingerprint
         txn["duplicate"] = row_fingerprint in existing_fingerprints
-        txn.setdefault("disposition", DISPOSITION_BUDGET)
-        txn.setdefault("suggestedBy", "LLM")
-        txn.setdefault("pairWith", None)
+        txn["disposition"] = suggestion.disposition
+        txn["categoryId"] = suggestion.category_id
+        txn["categoryName"] = category_names.get(suggestion.category_id, "")
+        txn["suggestedBy"] = suggestion.suggested_by
+        txn["pairWith"] = suggestion.pair_with
+        txn["review"] = suggestion.review
 
     # Per-row pre-validation surfaces missing_category / locked_month issues so the
     # review UI can render specific annotations without round-tripping through
