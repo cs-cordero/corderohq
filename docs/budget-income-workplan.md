@@ -210,14 +210,15 @@ Checks:
 **Before you start:** design section **Frontend**. Read `BudgetPage.tsx` for the edit, pin, and
 explanation flow to copy.
 
-- [ ] `types.ts`, `parsers.ts`, `api.ts`: the income source, the paycheck, the one-time line, and
+- [x] `types.ts`, `parsers.ts`, `api.ts`: the income source, the paycheck, the one-time line, and
       the `GET /api/income/{YYYY-MM}` response.
-- [ ] `App.tsx`: the `income` route. `Layout.tsx`: an "Income" link in `BUDGET_LINKS`.
-- [ ] `IncomePage.tsx` (new): the month picker, the paycheck breakdown for each source, the
+- [x] `App.tsx`: the `income` route. `Layout.tsx`: an "Income" link in `BUDGET_LINKS`.
+- [x] `IncomePage.tsx` (new): the month picker, the paycheck breakdown for each source, the
       one-time lines, the planned net income, the edit flow (`/replace` or `/pin`, the pin chip,
       the downstream-pin warnings, the explanation), and the income source management.
-- [ ] `AuditLogPage.tsx` and `AuditEntry` in `types.ts`: the new actions. `categoryId` becomes
-      optional.
+- [x] `AuditLogPage.tsx` and `AuditEntry` in `types.ts`: the new actions. `categoryId` becomes
+      optional (done in CP3). The page shows the label of the income source or the one-time
+      line, and a paycheck as its monthly net pay.
 
 Checks:
 
@@ -372,3 +373,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP3 code and tests written. The checks are not run yet. Found: the route list in
   API Gateway, and an old bug (`compute_summary()` reads the current month in UTC, not ET).
 - 2026-10-17: CP3 checks are clean (`./check.sh -n`). The dev test is still open.
+- 2026-10-17: CP4 code written. The user asked for one big check after many CPs.

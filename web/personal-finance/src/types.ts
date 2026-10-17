@@ -182,6 +182,82 @@ export interface CommitValidationError {
 // --- The net worth record ---
 
 // A person in the household. Owner references on accounts point at personId.
+// --- The income plan ---
+
+export const PAY_FREQUENCIES = ["weekly", "biweekly", "semimonthly", "monthly"] as const;
+export type PayFrequency = (typeof PAY_FREQUENCIES)[number];
+
+export const PAY_FREQUENCY_LABELS: Record<PayFrequency, string> = {
+    weekly: "Weekly",
+    biweekly: "Every two weeks",
+    semimonthly: "Twice a month",
+    monthly: "Monthly",
+};
+
+export const DEDUCTION_KINDS = ["TAX", "PRETAX_SAVINGS", "PRETAX_BENEFIT", "POSTTAX_SAVINGS"] as const;
+export type DeductionKind = (typeof DEDUCTION_KINDS)[number];
+
+export const DEDUCTION_KIND_LABELS: Record<DeductionKind, string> = {
+    TAX: "Tax",
+    PRETAX_SAVINGS: "Pre-tax savings",
+    PRETAX_BENEFIT: "Pre-tax benefit",
+    POSTTAX_SAVINGS: "Post-tax savings",
+};
+
+export interface Deduction {
+    label: string;
+    kind: DeductionKind;
+    amount: number; // millionths, for one paycheck
+}
+
+// One paycheck of one income source. The server calculates the net pay; it never stores it.
+export interface Paycheck {
+    paychecksPerMonth: number;
+    gross: number; // millionths, for one paycheck
+    deductions: Deduction[];
+}
+
+export interface IncomeSource {
+    incomeSourceId: string;
+    personId: string;
+    label: string;
+    frequency: string; // one of PAY_FREQUENCIES; kept as string so an unknown DB value doesn't crash the parser
+    active: boolean;
+    sortOrder: number;
+}
+
+export interface IncomeMonthPaycheck extends Paycheck {
+    incomeSourceId: string;
+    label: string;
+    personId: string;
+    active: boolean;
+    net: number; // one paycheck
+    monthlyNet: number; // net × paychecksPerMonth
+    pinned?: boolean; // future months only
+}
+
+export interface OneTimeLine {
+    lineId: string;
+    label: string;
+    amount: number;
+}
+
+export interface IncomeMonth {
+    yearMonth: string;
+    state: "EDITABLE" | "GRACE" | "LOCKED";
+    paychecks: IncomeMonthPaycheck[];
+    oneTime: OneTimeLine[];
+    plannedNetIncome: number;
+}
+
+export interface IncomePinResult {
+    income: IncomeMonth;
+    warnings: {
+        downstreamPins: { incomeSourceId: string; yearMonth: string }[];
+        pinMatchesCarriedValue: string[];
+    };
+}
+
 export interface Person {
     personId: string;
     name: string;

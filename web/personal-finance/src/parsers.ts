@@ -18,6 +18,10 @@ import type {
     Disposition,
     DeletionPreview,
     HardDeleteResult,
+    IncomeMonth,
+    IncomeMonthPaycheck,
+    IncomePinResult,
+    IncomeSource,
     LoanTerms,
     NetWorthHistory,
     NetWorthClassEntry,
@@ -25,6 +29,8 @@ import type {
     NetWorthPrefill,
     NetWorthRow,
     NetWorthTotals,
+    OneTimeLine,
+    Paycheck,
     ParsedTransaction,
     Person,
     PinResult,
@@ -35,7 +41,7 @@ import type {
     Transaction,
     UploadResult,
 } from "./types";
-import { DISPOSITIONS } from "./types";
+import { DEDUCTION_KINDS, DISPOSITIONS } from "./types";
 import {
     arrayOf,
     isObject,
@@ -403,6 +409,125 @@ export function parseDeletedGroup(raw: unknown): { groupId: string } {
 }
 
 // --- The net worth record ---
+
+// --- The income plan ---
+
+export function parseIncomeSource(raw: unknown): IncomeSource {
+    const obj = requireObject(raw, "IncomeSource");
+    return {
+        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeSource"),
+        personId: requireString(obj, "personId", "IncomeSource"),
+        label: requireString(obj, "label", "IncomeSource"),
+        frequency: requireString(obj, "frequency", "IncomeSource"),
+        active: requireBoolean(obj, "active", "IncomeSource"),
+        sortOrder: requireNumber(obj, "sortOrder", "IncomeSource"),
+    };
+}
+
+export function parseIncomeSourceArray(raw: unknown): IncomeSource[] {
+    return arrayOf(raw, parseIncomeSource, "IncomeSource[]");
+}
+
+export function parseDeactivateIncomeSourceResult(raw: unknown): {
+    incomeSource: IncomeSource;
+    affectedMonths: string[];
+} {
+    const obj = requireObject(raw, "DeactivateIncomeSourceResult");
+    return {
+        incomeSource: parseIncomeSource(obj.incomeSource),
+        affectedMonths: stringArray(obj.affectedMonths, "DeactivateIncomeSourceResult.affectedMonths"),
+    };
+}
+
+function parsePaycheckFields(obj: Record<string, unknown>, label: string): Paycheck {
+    return {
+        paychecksPerMonth: requireNumber(obj, "paychecksPerMonth", label),
+        gross: requireNumber(obj, "gross", label),
+        deductions: arrayOf(
+            obj.deductions,
+            (item, index) => {
+                const d = requireObject(item, `${label}.deductions[${index}]`);
+                const kind = requireString(d, "kind", `${label}.deductions[${index}]`);
+                const match = DEDUCTION_KINDS.find((k) => k === kind);
+                if (match === undefined) throw new Error(`${label}.deductions[${index}].kind: unexpected '${kind}'`);
+                return {
+                    label: requireString(d, "label", `${label}.deductions[${index}]`),
+                    kind: match,
+                    amount: requireNumber(d, "amount", `${label}.deductions[${index}]`),
+                };
+            },
+            `${label}.deductions`,
+        ),
+    };
+}
+
+function parseIncomeMonthPaycheck(raw: unknown): IncomeMonthPaycheck {
+    const obj = requireObject(raw, "IncomeMonth.paychecks[]");
+    return {
+        ...parsePaycheckFields(obj, "IncomeMonth.paychecks[]"),
+        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeMonth.paychecks[]"),
+        label: requireString(obj, "label", "IncomeMonth.paychecks[]"),
+        personId: requireString(obj, "personId", "IncomeMonth.paychecks[]"),
+        active: requireBoolean(obj, "active", "IncomeMonth.paychecks[]"),
+        net: requireNumber(obj, "net", "IncomeMonth.paychecks[]"),
+        monthlyNet: requireNumber(obj, "monthlyNet", "IncomeMonth.paychecks[]"),
+        pinned: optionalBoolean(obj, "pinned", "IncomeMonth.paychecks[]"),
+    };
+}
+
+export function parseOneTimeLine(raw: unknown): OneTimeLine {
+    const obj = requireObject(raw, "OneTimeLine");
+    return {
+        lineId: requireString(obj, "lineId", "OneTimeLine"),
+        label: requireString(obj, "label", "OneTimeLine"),
+        amount: requireNumber(obj, "amount", "OneTimeLine"),
+    };
+}
+
+export function parseIncomeMonth(raw: unknown): IncomeMonth {
+    const obj = requireObject(raw, "IncomeMonth");
+    const state = requireString(obj, "state", "IncomeMonth");
+    if (state !== "EDITABLE" && state !== "GRACE" && state !== "LOCKED") {
+        throw new Error(`IncomeMonth.state: unexpected value '${state}'`);
+    }
+    return {
+        yearMonth: requireString(obj, "yearMonth", "IncomeMonth"),
+        state,
+        paychecks: arrayOf(obj.paychecks, parseIncomeMonthPaycheck, "IncomeMonth.paychecks"),
+        oneTime: arrayOf(obj.oneTime, parseOneTimeLine, "IncomeMonth.oneTime"),
+        plannedNetIncome: requireNumber(obj, "plannedNetIncome", "IncomeMonth"),
+    };
+}
+
+export function parseIncomePinResult(raw: unknown): IncomePinResult {
+    const obj = requireObject(raw, "IncomePinResult");
+    const warnings = requireObject(obj.warnings, "IncomePinResult.warnings");
+    return {
+        income: parseIncomeMonth(obj.income),
+        warnings: {
+            downstreamPins: arrayOf(
+                warnings.downstreamPins,
+                (item) => {
+                    const pin = requireObject(item, "IncomePinResult.warnings.downstreamPins[]");
+                    return {
+                        incomeSourceId: requireString(pin, "incomeSourceId", "downstreamPins[]"),
+                        yearMonth: requireString(pin, "yearMonth", "downstreamPins[]"),
+                    };
+                },
+                "IncomePinResult.warnings.downstreamPins",
+            ),
+            pinMatchesCarriedValue: stringArray(
+                warnings.pinMatchesCarriedValue,
+                "IncomePinResult.warnings.pinMatchesCarriedValue",
+            ),
+        },
+    };
+}
+
+export function parseDeletedOneTimeLine(raw: unknown): { deleted: string } {
+    const obj = requireObject(raw, "{deleted}");
+    return { deleted: requireString(obj, "deleted", "{deleted}") };
+}
 
 export function parsePerson(raw: unknown): Person {
     const obj = requireObject(raw, "Person");
