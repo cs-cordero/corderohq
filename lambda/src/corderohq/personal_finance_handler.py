@@ -728,9 +728,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     existing = _BUDGET_TABLE.get_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
     txns = _TRANSACTIONS_TABLE.list_for_month(year_month)
-    txn_cat_ids = {
-        t["categoryId"] for t in txns if disposition_of(t) == DISPOSITION_BUDGET and t.get("amount") != 0
-    }
+    txn_cat_ids = {t["categoryId"] for t in txns if disposition_of(t) == DISPOSITION_BUDGET and t.get("amount") != 0}
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
     body_cat_ids = {t["categoryId"] for t in targets}
@@ -1400,6 +1398,10 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     owners, err = _validate_owners(body.get("owners"))
     if err:
         return err
+    if owners is None:
+        # _validate_owners returns a list whenever it returns no error. This check tells the type
+        # checker so.
+        return _response(400, "owners is required")
 
     try:
         item = _ACCOUNT_TABLE.create(

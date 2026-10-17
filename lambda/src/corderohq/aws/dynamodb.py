@@ -1427,7 +1427,8 @@ class NetWorthSnapshotTable:
         for row in rows:
             account_id = row["accountId"]
             existing = self._table.get_item(Key={"yearMonth": year_month, "accountId": account_id}).get("Item") or {}
-            by_class: dict[str, Any] = dict(existing.get("byAssetClass") or {})
+            stored_classes = existing.get("byAssetClass")
+            by_class: dict[str, Any] = dict(stored_classes) if isinstance(stored_classes, dict) else {}
             for cls, value in (row.get("classes") or {}).items():
                 if value is None:
                     by_class.pop(cls, None)
