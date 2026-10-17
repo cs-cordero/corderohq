@@ -199,7 +199,7 @@ Tests:
 
 Checks:
 
-- [ ] Python tests, lint, format, and types pass. CDK build, lint, and tests pass.
+- [x] Python tests, lint, format, and types pass. CDK build, lint, and tests pass.
 - [ ] Dev deploy. Call the new routes with a made-up income source. The audit log shows the
       entries.
 
@@ -371,3 +371,4 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP2 code written. The checks are not run yet.
 - 2026-10-17: CP3 code and tests written. The checks are not run yet. Found: the route list in
   API Gateway, and an old bug (`compute_summary()` reads the current month in UTC, not ET).
+- 2026-10-17: CP3 checks are clean (`./check.sh -n`). The dev test is still open.
