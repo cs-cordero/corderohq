@@ -26,7 +26,7 @@ from corderohq.budget.densify import densify, resolve_future_targets, walk_back_
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
     DISPOSITION_BUDGET,
-    DISPOSITION_OFF_BUDGET,
+    DISPOSITION_SKIP,
     disposition_of,
     resolve_disposition_fields,
 )
@@ -994,9 +994,8 @@ def _validate_commit_rows(
         issues: list[str] = []
         cat_id = row.get("categoryId")
         disposition = disposition_of(row)
-        if disposition == DISPOSITION_BUDGET and (not cat_id or cat_id not in valid_category_ids):
-            issues.append("missing_category")
-        elif disposition == DISPOSITION_OFF_BUDGET and cat_id and cat_id not in valid_category_ids:
+        category_unknown = bool(cat_id) and cat_id not in valid_category_ids
+        if (disposition == DISPOSITION_BUDGET and not cat_id) or (disposition != DISPOSITION_SKIP and category_unknown):
             issues.append("missing_category")
         txn_date = row.get("transactionDate") or ""
         ym = txn_date[:7] if len(txn_date) >= 7 else ""
