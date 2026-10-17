@@ -201,7 +201,10 @@ describe("PlatformStack", () => {
 
         test("every record lands in the root zone", () => {
             const records = template.findResources("AWS::Route53::RecordSet");
-            const zoneIds = Object.values(records).map((r) => JSON.stringify(r.Properties.HostedZoneId));
+            const zoneIds = Object.values(records).map((r) => {
+                const properties = r.Properties as { HostedZoneId?: unknown };
+                return JSON.stringify(properties.HostedZoneId);
+            });
             expect(new Set(zoneIds).size).toBe(1);
         });
     });
