@@ -322,12 +322,17 @@ Checks:
 
 **Before you start:** design sections **Step 2**, **Step 3**, and **Step 6**.
 
-- [ ] Local column types (`date`, `number`, `text`).
-- [ ] `map_columns()`: send the headers and the types only. Ask for `bankCategory` too.
-- [ ] The local sign check, and a "flip all signs" button on `UploadPage.tsx`.
-- [ ] The bank category hint, with the generic word list.
-- [ ] `categorize_transactions()`: unique descriptions only; return a `kind` as well.
-- [ ] Tests: no cell value is in the prompt (assert on the text that goes to the mock client);
+- [x] Local column types (`date`, `number`, `text`).
+- [x] `map_columns()`: send the headers and the types only. Ask for `bankCategory` too.
+- [x] The local sign check, and a "flip all signs" button on `UploadPage.tsx`. The button sends
+      the file again with `flipSigns: true`, because the fingerprint of a row holds its amount.
+      The response has `signCheck: {llmInverted, locallyFlipped, userFlipped}`.
+- [x] The bank category hint, with the generic word list. The upload keeps it on each row as
+      `_bankHint` for CP9, and removes it before the response.
+- [x] `categorize_transactions()`: unique descriptions only; return a `kind` as well. The upload
+      keeps it as `_kind` for CP9. The LLM call now runs even with no active categories, because
+      the kind is useful without them.
+- [x] Tests: no cell value is in the prompt (assert on the text that goes to the mock client);
       each description appears one time; the `kind` parse; the hint word list.
 
 Checks:
@@ -387,3 +392,5 @@ One line for each session: the date, the checkpoint, and what changed or what is
 - 2026-10-17: CP5 code written.
 - 2026-10-17: CP6 code written. The migration script is not run yet.
 - 2026-10-17: CP7 code written.
+- 2026-10-17: CP8 code written. Found an older problem: the upload stores the date text of the
+  bank as it is, so a format such as `03/15/2026` gives a wrong year-month. Not fixed.

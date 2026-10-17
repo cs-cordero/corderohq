@@ -773,6 +773,10 @@ short:
 
 ## Open Items
 
+- **An older problem, outside this work:** the upload stores the date text of the bank as it is
+  (`row[date_idx].strip()`). The year-month is its first 7 characters. A bank format such as
+  `03/15/2026` therefore gives a wrong year-month. `detect_column_types()` already knows several
+  date formats, so a local date normalization is a small, separate change.
 - **Fixed in CP5:** `compute_summary()` found the current month in UTC. It now uses ET, the same
   as `compute_income()`.
 - **The column mapping without values** (Step 2) can be wrong about the sign. Test it with real

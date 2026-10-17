@@ -3,6 +3,7 @@
 import hashlib
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
 import anthropic
@@ -13,40 +14,58 @@ from corderohq.util import get_env_var
 
 LOGGER = logging.getLogger(__name__)
 
+# Each prompt gets as little of the user's data as possible. The column mapping gets the header
+# row and a type for each column, and no cell values. The categorization gets each unique
+# description one time, and no amounts, dates, or account names.
+
 _COLUMN_MAPPING_PROMPT = """\
-You are a financial data analyst. Given the following CSV headers and a few sample rows \
-from a bank or credit card statement, identify which columns correspond to:
-- "date": the transaction date (when the purchase happened)
-- "description": the merchant name or transaction description
-- "amount": the dollar amount
+You are a financial data analyst. You get the header row of a CSV file from a bank or a credit \
+card, with a type for each column: date, number, or text. You do not get any cell values.
 
-Respond with a JSON object mapping these keys to the exact CSV header names. Example:
-{"date": "Transaction Date", "description": "Description", "amount": "Amount"}
+Find the column that holds each of these:
+- "date": the transaction date. If two columns hold dates, such as "Transaction Date" and \
+"Post Date", use the transaction date.
+- "description": the merchant name or the transaction description.
+- "amount": the dollar amount.
+- "bankCategory": the category that the bank gives each row, such as "Groceries" or "Payment". \
+Leave this key out if no column holds one.
 
-If there are multiple date columns (e.g., "Transaction Date" and "Post Date"), \
-prefer the transaction date over the post date.
+The app stores an amount as positive for money out (a purchase) and negative for money in (a \
+credit or a refund). If the header names show that the file uses the opposite sign, set \
+"amount_invert": true. If you are not sure, leave it out. The app checks the sign again.
 
-Our schema stores amounts with positive=expense and negative=income/return.
-If the bank CSV uses the opposite convention (negative for purchases, positive for credits/refunds), \
-set "amount_invert": true so we flip the sign on every row. Otherwise omit it or set it to false.
+Respond with a JSON object that maps each key to the exact header name. Example:
+{"date": "Transaction Date", "description": "Description", "amount": "Amount", "bankCategory": "Category"}
 
 Respond ONLY with the JSON object, no other text."""
 
+# The kinds that the categorization returns for each description. The import uses the kind to
+# suggest a disposition.
+TRANSACTION_KINDS = frozenset({"expense", "refund", "income", "card_payment", "own_transfer"})
+
 _CATEGORIZATION_PROMPT_TEMPLATE = """\
-You are a household budget categorizer. Given a list of transaction descriptions and a list \
-of budget categories, assign each transaction to the most appropriate category.
+You are a household budget categorizer. You get a list of transaction descriptions and a list \
+of budget categories.
+
+For each description, give:
+- "kind": one of "expense" (a purchase or a bill), "refund" (money back from a merchant), \
+"income" (a paycheck, a bonus, interest, or a dividend), "card_payment" (a payment to or from a \
+credit card), or "own_transfer" (money moved between the household's own accounts, such as to a \
+savings fund, a brokerage, or a 529).
+- "categoryId" and "categoryName": the best category. For "income" and "card_payment", use null. \
+For "own_transfer", use a savings category if one fits, else null.
 
 Categories:
 {categories}
 
-Transactions (one per line, format "INDEX|DESCRIPTION"):
+Descriptions (one per line, format "INDEX|DESCRIPTION"):
 {transactions}
 
-Respond with a JSON array of objects, one per transaction, in the same order:
-[{{"index": 0, "categoryId": "...", "categoryName": "..."}}, ...]
+Respond with a JSON array of objects, one per description, in the same order:
+[{{"index": 0, "kind": "expense", "categoryId": "...", "categoryName": "..."}}, ...]
 
-If no category fits well, use the categoryId and categoryName of the closest match. \
-Never invent new categories.
+If no category fits well for an expense or a refund, use the closest match. Never invent new \
+categories.
 
 Respond ONLY with the JSON array, no other text."""
 
@@ -82,19 +101,18 @@ def _call_claude(api_key: str, system: str, user_text: str) -> str:
     raise ValueError("Claude returned no text response")
 
 
-def map_columns(headers: list[str], sample_rows: list[list[str]]) -> dict[str, Any]:
-    """Use Claude to identify which CSV columns are date, description, and amount.
+def map_columns(headers: list[str], column_types: list[str]) -> dict[str, Any]:
+    """Use Claude to find the date, description, amount, and bank category columns.
 
-    Returns a dict with keys: date, description, amount, and optionally amount_invert.
+    The prompt holds the header names and the type of each column (see `detect_column_types`),
+    and no cell values. Returns a dict with keys date, description, amount, and optionally
+    bankCategory and amount_invert.
     """
     api_key = _get_api_key()
 
-    csv_preview = ",".join(headers) + "\n"
-    for row in sample_rows[:5]:
-        csv_preview += ",".join(row) + "\n"
-
+    preview = ", ".join(f"{header} ({column_type})" for header, column_type in zip(headers, column_types, strict=True))
     LOGGER.info("Mapping columns for headers: %s", headers)
-    result_text = _call_claude(api_key, _COLUMN_MAPPING_PROMPT, csv_preview)
+    result_text = _call_claude(api_key, _COLUMN_MAPPING_PROMPT, f"Headers and types:\n{preview}")
     mapping: dict[str, Any] = json.loads(result_text)
     LOGGER.info("Column mapping result: %s", mapping)
     return mapping
@@ -104,29 +122,141 @@ def categorize_transactions(
     descriptions: list[str],
     categories: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Use Claude to assign categories to transaction descriptions.
+    """Use Claude to give a kind and a category to each description.
 
-    Args:
-        descriptions: list of transaction description strings
-        categories: list of category dicts with categoryId and name
-
-    Returns a list of dicts with index, categoryId, categoryName.
+    The prompt holds each unique description one time only. The result maps back to every
+    input, in order: one dict per input with index, kind, categoryId, and categoryName. An
+    unknown kind becomes None, and a category that is not in `categories` becomes "".
     """
+    unique: list[str] = []
+    position: dict[str, int] = {}
+    for description in descriptions:
+        if description not in position:
+            position[description] = len(unique)
+            unique.append(description)
+    if not unique:
+        return []
+
     api_key = _get_api_key()
-
     category_lines = "\n".join(f"- {c['name']} (categoryId: {c['categoryId']})" for c in categories)
-    transaction_lines = "\n".join(f"{i}|{desc}" for i, desc in enumerate(descriptions))
+    transaction_lines = "\n".join(f"{i}|{desc}" for i, desc in enumerate(unique))
+    user_text = _CATEGORIZATION_PROMPT_TEMPLATE.format(categories=category_lines, transactions=transaction_lines)
 
-    user_text = _CATEGORIZATION_PROMPT_TEMPLATE.format(
-        categories=category_lines,
-        transactions=transaction_lines,
+    LOGGER.info(
+        "Categorizing %d unique descriptions (%d rows) across %d categories",
+        len(unique),
+        len(descriptions),
+        len(categories),
     )
-
-    LOGGER.info("Categorizing %d transactions across %d categories", len(descriptions), len(categories))
     result_text = _call_claude(api_key, "", user_text)
     assignments: list[dict[str, Any]] = json.loads(result_text)
-    LOGGER.info("Categorization complete: %d assignments", len(assignments))
-    return assignments
+
+    names_by_id = {str(c["categoryId"]): str(c["name"]) for c in categories}
+    by_unique_index: dict[int, dict[str, Any]] = {}
+    for assignment in assignments:
+        index = assignment.get("index")
+        if not isinstance(index, int):
+            continue
+        kind = assignment.get("kind")
+        category_id = assignment.get("categoryId")
+        valid_category = isinstance(category_id, str) and category_id in names_by_id
+        by_unique_index[index] = {
+            "kind": kind if kind in TRANSACTION_KINDS else None,
+            "categoryId": category_id if valid_category else "",
+            "categoryName": names_by_id[category_id] if valid_category else "",
+        }
+    LOGGER.info("Categorization complete: %d assignments", len(by_unique_index))
+
+    empty = {"kind": None, "categoryId": "", "categoryName": ""}
+    return [
+        {"index": i, **by_unique_index.get(position[description], empty)}
+        for i, description in enumerate(descriptions)
+    ]
+
+
+# --- Local checks: column types, the sign of the amounts, and the bank category ---
+
+_DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y", "%d-%b-%Y", "%b %d, %Y")
+_TYPE_SAMPLE_SIZE = 50
+_TYPE_THRESHOLD = 0.8
+
+
+def _looks_like_date(value: str) -> bool:
+    for date_format in _DATE_FORMATS:
+        try:
+            datetime.strptime(value, date_format)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
+def parse_amount(value: str) -> float | None:
+    """Return the number in an amount cell, or None. Accept "$1,234.50", "-5", and "(5.00)"."""
+    cleaned = value.strip().replace(",", "").replace("$", "")
+    negative = cleaned.startswith("(") and cleaned.endswith(")")
+    if negative:
+        cleaned = cleaned[1:-1]
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return None
+    return -number if negative else number
+
+
+def detect_column_types(headers: list[str], rows: list[list[str]]) -> list[str]:
+    """Return "date", "number", or "text" for each column, from the first rows of the file.
+
+    A column is a date column (or a number column) when most of its cells that are not empty
+    parse as a date (or as an amount). The code finds this locally, so no cell value goes to
+    the LLM.
+    """
+    sample = rows[:_TYPE_SAMPLE_SIZE]
+    result: list[str] = []
+    for index in range(len(headers)):
+        values = [row[index].strip() for row in sample if index < len(row) and row[index].strip()]
+        if not values:
+            result.append("text")
+            continue
+        if sum(_looks_like_date(v) for v in values) >= _TYPE_THRESHOLD * len(values):
+            result.append("date")
+        elif sum(parse_amount(v) is not None for v in values) >= _TYPE_THRESHOLD * len(values):
+            result.append("number")
+        else:
+            result.append("text")
+    return result
+
+
+def spending_account_needs_flip(amounts: list[int]) -> bool:
+    """Return True if the amounts of a spending account have the wrong sign.
+
+    Most rows of a credit card or a checking account are money out, which the app stores as a
+    positive amount. If most rows are negative, the sign is probably the opposite of the app's.
+    """
+    positive = sum(1 for a in amounts if a > 0)
+    negative = sum(1 for a in amounts if a < 0)
+    return negative > positive
+
+
+# Generic bank labels. These are words that banks use for a category, and not the names of an
+# employer or a merchant. The repository is public, so it must hold no real names.
+_BANK_INCOME_WORDS = ("payroll", "paycheck", "salary", "direct deposit", "income", "interest", "dividend")
+_BANK_CARD_PAYMENT_WORDS = ("credit card payment", "card payment")
+_BANK_TRANSFER_WORDS = ("transfer",)
+
+
+def bank_category_hint(value: str | None) -> str | None:
+    """Return "INCOME", "CARD_PAYMENT", "TRANSFER", or None for the bank's category of a row."""
+    if not value:
+        return None
+    text = value.lower()
+    if any(word in text for word in _BANK_CARD_PAYMENT_WORDS):
+        return "CARD_PAYMENT"
+    if any(word in text for word in _BANK_TRANSFER_WORDS):
+        return "TRANSFER"
+    if any(word in text for word in _BANK_INCOME_WORDS):
+        return "INCOME"
+    return None
 
 
 # --- Import fingerprints ---

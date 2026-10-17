@@ -28,7 +28,15 @@ from corderohq.aws.dynamodb import (
     compute_summary,
 )
 from corderohq.budget.auth import is_budget_admin
-from corderohq.budget.csv_import import assign_fingerprints, categorize_transactions, map_columns
+from corderohq.budget.csv_import import (
+    assign_fingerprints,
+    bank_category_hint,
+    categorize_transactions,
+    detect_column_types,
+    map_columns,
+    parse_amount,
+    spending_account_needs_flip,
+)
 from corderohq.budget.densify import carry_map, densify, resolve_future_targets, walk_back_for
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
@@ -47,7 +55,7 @@ from corderohq.budget.income import (
     validate_one_time_amount,
     validate_paycheck,
 )
-from corderohq.networth.models import budget_role_of, validate_asset_class
+from corderohq.networth.models import BUDGET_ROLE_SPENDING, budget_role_of, validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -1669,14 +1677,15 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     headers = rows[0]
     data_rows = rows[1:]
 
-    # Step 1: the LLM finds which column is which.
-    sample_rows = data_rows[:5]
-    column_mapping = map_columns(headers, sample_rows)
+    # Step 1: the LLM finds which column is which. It gets the header row and a type for each
+    # column, which the code finds locally. It gets no cell values.
+    column_mapping = map_columns(headers, detect_column_types(headers, data_rows))
 
     date_col = column_mapping.get("date", "")
     desc_col = column_mapping.get("description", "")
     amount_col = column_mapping.get("amount", "")
-    amount_invert = column_mapping.get("amount_invert", False)
+    amount_invert = column_mapping.get("amount_invert", False) is True
+    bank_col = column_mapping.get("bankCategory")
 
     if not date_col or not desc_col or not amount_col:
         return _response(400, "Could not identify required columns (date, description, amount)")
@@ -1691,52 +1700,47 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     date_idx = col_indices[date_col]
     desc_idx = col_indices[desc_col]
     amount_idx = col_indices[amount_col]
+    # The bank's category column is optional. A name that is not a header is ignored.
+    bank_idx = col_indices.get(bank_col) if isinstance(bank_col, str) else None
 
     parsed_transactions: list[dict[str, Any]] = []
-    descriptions: list[str] = []
     for row in data_rows:
         if len(row) <= max(date_idx, desc_idx, amount_idx):
             continue
-        raw_amount = row[amount_idx].strip().replace(",", "").replace("$", "")
-        if not raw_amount:
+        amount_float = parse_amount(row[amount_idx])
+        if amount_float is None:
             continue
-        try:
-            amount_float = float(raw_amount)
-        except ValueError:
-            continue
-
-        # Our schema is positive=expense, negative=income/return. If the bank CSV
-        # uses the opposite (negative=debit), the LLM column-mapper sets
-        # amount_invert and we flip every row to land on our convention.
-        if amount_invert:
-            amount_float = -amount_float
-
-        amount_millionths = round(amount_float * 1_000_000)
-
+        bank_value = row[bank_idx].strip() if bank_idx is not None and bank_idx < len(row) else None
         parsed_transactions.append(
             {
                 "transactionDate": row[date_idx].strip(),
                 "description": row[desc_idx].strip(),
-                "amount": amount_millionths,
+                "amount": round(amount_float * 1_000_000),
+                "_bankHint": bank_category_hint(bank_value),
             }
         )
-        descriptions.append(row[desc_idx].strip())
 
     if not parsed_transactions:
         return _response(400, "No valid transactions found in CSV")
 
-    # Step 3: the LLM gives a category to each row.
-    categories = _CATEGORY_TABLE.list_active()
-    if categories:
-        assignments = categorize_transactions(descriptions, categories)
-        for i, assignment in enumerate(assignments):
-            if i < len(parsed_transactions):
-                parsed_transactions[i]["categoryId"] = assignment.get("categoryId", "")
-                parsed_transactions[i]["categoryName"] = assignment.get("categoryName", "")
-    else:
+    # The app stores money out as positive. Three checks set the sign, in order: the LLM's
+    # guess from the header names; a local check for a spending account, where most rows are
+    # money out; and the user's "flip all signs" button on the review screen.
+    amounts_after_llm = [-t["amount"] if amount_invert else t["amount"] for t in parsed_transactions]
+    is_spending_account = budget_role_of(account) == BUDGET_ROLE_SPENDING
+    locally_flipped = is_spending_account and spending_account_needs_flip(amounts_after_llm)
+    user_flipped = body.get("flipSigns") is True
+    if amount_invert ^ locally_flipped ^ user_flipped:
         for txn in parsed_transactions:
-            txn["categoryId"] = ""
-            txn["categoryName"] = ""
+            txn["amount"] = -txn["amount"]
+
+    # Step 3: the LLM gives a kind and a category to each unique description.
+    categories = _CATEGORY_TABLE.list_active()
+    assignments = categorize_transactions([t["description"] for t in parsed_transactions], categories)
+    for txn, assignment in zip(parsed_transactions, assignments, strict=True):
+        txn["categoryId"] = assignment.get("categoryId") or ""
+        txn["categoryName"] = assignment.get("categoryName") or ""
+        txn["_kind"] = assignment.get("kind")
 
     # Mark each row that the table holds already, such as from an earlier CSV with dates that
     # overlap. The review screen leaves those rows unselected.
@@ -1757,12 +1761,20 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     validations = _validate_commit_rows(parsed_transactions, valid_category_ids, override_active=False, now=now)
     for validation, txn in zip(validations, parsed_transactions, strict=True):
         validation["review"] = txn.pop("review", [])
+        # The kind and the bank hint are for the suggestion only. They do not go to the client.
+        txn.pop("_kind", None)
+        txn.pop("_bankHint", None)
 
     return _json_response(
         200,
         json.dumps(
             {
                 "accountId": account_id,
+                "signCheck": {
+                    "llmInverted": amount_invert,
+                    "locallyFlipped": locally_flipped,
+                    "userFlipped": user_flipped,
+                },
                 "columnMapping": column_mapping,
                 "transactions": parsed_transactions,
                 "validations": validations,

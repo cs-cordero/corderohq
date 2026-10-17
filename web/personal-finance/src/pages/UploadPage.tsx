@@ -18,6 +18,7 @@ import {
     type ParsedTransaction,
     type RowValidation,
     type RowValidationIssue,
+    type SignCheck,
     type SuggestedBy,
 } from "../types";
 
@@ -55,6 +56,7 @@ export default function UploadPage() {
     // The rows that the commit leaves out. A row that the table holds already starts here.
     const [removed, setRemoved] = useState<Set<number>>(new Set());
     const [categories, setCategories] = useState<Category[]>([]);
+    const [signCheck, setSignCheck] = useState<SignCheck | null>(null);
     const { status, showLoading, showSuccess, showError, clear } = useStatus();
     const [step, setStep] = useState<"upload" | "review" | "done">("upload");
 
@@ -70,27 +72,38 @@ export default function UploadPage() {
             .catch((err: unknown) => showError(err));
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const handleUpload = useCallback(async () => {
-        if (!csvFile || !accountId) return;
-        showLoading("Uploading and analyzing...");
-        try {
-            const text = await csvFile.text();
-            const [result, cats] = await Promise.all([uploadTransactions(text, accountId), fetchCategories()]);
-            setTransactions(result.transactions);
-            setValidations(result.validations);
-            setRemoved(new Set(result.transactions.flatMap((t, i) => (t.duplicate ? [i] : []))));
-            setCategories(cats);
-            setStep("review");
-            const duplicates = result.transactions.filter((t) => t.duplicate).length;
-            showSuccess(
-                `Found ${result.transactions.length} transactions` +
-                    (duplicates > 0 ? `; ${duplicates} exist already and are not selected` : ""),
-            );
-            setTimeout(clear, 5000);
-        } catch (err) {
-            showError(err);
-        }
-    }, [csvFile, accountId]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `flipSigns` sends the file again with every sign flipped. The server must do the work
+    // again, because the fingerprint of a row holds its amount.
+    const runUpload = useCallback(
+        async (flipSigns: boolean) => {
+            if (!csvFile || !accountId) return;
+            showLoading("Uploading and analyzing...");
+            try {
+                const text = await csvFile.text();
+                const [result, cats] = await Promise.all([
+                    uploadTransactions(text, accountId, flipSigns),
+                    fetchCategories(),
+                ]);
+                setSignCheck(result.signCheck);
+                setTransactions(result.transactions);
+                setValidations(result.validations);
+                setRemoved(new Set(result.transactions.flatMap((t, i) => (t.duplicate ? [i] : []))));
+                setCategories(cats);
+                setStep("review");
+                const duplicates = result.transactions.filter((t) => t.duplicate).length;
+                showSuccess(
+                    `Found ${result.transactions.length} transactions` +
+                        (duplicates > 0 ? `; ${duplicates} exist already and are not selected` : ""),
+                );
+                setTimeout(clear, 5000);
+            } catch (err) {
+                showError(err);
+            }
+        },
+        [csvFile, accountId], // eslint-disable-line react-hooks/exhaustive-deps
+    );
+    const handleUpload = () => runUpload(false);
+    const handleFlipSigns = () => runUpload(!(signCheck?.userFlipped ?? false));
 
     const reviewByIndex = useMemo(() => new Map(validations.map((v) => [v.index, v.review])), [validations]);
 
@@ -373,6 +386,15 @@ export default function UploadPage() {
                                 Admin mode: locked-month rows will commit with override.
                             </span>
                         )}
+                    </p>
+                    <p className="hint">
+                        Money out shows as a positive amount. If the signs look wrong, flip them.
+                        {signCheck?.locallyFlipped &&
+                            " (The app flipped them already, because most rows of this spending account came in as" +
+                                " money in.)"}{" "}
+                        <button className="small-btn" onClick={handleFlipSigns}>
+                            Flip all signs
+                        </button>
                     </p>
                     {blockingIssueCount > 0 && (
                         <p className="hint warn">

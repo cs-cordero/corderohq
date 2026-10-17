@@ -38,6 +38,7 @@ import type {
     ReviewReason,
     RowValidation,
     RowValidationIssue,
+    SignCheck,
     SuggestedBy,
     Summary,
     SummaryCategory,
@@ -402,10 +403,20 @@ function parseRowValidation(raw: unknown): RowValidation {
     };
 }
 
+function parseSignCheck(raw: unknown): SignCheck {
+    const obj = requireObject(raw, "UploadResult.signCheck");
+    return {
+        llmInverted: requireBoolean(obj, "llmInverted", "UploadResult.signCheck"),
+        locallyFlipped: requireBoolean(obj, "locallyFlipped", "UploadResult.signCheck"),
+        userFlipped: requireBoolean(obj, "userFlipped", "UploadResult.signCheck"),
+    };
+}
+
 export function parseUploadResult(raw: unknown): UploadResult {
     const obj = requireObject(raw, "UploadResult");
     return {
         accountId: requireString(obj, "accountId", "UploadResult"),
+        signCheck: parseSignCheck(obj.signCheck),
         columnMapping: parseColumnMapping(obj.columnMapping),
         transactions: arrayOf(obj.transactions, parseParsedTransaction, "UploadResult.transactions"),
         validations: arrayOf(obj.validations, parseRowValidation, "UploadResult.validations"),

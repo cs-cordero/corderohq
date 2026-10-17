@@ -188,8 +188,16 @@ export interface RowValidation {
     review: ReviewReason[];
 }
 
+// How the upload set the sign of the amounts. The app stores money out as positive.
+export interface SignCheck {
+    llmInverted: boolean; // the LLM's guess from the header names
+    locallyFlipped: boolean; // a spending account where most rows came in negative
+    userFlipped: boolean; // the "flip all signs" button
+}
+
 export interface UploadResult {
     accountId: string;
+    signCheck: SignCheck;
     columnMapping: ColumnMapping;
     transactions: ParsedTransaction[];
     validations: RowValidation[];
