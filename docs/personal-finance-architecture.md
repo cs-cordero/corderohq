@@ -52,7 +52,12 @@ lambda/src/corderohq/
     budget/editability.py  The editability state function
     budget/auth.py         Admin group check
     networth/              Net worth models and snapshot logic
-    aws/dynamodb.py        Table wrappers and summary computation
+    aws/dynamodb/          One file for each DynamoDB table; __init__.py exports every name
+        util.py            The shared boto3 resource, the budget time zone, scan_pages(), query_pages()
+        summary.py         compute_summary()
+        income_plan.py     IncomePlanTable, IncomePlanCarryStore, compute_income()
+        budget.py, category.py, category_group.py, transactions.py, income_source.py,
+        audit_log.py, profile.py, account.py, networth_snapshot.py
 infra/lib/
     personal-finance-dynamodb-stack.ts   DynamoDB tables
     personal-finance-web-stack.ts        Cognito client, Lambda, API Gateway, CloudFront
@@ -205,7 +210,8 @@ it.
 ```
 
 The net worth record has three more tables. This document does not describe the net worth record
-in detail yet. See the code in `networth/` and in `aws/dynamodb.py`.
+in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`, `account.py`,
+`networth_snapshot.py`).
 
 ```
 +--------------------------+-----------------------+------------+----------------------------+

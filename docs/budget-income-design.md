@@ -76,8 +76,8 @@ The files that the work changes. Paths are from the repository root.
 | Area | Files |
 |---|---|
 | HTTP routes | `lambda/src/corderohq/personal_finance_handler.py` (one `if`/`elif` chain in `handler()`; module-level table objects at the top; `_ensure_hydrated()` runs the densify step) |
-| Table classes, summary | `lambda/src/corderohq/aws/dynamodb.py` (`BudgetTable`, `TransactionsTable`, `AuditLogTable`, `compute_summary()`, `AccountTable`) |
-| Month rules | `lambda/src/corderohq/budget/densify.py` (`DenseSparseStore`, `densify()`, `resolve_future()`, `resolve_future_targets()`, `walk_back_for()`, `value_at_or_before()`), `budget/editability.py`; the adapter `BudgetCarryStore` and `active_category_ids()` in `aws/dynamodb.py` |
+| Table classes, summary | `lambda/src/corderohq/aws/dynamodb/`: one file for each table (`budget.py`, `transactions.py`, `audit_log.py`, `account.py`, and so on), `summary.py` (`compute_summary()`), `util.py` (the shared resource and the paging helpers). Import every name from `corderohq.aws.dynamodb`. |
+| Month rules | `lambda/src/corderohq/budget/densify.py` (`DenseSparseStore`, `densify()`, `resolve_future()`, `resolve_future_targets()`, `walk_back_for()`, `value_at_or_before()`), `budget/editability.py`; the adapter `BudgetCarryStore` in `aws/dynamodb/budget.py` and `active_category_ids()` in `aws/dynamodb/category.py` |
 | CSV import | `lambda/src/corderohq/budget/csv_import.py` (`map_columns()`, `categorize_transactions()`); the upload flow is `_post_transactions_upload()` in the handler |
 | Cron densify | `lambda/src/corderohq/scheduled_densify.py` |
 | Account types | `lambda/src/corderohq/networth/models.py` (`AccountType`, `_ACCOUNT_TYPE_META`) |
@@ -309,7 +309,7 @@ def walk_back_for(by_key, target, key) -> Any: ...          # starts at the mont
 def value_at_or_before(by_key, year_month, key) -> Any: ... # the row in `year_month`, else walk back
 ```
 
-- For the Budget table, `BudgetCarryStore(budget_table)` in `aws/dynamodb.py` is the adapter. The
+- For the Budget table, `BudgetCarryStore(budget_table)` in `aws/dynamodb/budget.py` is the adapter. The
   key is the `categoryId`, and the value is the amount. It reads through `scan_all()` and writes
   through `put_single()`. It is an adapter, and not methods on `BudgetTable`, so that the handler
   tests, which replace `BudgetTable` with a mock, still work.
@@ -418,7 +418,7 @@ This includes a future month. Each body has an `explanation`. `amount` must be m
 404 before the Lambda sees the request.
 
 **The code.** `budget/income.py` holds the paycheck rules (`validate_paycheck()`, `net_pay()`,
-`monthly_net()`, `paychecks_equal()`) and the row IDs. `aws/dynamodb.py` holds
+`monthly_net()`, `paychecks_equal()`) and the row IDs. `aws/dynamodb/` holds
 `IncomeSourceTable`, `IncomePlanTable`, the adapter `IncomePlanCarryStore`,
 `active_income_source_ids()`, and `compute_income()`. Each paycheck entry in the response also
 has `active`, so the Income page can mark an inactive source in a locked month.
@@ -439,7 +439,7 @@ leftToAssign(M)     = plannedNetIncome(M) − totals.budgeted(M)
 - No transaction changes either number (Spec 43).
 
 New shared function: `compute_income(income_plan, income_sources, year_month, now)` in
-`aws/dynamodb.py`, next to `compute_summary()`. It returns the body of `GET /api/income/{YYYY-MM}`.
+`aws/dynamodb/income_plan.py`. It returns the body of `GET /api/income/{YYYY-MM}`.
 
 The value appears in two responses:
 
