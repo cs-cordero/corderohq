@@ -14,7 +14,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class IncomeSourceTable:
-    """CRUD operations for income sources. An income source is one job of one person.
+    """CRUD operations for income sources. An income source is any stream of income, such as a job.
 
     The money is not here. Each month of the plan holds a paycheck row in `IncomePlanTable`.
     """

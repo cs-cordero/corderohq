@@ -93,9 +93,9 @@ export class PersonalFinanceDynamoDbStack extends cdk.Stack {
             removalPolicy,
         });
 
-        // The tables for the income plan. An income source is one job of one person. The plan
-        // holds one paycheck row ("SRC#{incomeSourceId}") for each source in each dense month,
-        // and the one-time income lines ("ONE#{ULID}") of each month.
+        // The tables for the income plan. An income source is any stream of income, such as a job,
+        // interest, or dividends. The plan holds one paycheck row ("SRC#{incomeSourceId}") for each
+        // source in each dense month, and the one-time income lines ("ONE#{ULID}") of each month.
         this.incomeSourceTable = new dynamodb.Table(this, "IncomeSourceTable", {
             tableName: `IncomeSource-${stage}`,
             partitionKey: { name: "incomeSourceId", type: dynamodb.AttributeType.STRING },

@@ -205,8 +205,9 @@ npm run format:check
 The budget's top line is **left to assign**: the planned net income minus the budget targets. The
 goal is `$0`. The summary page and the Allocations page show it.
 
-1. **Set up the income.** On the Income page, add one income source for each job of each person.
-   Type the gross pay and each deduction from a paystub. The app calculates the net pay. Set the
+1. **Set up the income.** On the Income page, add one income source for each stream of income
+   that you want to plan, such as each job, or interest or dividends. For a job, type the gross pay
+   and each deduction from a paystub. For a source with no deductions, type only the gross amount. The app calculates the net pay. Set the
    paychecks per month that the plan counts, usually 2 for pay every two weeks. The first paycheck
    goes in the current month and carries forward.
 2. **Change a paycheck.** Change it in the month where the change starts. A change in the current

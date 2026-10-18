@@ -754,8 +754,8 @@ export default function IncomePage() {
 
             <h2>Income sources</h2>
             <p className="hint">
-                One income source is one job of one person. A change here affects every month. A change to a
-                paycheck goes in the month above.
+                An income source is any stream of income that you plan, such as a job, interest, or dividends.
+                A change here affects every month. A change to a paycheck goes in the month above.
             </p>
             <table className="data-table">
                 <thead>

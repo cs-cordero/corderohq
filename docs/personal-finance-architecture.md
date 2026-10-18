@@ -10,7 +10,8 @@ uploads a CSV export from a bank or a credit card, and the app fills in the tran
 can then compare the actual amounts against the budget. The app records each budget change in an
 audit log, and each change needs an explanation.
 
-The budget also has an **income plan**. Each income source (one job of one person) has a paycheck
+The budget also has an **income plan**. Each income source (any stream of income, such as a job,
+interest, or dividends) has a paycheck
 with gross pay and deductions, and the app calculates the net pay. The top line of the budget is
 **left to assign**: the planned net income minus the budget targets. The goal is `$0`, so every
 dollar of net pay has a job. See **Income Plan and Left to Assign**.
@@ -890,8 +891,10 @@ active keys:
 
 ## Income Plan and Left to Assign
 
-An **income source** is one job of one person (`IncomeSource-{stage}`). A person can have any
-number of them. Each dense month holds one **paycheck row** for each active income source, in
+An **income source** is one stream of income that the plan counts, such as a job, interest, or
+dividends (`IncomeSource-{stage}`). It belongs to one person, and a person can have any number of
+them. Every kind works the same way: for a source with no deductions, the gross pay equals the net
+pay. Each dense month holds one **paycheck row** for each active income source, in
 `IncomePlan-{stage}`, with the same month rules as a Budget row: dense past and current months,
 sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
 entry with an explanation for each change.

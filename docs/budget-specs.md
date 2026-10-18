@@ -13,8 +13,9 @@
 - **Locked year-month** — any year-month that is not editable.
 - **Override** — a way for the user to act on a locked year-month. The server must enforce the
   override. It is not enough to hide the action in the UI.
-- **Income source** — one job of one person, such as one employer. A person can have more than one
-  income source.
+- **Income source** — one stream of income that the plan counts, such as a job, interest, or
+  dividends. Each income source belongs to one person, and a person can have any number of them.
+  Every kind of income source works the same way.
 - **Paycheck** — the gross pay of one income source for one pay period, and the list of deductions
   from it.
 - **Net pay** — the gross pay of a paycheck minus all its deductions.

@@ -1,6 +1,7 @@
 """The income plan: income sources, paychecks, and one-time income lines.
 
-An income source is one job of one person. Each dense month holds one paycheck row for each
+An income source is any stream of income that the plan counts, such as a job, interest, or
+dividends. Every kind works the same way. Each dense month holds one paycheck row for each
 income source, with the same month rules as a budget target. A paycheck is one value: the gross
 pay of one pay period, a list of deductions, and the number of paychecks that the plan counts in
 each month. The app calculates the net pay. It never stores it.

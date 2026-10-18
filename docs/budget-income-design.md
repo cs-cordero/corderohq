@@ -54,7 +54,7 @@ The user made these decisions in a design chat. Do not change one without a ques
 | **Do not model changes to net pay during the year** (the 401k limit, the Social Security wage limit). | No budget app does this. The user cannot keep it correct. The user changes the paycheck by hand. |
 | **DCFSA is only a pre-tax deduction.** It has no link to a category. | The user can use DCFSA money for any qualified expense, not only childcare. A DCFSA payout is extra money, the same as the third paycheck. |
 | The income plan uses the **same month rules as a budget target**. | Consistency. A locked month must show the same left to assign amount for ever (Spec 2). |
-| The unit of income is an **income source**, not a person. | A person can have more than one job. |
+| The unit of income is an **income source**, not a person or a job. An income source is any stream of income, such as a job, interest, or dividends. | A person can have more than one job, and later the user may plan interest or dividend streams. Each kind works the same way. |
 | **Actual income is not tracked.** | The user does not want it. Paycheck deposits get Skip. |
 | **No category balances** (no envelopes, no carryover). | The user does not want them. Money counts one time, when it goes into a fund. Money that leaves a fund is Off-budget. |
 | **A target that carries forward after a one-month change is OK.** | The user changes it back by hand. |
