@@ -227,8 +227,7 @@ function PaycheckBreakdown({ paycheck }: { paycheck: IncomeMonthPaycheck }) {
                 </tr>
                 <tr>
                     <td>
-                        × {paycheck.paychecksPerMonth} paycheck{paycheck.paychecksPerMonth !== 1 ? "s" : ""} in
-                        the plan
+                        × {paycheck.paychecksPerMonth} paycheck{paycheck.paychecksPerMonth !== 1 ? "s" : ""} in the plan
                     </td>
                     <td />
                     <td className="num">
@@ -380,9 +379,7 @@ export default function IncomePage() {
                         showSuccess("Pin saved; later pins kept");
                     }
                 } else if (result.warnings.pinMatchesCarriedValue.includes(incomeSourceId)) {
-                    showSuccess(
-                        "Pin saved — note: this matches the paycheck that would carry forward without a pin.",
-                    );
+                    showSuccess("Pin saved — note: this matches the paycheck that would carry forward without a pin.");
                 } else {
                     showSuccess("Pin saved");
                 }
@@ -754,8 +751,8 @@ export default function IncomePage() {
 
             <h2>Income sources</h2>
             <p className="hint">
-                An income source is any stream of income that you plan, such as a job, interest, or dividends.
-                A change here affects every month. A change to a paycheck goes in the month above.
+                An income source is any stream of income that you plan, such as a job, interest, or dividends. A change
+                here affects every month. A change to a paycheck goes in the month above.
             </p>
             <table className="data-table">
                 <thead>

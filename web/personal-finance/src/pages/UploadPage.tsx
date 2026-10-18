@@ -368,8 +368,8 @@ export default function UploadPage() {
                     </div>
                     {uploadAccounts.length === 0 && (
                         <p className="hint">
-                            No account can take an upload yet. On the Accounts page, add an account and give it a
-                            budget role.
+                            No account can take an upload yet. On the Accounts page, add an account and give it a budget
+                            role.
                         </p>
                     )}
                 </div>

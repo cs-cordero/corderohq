@@ -27,7 +27,7 @@ Nothing here reads a table. The handler loads the rows and passes them in.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -82,7 +82,7 @@ def _days_apart(first: date | None, second: date | None) -> int | None:
 
 
 def _find_pairs(
-    row: Mapping[str, Any], upload_account_id: str, saved: list[Mapping[str, Any]]
+    row: Mapping[str, Any], upload_account_id: str, saved: Sequence[Mapping[str, Any]]
 ) -> list[Mapping[str, Any]]:
     """Return the saved transactions that look like the other side of `row`."""
     row_date = parse_date(str(row["transactionDate"]))
@@ -121,7 +121,7 @@ def find_other_side(
     row: Mapping[str, Any],
     upload_account_id: str,
     accounts_by_id: Mapping[str, Mapping[str, Any]],
-    saved: list[Mapping[str, Any]],
+    saved: Sequence[Mapping[str, Any]],
 ) -> OtherSide:
     """Run the steps in the module docstring, and return the first answer."""
     review: tuple[str, ...] = ()
@@ -210,10 +210,10 @@ def suggest(row: Mapping[str, Any], upload_role: str, side: OtherSide) -> Sugges
 
 
 def suggest_dispositions(
-    rows: list[Mapping[str, Any]],
+    rows: Sequence[Mapping[str, Any]],
     upload_account: Mapping[str, Any],
-    accounts: list[Mapping[str, Any]],
-    saved: list[Mapping[str, Any]],
+    accounts: Sequence[Mapping[str, Any]],
+    saved: Sequence[Mapping[str, Any]],
 ) -> list[Suggestion]:
     """Return one suggestion for each row, in order.
 

@@ -715,8 +715,8 @@ export default function AccountsPage() {
                             onChange={(e) => setForm({ ...form, lastFour: e.target.value })}
                         />
                         <span className="hint">
-                            The CSV import looks for these digits in a description, to find a transfer to or from
-                            this account.
+                            The CSV import looks for these digits in a description, to find a transfer to or from this
+                            account.
                         </span>
                     </div>
 

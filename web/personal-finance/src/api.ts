@@ -265,11 +265,7 @@ export const updateOneTimeLine = (
         method: "POST",
         ...jsonBody({ ...data, ...(override ? { override: true } : {}) }),
     });
-export const deleteOneTimeLine = (
-    yearMonth: string,
-    data: { lineId: string; explanation: string },
-    override = false,
-) =>
+export const deleteOneTimeLine = (yearMonth: string, data: { lineId: string; explanation: string }, override = false) =>
     request(`/income/${yearMonth}/one-time/delete`, parseDeletedOneTimeLine, {
         method: "POST",
         ...jsonBody({ ...data, ...(override ? { override: true } : {}) }),

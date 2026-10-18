@@ -169,8 +169,7 @@ def categorize_transactions(
 
     empty = {"kind": None, "categoryId": "", "categoryName": ""}
     return [
-        {"index": i, **by_unique_index.get(position[description], empty)}
-        for i, description in enumerate(descriptions)
+        {"index": i, **by_unique_index.get(position[description], empty)} for i, description in enumerate(descriptions)
     ]
 
 
