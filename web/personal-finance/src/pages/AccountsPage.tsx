@@ -184,7 +184,8 @@ export default function AccountsPage() {
     const peopleById = useMemo(() => new Map(people.map((p) => [p.personId, p])), [people]);
 
     const activeAccounts = useMemo(
-        () => accounts.filter((a) => a.active).sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name)),
+        () =>
+            accounts.filter((a) => a.active).sort((x, y) => x.sortOrder - y.sortOrder || x.name.localeCompare(y.name)),
         [accounts],
     );
     const inactiveAccounts = useMemo(
@@ -424,7 +425,10 @@ export default function AccountsPage() {
                 <td>
                     {account.name}
                     {account.excludedFromNetWorth && (
-                        <span className="badge badge-pinned nw-excluded-badge" title="Tracked but excluded from net worth totals">
+                        <span
+                            className="badge badge-pinned nw-excluded-badge"
+                            title="Tracked but excluded from net worth totals"
+                        >
                             Excluded
                         </span>
                     )}
@@ -680,7 +684,10 @@ export default function AccountsPage() {
                             <th>Actions</th>
                         </tr>
                     </thead>
-                    <SortableContext items={activeAccounts.map((a) => a.accountId)} strategy={verticalListSortingStrategy}>
+                    <SortableContext
+                        items={activeAccounts.map((a) => a.accountId)}
+                        strategy={verticalListSortingStrategy}
+                    >
                         <tbody>
                             {activeAccounts.length === 0 && (
                                 <tr>

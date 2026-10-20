@@ -3,9 +3,7 @@
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill, row_total
 
 
-def _row(
-    year_month: str, account_id: str, by_class: dict[str, int], note: str | None = None
-) -> dict[str, object]:
+def _row(year_month: str, account_id: str, by_class: dict[str, int], note: str | None = None) -> dict[str, object]:
     """A per-class snapshot row ({byAssetClass: {class: millionths}})."""
     row: dict[str, object] = {"yearMonth": year_month, "accountId": account_id, "byAssetClass": dict(by_class)}
     if note is not None:

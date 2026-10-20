@@ -448,11 +448,7 @@ export class PersonalFinanceWebStack extends cdk.Stack {
         });
     }
 
-    private createDnsRecords(
-        rootZone: route53.IHostedZone,
-        distribution: cloudfront.Distribution,
-        stage: Stage,
-    ): void {
+    private createDnsRecords(rootZone: route53.IHostedZone, distribution: cloudfront.Distribution, stage: Stage): void {
         const domain = personalFinanceDomain(stage);
 
         new route53.ARecord(this, "CloudFrontAlias", {

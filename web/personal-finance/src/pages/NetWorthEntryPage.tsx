@@ -419,8 +419,8 @@ export default function NetWorthEntryPage() {
 
                     {isFuture ? (
                         <p className="hint">
-                            Future months can't be recorded — net worth is entered as it happens. Pick the current
-                            month or a past one.
+                            Future months can't be recorded — net worth is entered as it happens. Pick the current month
+                            or a past one.
                         </p>
                     ) : rows.length === 0 ? (
                         <p className="empty">

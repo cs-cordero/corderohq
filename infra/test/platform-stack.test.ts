@@ -151,9 +151,7 @@ describe("PlatformStack", () => {
         test("validates against the root zone", () => {
             template.hasResourceProperties("AWS::CertificateManager::Certificate", {
                 DomainName: "corderohq.com",
-                DomainValidationOptions: Match.arrayWith([
-                    Match.objectLike({ DomainName: "corderohq.com" }),
-                ]),
+                DomainValidationOptions: Match.arrayWith([Match.objectLike({ DomainName: "corderohq.com" })]),
             });
         });
     });

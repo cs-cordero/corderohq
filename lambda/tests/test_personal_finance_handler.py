@@ -2041,9 +2041,7 @@ class TestGetNetWorthHistory:
         mock_at.list_all.return_value = [
             {"accountId": "a1", "name": "Checking", "active": True, "liability": False, "sortOrder": 0},
         ]
-        mock_st.scan_all.return_value = [
-            {"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 1000}}
-        ]
+        mock_st.scan_all.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 1000}}]
         result = handler(_make_event("GET", "/api/net-worth/history"), None)
         assert result["statusCode"] == 200
         body = json.loads(result["body"])

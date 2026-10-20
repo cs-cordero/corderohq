@@ -158,9 +158,7 @@ class TestAccountTableCreate:
     def test_year_rejected_without_target_date(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="only allowed when target_date"):
-            accounts.create(
-                name="B", account_type="brokerage", asset_classes=["cash"], owners=["p1"], target_year=2055
-            )
+            accounts.create(name="B", account_type="brokerage", asset_classes=["cash"], owners=["p1"], target_year=2055)
 
     def test_rejects_empty_owners(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}

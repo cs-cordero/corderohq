@@ -89,13 +89,7 @@ export default function NetWorthChart({ months, netWorth }: NetWorthChartProps) 
                 {/* gridlines + y labels */}
                 {gridVals.map((gv, i) => (
                     <g key={i}>
-                        <line
-                            className="nw-chart-grid"
-                            x1={M.left}
-                            x2={M.left + PLOT_W}
-                            y1={y(gv)}
-                            y2={y(gv)}
-                        />
+                        <line className="nw-chart-grid" x1={M.left} x2={M.left + PLOT_W} y1={y(gv)} y2={y(gv)} />
                         <text className="nw-chart-axis" x={M.left + PLOT_W + 6} y={y(gv) + 3}>
                             {abbrev(gv, true)}
                         </text>

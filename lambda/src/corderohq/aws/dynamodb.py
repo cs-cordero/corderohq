@@ -1202,9 +1202,7 @@ class AccountTable:
             values[":name"] = name
         if "assetClasses" in updates:
             if meta.fixed_asset_class is not None:
-                raise ValueError(
-                    f"assetClasses is fixed for {existing['accountType']} accounts and cannot be changed"
-                )
+                raise ValueError(f"assetClasses is fixed for {existing['accountType']} accounts and cannot be changed")
             values[":ac"] = validate_asset_classes(updates["assetClasses"])
             set_parts.append("assetClasses = :ac")
         if "sortOrder" in updates:
