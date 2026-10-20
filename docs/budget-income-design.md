@@ -76,7 +76,7 @@ The files that the work changes. Paths are from the repository root.
 | Area | Files |
 |---|---|
 | HTTP routes | `lambda/src/corderohq/personal_finance_handler.py` (one `if`/`elif` chain in `handler()`; module-level table objects at the top; `_ensure_hydrated()` runs the densify step) |
-| Table classes, summary | `lambda/src/corderohq/aws/dynamodb/`: one file for each table (`budget.py`, `transactions.py`, `audit_log.py`, `account.py`, and so on), `summary.py` (`compute_summary()`), `util.py` (the shared resource and the paging helpers). Import every name from `corderohq.aws.dynamodb`. |
+| Table classes, summary | `lambda/src/corderohq/aws/dynamodb/`: one file for each table, with a file name that matches the table (`budget.py`, `transactions.py`, `budget_audit_log.py` with `BudgetAuditLogTable`, `account.py`, and so on), `summary.py` (`compute_summary()`), `income_summary.py` (`compute_income()`), `util.py` (the shared resource and the paging helpers). Import every name from `corderohq.aws.dynamodb`. |
 | Month rules | `lambda/src/corderohq/budget/densify.py` (`DenseSparseStore`, `densify()`, `resolve_future()`, `resolve_future_targets()`, `walk_back_for()`, `value_at_or_before()`), `budget/editability.py`; the adapter `BudgetCarryStore` in `aws/dynamodb/budget.py` and `active_category_ids()` in `aws/dynamodb/category.py` |
 | CSV import | `lambda/src/corderohq/budget/csv_import.py` (`map_columns()`, `categorize_transactions()`); the upload flow is `_post_transactions_upload()` in the handler |
 | Cron densify | `lambda/src/corderohq/scheduled_densify.py` |
@@ -439,7 +439,7 @@ leftToAssign(M)     = plannedNetIncome(M) − totals.budgeted(M)
 - No transaction changes either number (Spec 43).
 
 New shared function: `compute_income(income_plan, income_sources, year_month, now)` in
-`aws/dynamodb/income_plan.py`. It returns the body of `GET /api/income/{YYYY-MM}`.
+`aws/dynamodb/income_summary.py`. It returns the body of `GET /api/income/{YYYY-MM}`.
 
 The value appears in two responses:
 

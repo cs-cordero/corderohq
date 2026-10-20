@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from corderohq.aws.dynamodb import (
     AccountTable,
-    AuditLogTable,
+    BudgetAuditLogTable,
     BudgetCarryStore,
     BudgetTable,
     CategoryGroupTable,
@@ -76,7 +76,7 @@ _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
 _TRANSACTIONS_TABLE = TransactionsTable(get_env_var("TRANSACTIONS_TABLE_NAME"))
 _INCOME_SOURCE_TABLE = IncomeSourceTable(get_env_var("INCOME_SOURCE_TABLE_NAME"))
 _INCOME_PLAN_TABLE = IncomePlanTable(get_env_var("INCOME_PLAN_TABLE_NAME"))
-_AUDIT_LOG_TABLE = AuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
+_AUDIT_LOG_TABLE = BudgetAuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
 _PROFILE_TABLE = ProfileTable(get_env_var("PROFILE_TABLE_NAME"))
 _ACCOUNT_TABLE = AccountTable(get_env_var("ACCOUNT_TABLE_NAME"))
 _NETWORTH_SNAPSHOT_TABLE = NetWorthSnapshotTable(get_env_var("NETWORTH_SNAPSHOT_TABLE_NAME"))

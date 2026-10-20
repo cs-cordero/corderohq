@@ -1,18 +1,18 @@
-"""Tests for AuditLogTable."""
+"""Tests for BudgetAuditLogTable."""
 
 from unittest.mock import MagicMock
 
-from corderohq.aws.dynamodb import AuditLogTable
+from corderohq.aws.dynamodb import BudgetAuditLogTable
 
 
-def _make_table() -> tuple[AuditLogTable, MagicMock]:
-    """Build an AuditLogTable backed by a MagicMock DynamoDB resource.
+def _make_table() -> tuple[BudgetAuditLogTable, MagicMock]:
+    """Build an BudgetAuditLogTable backed by a MagicMock DynamoDB resource.
 
     Returns (table, mock) so tests can assert on the mock directly instead of
     going through `mock.*` — which ty rejects because the class
     annotates `_table` with the real boto3 Table type.
     """
-    at = AuditLogTable.__new__(AuditLogTable)
+    at = BudgetAuditLogTable.__new__(BudgetAuditLogTable)
     mock = MagicMock()
     at._table = mock
     return at, mock

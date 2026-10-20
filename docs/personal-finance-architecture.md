@@ -56,9 +56,10 @@ lambda/src/corderohq/
     aws/dynamodb/          One file for each DynamoDB table; __init__.py exports every name
         util.py            The shared boto3 resource, the budget time zone, scan_pages(), query_pages()
         summary.py         compute_summary()
-        income_plan.py     IncomePlanTable, IncomePlanCarryStore, compute_income()
-        budget.py, category.py, category_group.py, transactions.py, income_source.py,
-        audit_log.py, profile.py, account.py, networth_snapshot.py
+        income_summary.py  compute_income()
+        budget.py, budget_audit_log.py, category.py, category_group.py, transactions.py,
+        income_source.py, income_plan.py, profile.py, account.py, net_worth_snapshot.py
+                           One file for each table; the file name matches the table name
 infra/lib/
     personal-finance-dynamodb-stack.ts   DynamoDB tables
     personal-finance-web-stack.ts        Cognito client, Lambda, API Gateway, CloudFront
@@ -212,7 +213,7 @@ it.
 
 The net worth record has three more tables. This document does not describe the net worth record
 in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`, `account.py`,
-`networth_snapshot.py`).
+`net_worth_snapshot.py`).
 
 ```
 +--------------------------+-----------------------+------------+----------------------------+

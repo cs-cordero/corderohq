@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 _AUDIT_PARTITION = "AUDIT"
 
 
-class AuditLogTable:
+class BudgetAuditLogTable:
     """Budget audit log writes and reads.
 
     Single-partition design: PK is always the literal string "AUDIT", SK is a ULID
