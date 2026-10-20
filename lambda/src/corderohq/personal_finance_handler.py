@@ -37,6 +37,7 @@ from corderohq.budget.csv_import import (
     parse_amount,
     parse_date,
     spending_account_needs_flip,
+    suggest_dispositions,
 )
 from corderohq.budget.densify import (
     carry_map,
@@ -46,7 +47,6 @@ from corderohq.budget.densify import (
     resolve_future_targets,
     walk_back_for,
 )
-from corderohq.budget.directions import suggest_dispositions
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
     DISPOSITION_BUDGET,

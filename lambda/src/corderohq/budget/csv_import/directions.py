@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-from corderohq.budget.csv_import import parse_date
+from corderohq.budget.csv_import.local_checks import parse_date
 from corderohq.budget.dispositions import DISPOSITION_BUDGET, DISPOSITION_OFF_BUDGET, DISPOSITION_SKIP
 from corderohq.networth.models import BUDGET_ROLE_HOLDING, BUDGET_ROLE_SPENDING, budget_role_of
 

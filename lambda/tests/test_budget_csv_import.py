@@ -30,8 +30,8 @@ def _mock_claude_response(text: str) -> MagicMock:
 
 
 class TestMapColumns:
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_returns_column_mapping(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
@@ -45,8 +45,8 @@ class TestMapColumns:
         assert result["description"] == "Description"
         assert result["amount"] == "Amount"
 
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_handles_amount_invert_flag(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
@@ -64,8 +64,8 @@ class TestMapColumns:
         result = map_columns(["Date", "Desc", "Amount"], ["date", "text", "number"])
         assert result["amount_invert"] is True
 
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_prompt_has_headers_and_types_only(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
@@ -78,8 +78,8 @@ class TestMapColumns:
 
 
 class TestCategorizeTransactions:
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_returns_category_assignments(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
@@ -103,8 +103,8 @@ class TestCategorizeTransactions:
         assert result[1]["categoryId"] == "cat2"
         assert result[0]["kind"] == "expense"
 
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_sends_each_description_once_and_maps_back(
         self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock
     ) -> None:
@@ -128,8 +128,8 @@ class TestCategorizeTransactions:
         assert [r["categoryId"] for r in result] == ["cat1", "", "cat1"]
         assert [r["index"] for r in result] == [0, 1, 2]
 
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_unknown_kind_and_category_are_dropped(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client

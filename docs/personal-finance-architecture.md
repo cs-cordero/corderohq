@@ -45,8 +45,11 @@ web/personal-finance/    React + TypeScript frontend (Vite)
 lambda/src/corderohq/
     personal_finance_handler.py  Lambda entrypoint + HTTP routing
     scheduled_densify.py   Lambda that the monthly schedule calls (see Densification)
-    budget/csv_import.py   LLM-driven CSV column mapping + categorization, local checks, fingerprints
-    budget/directions.py   The direction table: a suggested disposition for each CSV row
+    budget/csv_import/     The CSV import; __init__.py exports every name
+        llm.py             The two LLM calls: the column mapping and the categorization
+        local_checks.py    Column types, dates, amounts and their sign, the bank category
+        fingerprints.py    The fingerprint of each row, to find a row that was saved before
+        directions.py      The direction table: a suggested disposition for each CSV row
     budget/dispositions.py The Budget / Off-budget / Skip rules of a transaction
     budget/income.py       Paycheck rules, net pay, and the IncomePlan row IDs
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
@@ -1136,7 +1139,7 @@ The frontend builds the same group name from a stage value. The deploy puts that
 `config.json`. The admin toggle and the `/admin` route therefore appear only when the user holds
 the claim for that stage.
 
-## LLM-Driven CSV Import (`budget/csv_import.py`)
+## LLM-Driven CSV Import (`budget/csv_import/`)
 
 Each upload belongs to one **account**, which the user chooses. The account needs a budget role:
 SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, a 529). The role comes
@@ -1157,7 +1160,7 @@ SSM:
 3. **Give a kind and a category.** `categorize_transactions()` sends each unique description one
    time, with the active category names. It returns a `kind` (expense, refund, income,
    card_payment, own_transfer) and a category for each one, and maps them back to every row.
-4. **Suggest a disposition.** `budget/directions.py` finds the other side of each row: a saved
+4. **Suggest a disposition.** `budget/csv_import/directions.py` finds the other side of each row: a saved
    transaction in another account with the opposite amount within 4 days (PAIR), a 4-digit group
    in the description that is in the `lastFour` of one other account (LAST_FOUR), the bank's
    category (BANK, from a generic word list), or the kind (LLM). The direction table then gives

@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from corderohq.budget.directions import Suggestion, suggest_dispositions
+from corderohq.budget.csv_import.directions import Suggestion, suggest_dispositions
 
 _CHECKING = {"accountId": "chk", "accountType": "checking"}
 _CARD = {"accountId": "card", "accountType": "credit_card", "lastFour": ["4321"]}

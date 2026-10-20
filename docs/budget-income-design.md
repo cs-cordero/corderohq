@@ -78,7 +78,7 @@ The files that the work changes. Paths are from the repository root.
 | HTTP routes | `lambda/src/corderohq/personal_finance_handler.py` (one `if`/`elif` chain in `handler()`; module-level table objects at the top; `_ensure_hydrated()` runs the densify step) |
 | Table classes, summary | `lambda/src/corderohq/aws/dynamodb/`: one file for each table, with a file name that matches the table (`budget.py`, `transactions.py`, `budget_audit_log.py` with `BudgetAuditLogTable`, `account.py`, and so on), `summary.py` (`compute_summary()`), `income_summary.py` (`compute_income()`), `util.py` (the shared resource and the paging helpers). Import every name from `corderohq.aws.dynamodb`. |
 | Month rules | `lambda/src/corderohq/budget/densify.py` (`DenseSparseStore`, `densify()`, `resolve_future()`, `resolve_future_targets()`, `walk_back_for()`, `value_at_or_before()`), `budget/editability.py`; the adapter `BudgetCarryStore` in `aws/dynamodb/budget.py` and `active_category_ids()` in `aws/dynamodb/category.py` |
-| CSV import | `lambda/src/corderohq/budget/csv_import.py` (`map_columns()`, `categorize_transactions()`); the upload flow is `_post_transactions_upload()` in the handler |
+| CSV import | `lambda/src/corderohq/budget/csv_import/`: `llm.py` (`map_columns()`, `categorize_transactions()`), `local_checks.py`, `fingerprints.py`, `directions.py`; the upload flow is `_post_transactions_upload()` in the handler |
 | Cron densify | `lambda/src/corderohq/scheduled_densify.py` |
 | Account types | `lambda/src/corderohq/networth/models.py` (`AccountType`, `_ACCOUNT_TYPE_META`) |
 | Tables (CDK) | `infra/lib/personal-finance-dynamodb-stack.ts` |
@@ -633,7 +633,7 @@ Inputs: the role of the upload account, the direction (out or in), and the other
 | HOLDING | in | anything | SKIP | no |
 | any | any | unknown (no step gave an answer) | SKIP | **yes** |
 
-Built in CP9 as `budget/directions.py`. Two details: an account with no budget role (such as a
+Built in CP9 as `budget/csv_import/directions.py`. Two details: an account with no budget role (such as a
 mortgage) counts as the outside world, and a row where no step finds the other side gets SKIP
 and the reason `unknown_direction`.
 
