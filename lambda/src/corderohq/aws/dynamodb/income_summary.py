@@ -9,7 +9,7 @@ from corderohq.aws.dynamodb.income_plan import IncomePlanCarryStore, IncomePlanT
 from corderohq.aws.dynamodb.income_source import IncomeSourceTable, active_income_source_ids
 from corderohq.aws.dynamodb.util import BUDGET_TZ
 from corderohq.budget.densify import carry_map, walk_back_for
-from corderohq.budget.editability import editability
+from corderohq.budget.editability import EditabilityState, editability
 from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, monthly_net, net_amount
 
 
@@ -53,7 +53,7 @@ def compute_income(
             if not str(row["lineId"]).startswith(PAYMENT_LINE_PREFIX):
                 continue
             source = sources_by_id.get(row["incomeSourceId"])
-            if state == "LOCKED" or (source is not None and source.get("active", False)):
+            if state == EditabilityState.LOCKED or (source is not None and source.get("active", False)):
                 payment_by_source[str(row["incomeSourceId"])] = payment_of(row)
 
     payments: list[dict[str, Any]] = []

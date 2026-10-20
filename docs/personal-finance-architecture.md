@@ -1334,6 +1334,13 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 
 ## Key Design Decisions
 
+- **An enum for each fixed set of values** — A set of strings that the app stores or sends is a
+  `StrEnum`, such as `Disposition`, `EditabilityState`, `AuditAction`, `BudgetRole`,
+  `IncomeLineType`, `PayFrequency`, `DeductionKind`, `TransactionKind`, `SuggestedBy`,
+  `ReviewReason`, and `RowIssue`. A member is a `str`, so it compares equal to the stored string,
+  and JSON and boto3 write its value. A set that never leaves the process is a plain `Enum`, such
+  as `BankHint` and `SideKind`.
+
 - **A plan-based budget** — Left to assign = planned net income − targets. The plan counts the
   same number of payments every month, so extra money (a third paycheck, a bonus) is not in the
   plan unless the user adds a one-time line. The app does not track actual income.

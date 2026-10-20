@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from ulid import ULID
@@ -14,6 +15,26 @@ _LOGGER = logging.getLogger(__name__)
 
 
 _AUDIT_PARTITION = "AUDIT"
+
+
+class AuditAction(StrEnum):
+    """The action of an audit log entry. The value is stored in `BudgetAuditLog.action`."""
+
+    # Budget targets
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    PIN = "PIN"
+    UNPIN = "UNPIN"
+    CATEGORY_HARD_DELETE = "CATEGORY_HARD_DELETE"
+    # The payments of the income plan
+    INCOME_CREATE = "INCOME_CREATE"
+    INCOME_UPDATE = "INCOME_UPDATE"
+    INCOME_PIN = "INCOME_PIN"
+    INCOME_UNPIN = "INCOME_UNPIN"
+    # The one-time income lines
+    ONE_TIME_CREATE = "ONE_TIME_CREATE"
+    ONE_TIME_UPDATE = "ONE_TIME_UPDATE"
+    ONE_TIME_DELETE = "ONE_TIME_DELETE"
 
 
 class BudgetAuditLogTable:
@@ -31,7 +52,7 @@ class BudgetAuditLogTable:
         self,
         effective_year_month: str | None,
         category_id: str | None,
-        action: str,
+        action: AuditAction,
         explanation: str,
         user: dict[str, str],
         changes: dict[str, Any],

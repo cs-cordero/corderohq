@@ -12,8 +12,8 @@ from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.transactions import TransactionsTable
 from corderohq.aws.dynamodb.util import BUDGET_TZ
 from corderohq.budget.densify import carry_map, value_at_or_before
-from corderohq.budget.dispositions import DISPOSITION_BUDGET, DISPOSITION_OFF_BUDGET, disposition_of
-from corderohq.budget.editability import editability
+from corderohq.budget.dispositions import Disposition, disposition_of
+from corderohq.budget.editability import EditabilityState, editability
 
 
 def _month_end_utc(year_month: str) -> datetime:
@@ -117,10 +117,10 @@ def compute_summary(
         raw_amount = txn.get("amount")
         amount = Decimal("0") if raw_amount is None else Decimal(str(raw_amount))
         disposition = disposition_of(txn)
-        if disposition == DISPOSITION_OFF_BUDGET:
+        if disposition == Disposition.OFF_BUDGET:
             off_budget_actual += amount
             continue
-        if disposition != DISPOSITION_BUDGET:
+        if disposition != Disposition.BUDGET:
             continue
         cat_id = txn["categoryId"]
         budget_txn_cat_ids.add(cat_id)
@@ -129,7 +129,7 @@ def compute_summary(
             nonzero_txn_cat_ids.add(cat_id)
 
     state = editability(year_month, now)
-    is_locked = state == "LOCKED"
+    is_locked = state == EditabilityState.LOCKED
 
     if is_locked:
         # Locked rule: every category with ANY budget row or ANY transaction (zero or not).

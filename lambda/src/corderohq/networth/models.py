@@ -125,38 +125,42 @@ _ACCOUNT_TYPE_META: dict[AccountType, AccountTypeMeta] = {
 # The budget role of an account, for the CSV import. Money counts in the budget only when it
 # crosses the boundary between the outside world, the spending accounts, and the holding
 # accounts. An account with no role cannot take a CSV upload.
-BUDGET_ROLE_SPENDING = "SPENDING"
-BUDGET_ROLE_HOLDING = "HOLDING"
-BUDGET_ROLES = frozenset({BUDGET_ROLE_SPENDING, BUDGET_ROLE_HOLDING})
+class BudgetRole(StrEnum):
+    """The budget role of an account. The value is stored in `Account.budgetRole`."""
 
-_DEFAULT_BUDGET_ROLE: dict[AccountType, str] = {
-    AccountType.CHECKING: BUDGET_ROLE_SPENDING,
-    AccountType.CREDIT_CARD: BUDGET_ROLE_SPENDING,
-    AccountType.SAVINGS: BUDGET_ROLE_HOLDING,
-    AccountType.BROKERAGE: BUDGET_ROLE_HOLDING,
-    AccountType.PLAN_529: BUDGET_ROLE_HOLDING,
-    AccountType.PLAN_530A: BUDGET_ROLE_HOLDING,
+    SPENDING = "SPENDING"  # checking, a credit card: expenses come from here
+    HOLDING = "HOLDING"  # a savings fund, a brokerage, a 529: money sits here
+
+
+_DEFAULT_BUDGET_ROLE: dict[AccountType, BudgetRole] = {
+    AccountType.CHECKING: BudgetRole.SPENDING,
+    AccountType.CREDIT_CARD: BudgetRole.SPENDING,
+    AccountType.SAVINGS: BudgetRole.HOLDING,
+    AccountType.BROKERAGE: BudgetRole.HOLDING,
+    AccountType.PLAN_529: BudgetRole.HOLDING,
+    AccountType.PLAN_530A: BudgetRole.HOLDING,
 }
 
 
-def budget_role_of(account: dict[str, Any]) -> str | None:
+def budget_role_of(account: dict[str, Any]) -> BudgetRole | None:
     """Return the budget role of an account: its own `budgetRole`, else the default for its type."""
     explicit = account.get("budgetRole")
-    if isinstance(explicit, str) and explicit in BUDGET_ROLES:
-        return explicit
+    if isinstance(explicit, str) and explicit in BudgetRole:
+        return BudgetRole(explicit)
     account_type = account.get("accountType")
     if isinstance(account_type, str) and account_type in _ACCOUNT_TYPE_VALUES:
         return _DEFAULT_BUDGET_ROLE.get(AccountType(account_type))
     return None
 
 
-def validate_budget_role(value: Any) -> str | None:
+def validate_budget_role(value: Any) -> BudgetRole | None:
     """Return the budget role, or None to remove it (the account then uses its default)."""
     if value is None:
         return None
-    if not isinstance(value, str) or value not in BUDGET_ROLES:
-        raise ValueError(f"budgetRole must be one of {sorted(BUDGET_ROLES)} or null")
-    return value
+    try:
+        return BudgetRole(value)
+    except ValueError:
+        raise ValueError(f"budgetRole must be one of {[r.value for r in BudgetRole]} or null") from None
 
 
 def validate_last_four(value: Any) -> list[str]:

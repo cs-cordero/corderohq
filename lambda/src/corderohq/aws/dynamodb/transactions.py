@@ -9,7 +9,7 @@ from typing import Any
 from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_pages
-from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, DISPOSITION_BUDGET, resolve_disposition_fields
+from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition, resolve_disposition_fields
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class TransactionsTable:
         description: str,
         amount: int,
         category_id: str | None,
-        disposition: str = DISPOSITION_BUDGET,
+        disposition: Disposition = Disposition.BUDGET,
         account_id: str | None = None,
         note: str | None = None,
     ) -> dict[str, Any]:

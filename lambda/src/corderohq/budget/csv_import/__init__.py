@@ -6,10 +6,11 @@
 - `directions.py` — the direction table: a suggested disposition for each row.
 """
 
-from corderohq.budget.csv_import.directions import Suggestion, suggest_dispositions
+from corderohq.budget.csv_import.directions import ReviewReason, SuggestedBy, Suggestion, suggest_dispositions
 from corderohq.budget.csv_import.fingerprints import assign_fingerprints, fingerprint, normalize_description
-from corderohq.budget.csv_import.llm import TRANSACTION_KINDS, categorize_transactions, map_columns
+from corderohq.budget.csv_import.llm import TransactionKind, categorize_transactions, map_columns
 from corderohq.budget.csv_import.local_checks import (
+    BankHint,
     bank_category_hint,
     detect_column_types,
     parse_amount,
@@ -18,8 +19,11 @@ from corderohq.budget.csv_import.local_checks import (
 )
 
 __all__ = [
-    "TRANSACTION_KINDS",
+    "BankHint",
+    "ReviewReason",
+    "SuggestedBy",
     "Suggestion",
+    "TransactionKind",
     "assign_fingerprints",
     "bank_category_hint",
     "categorize_transactions",

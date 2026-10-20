@@ -2,6 +2,7 @@
 
 import json
 import logging
+from enum import StrEnum
 from typing import Any
 
 import anthropic
@@ -39,7 +40,14 @@ Respond ONLY with the JSON object, no other text."""
 
 # The kinds that the categorization returns for each description. The import uses the kind to
 # suggest a disposition.
-TRANSACTION_KINDS = frozenset({"expense", "refund", "income", "card_payment", "own_transfer"})
+class TransactionKind(StrEnum):
+    """The kind that the categorization gives each description. The prompt names these values."""
+
+    EXPENSE = "expense"  # a purchase or a bill
+    REFUND = "refund"  # money back from a merchant
+    INCOME = "income"  # a paycheck, a bonus, interest, or a dividend
+    CARD_PAYMENT = "card_payment"  # a payment to or from a credit card
+    OWN_TRANSFER = "own_transfer"  # money moved between the household's own accounts
 
 _CATEGORIZATION_PROMPT_TEMPLATE = """\
 You are a household budget categorizer. You get a list of transaction descriptions and a list \
@@ -159,7 +167,7 @@ def categorize_transactions(
         category_id = assignment.get("categoryId")
         valid_category = isinstance(category_id, str) and category_id in names_by_id
         by_unique_index[index] = {
-            "kind": kind if kind in TRANSACTION_KINDS else None,
+            "kind": TransactionKind(kind) if isinstance(kind, str) and kind in TransactionKind else None,
             "categoryId": category_id if valid_category else "",
             "categoryName": names_by_id[category_id] if valid_category else "",
         }

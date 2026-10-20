@@ -4,6 +4,7 @@ The code does these checks itself, so no cell value goes to the LLM.
 """
 
 from datetime import date, datetime
+from enum import Enum, auto
 
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y", "%d-%b-%Y", "%b %d, %Y")
 _TYPE_SAMPLE_SIZE = 50
@@ -78,15 +79,23 @@ _BANK_CARD_PAYMENT_WORDS = ("credit card payment", "card payment")
 _BANK_TRANSFER_WORDS = ("transfer",)
 
 
-def bank_category_hint(value: str | None) -> str | None:
-    """Return "INCOME", "CARD_PAYMENT", "TRANSFER", or None for the bank's category of a row."""
+class BankHint(Enum):
+    """What the bank's own category says about a row. It stays inside the upload, and is never stored."""
+
+    INCOME = auto()
+    CARD_PAYMENT = auto()
+    TRANSFER = auto()
+
+
+def bank_category_hint(value: str | None) -> BankHint | None:
+    """Return the hint in the bank's category of a row, or None."""
     if not value:
         return None
     text = value.lower()
     if any(word in text for word in _BANK_CARD_PAYMENT_WORDS):
-        return "CARD_PAYMENT"
+        return BankHint.CARD_PAYMENT
     if any(word in text for word in _BANK_TRANSFER_WORDS):
-        return "TRANSFER"
+        return BankHint.TRANSFER
     if any(word in text for word in _BANK_INCOME_WORDS):
-        return "INCOME"
+        return BankHint.INCOME
     return None

@@ -30,24 +30,54 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from enum import Enum, StrEnum, auto
 from typing import Any
 
-from corderohq.budget.csv_import.local_checks import parse_date
-from corderohq.budget.dispositions import DISPOSITION_BUDGET, DISPOSITION_OFF_BUDGET, DISPOSITION_SKIP
-from corderohq.networth.models import BUDGET_ROLE_HOLDING, BUDGET_ROLE_SPENDING, budget_role_of
+from corderohq.budget.csv_import.llm import TransactionKind
+from corderohq.budget.csv_import.local_checks import BankHint, parse_date
+from corderohq.budget.dispositions import Disposition
+from corderohq.networth.models import BudgetRole, budget_role_of
 
 PAIR_WINDOW_DAYS = 4
 
-# The other side of a row.
-_OUTSIDE = "OUTSIDE"  # a merchant, an employer, a bank: the outside world
-_OWN_UNKNOWN = "OWN_UNKNOWN"  # one of the user's own accounts, but the app cannot tell which
-_UNKNOWN = "UNKNOWN"
 
-# Reasons to look at a row first. A reason never blocks the commit.
-REVIEW_NO_PAIR_FOUND = "no_pair_found"
-REVIEW_LLM_GUESS = "llm_guess"
-REVIEW_MANY_PAIRS = "many_pairs"
-REVIEW_UNKNOWN_DIRECTION = "unknown_direction"
+
+class SideKind(Enum):
+    """The other side of a row. It stays inside the upload, and is never sent or stored."""
+
+    OUTSIDE = auto()  # a merchant, an employer, a bank: the outside world
+    ACCOUNT = auto()  # one of the user's own accounts, and the app knows which
+    OWN_UNKNOWN = auto()  # one of the user's own accounts, but the app cannot tell which
+    UNKNOWN = auto()
+
+
+class SuggestedBy(StrEnum):
+    """The step that found the other side of a row. The upload response sends the value."""
+
+    PAIR = "PAIR"
+    LAST_FOUR = "LAST_FOUR"
+    BANK = "BANK"
+    LLM = "LLM"
+    DEFAULT = "DEFAULT"
+
+
+class ReviewReason(StrEnum):
+    """A reason to look at a row first. It never blocks the commit. The upload response sends it."""
+
+    NO_PAIR_FOUND = "no_pair_found"
+    LLM_GUESS = "llm_guess"
+    MANY_PAIRS = "many_pairs"
+    UNKNOWN_DIRECTION = "unknown_direction"
+
+
+# For a bank hint: the other side, and the kind of money.
+_BANK_HINT_SIDES: dict[BankHint, tuple[SideKind, TransactionKind]] = {
+    BankHint.INCOME: (SideKind.OUTSIDE, TransactionKind.INCOME),
+    BankHint.CARD_PAYMENT: (SideKind.OWN_UNKNOWN, TransactionKind.CARD_PAYMENT),
+    BankHint.TRANSFER: (SideKind.OWN_UNKNOWN, TransactionKind.OWN_TRANSFER),
+}
+_OUTSIDE_KINDS = (TransactionKind.EXPENSE, TransactionKind.REFUND, TransactionKind.INCOME)
+_OWN_ACCOUNT_KINDS = (TransactionKind.CARD_PAYMENT, TransactionKind.OWN_TRANSFER)
 
 _FOUR_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
 
@@ -56,23 +86,23 @@ _FOUR_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
 class OtherSide:
     """What the steps found about the other side of one row."""
 
-    kind: str  # _OUTSIDE, _OWN_UNKNOWN, _UNKNOWN, or "ACCOUNT"
-    role: str | None = None  # the budget role of the other account, when kind is "ACCOUNT"
-    suggested_by: str = "DEFAULT"
+    kind: SideKind
+    role: BudgetRole | None = None  # the budget role of the other account, when kind is ACCOUNT
+    suggested_by: SuggestedBy = SuggestedBy.DEFAULT
     pair_with: dict[str, str] | None = None
-    # For _OUTSIDE: "income" or "refund" changes the suggestion for money in.
-    # For _OWN_UNKNOWN: "card_payment" or "own_transfer".
-    detail: str | None = None
-    review: tuple[str, ...] = ()
+    # For OUTSIDE: INCOME or REFUND changes the suggestion for money in.
+    # For OWN_UNKNOWN: CARD_PAYMENT or OWN_TRANSFER.
+    detail: TransactionKind | None = None
+    review: tuple[ReviewReason, ...] = ()
 
 
 @dataclass(frozen=True)
 class Suggestion:
-    disposition: str
+    disposition: Disposition
     category_id: str
-    suggested_by: str
+    suggested_by: SuggestedBy
     pair_with: dict[str, str] | None
-    review: list[str] = field(default_factory=list)
+    review: list[ReviewReason] = field(default_factory=list)
 
 
 def _days_apart(first: date | None, second: date | None) -> int | None:
@@ -104,16 +134,16 @@ def _find_pairs(
 
 def _account_side(
     account: Mapping[str, Any] | None,
-    suggested_by: str,
+    suggested_by: SuggestedBy,
     pair_with: dict[str, str] | None = None,
-    review: tuple[str, ...] = (),
+    review: tuple[ReviewReason, ...] = (),
 ) -> OtherSide:
     """Return the other side for a known account. An account with no budget role is outside the budget.
 
     For example, a loan or a mortgage account has no role, so a payment to it is an expense.
     """
     role = budget_role_of(dict(account)) if account is not None else None
-    kind = _OUTSIDE if role is None else "ACCOUNT"
+    kind = SideKind.OUTSIDE if role is None else SideKind.ACCOUNT
     return OtherSide(kind=kind, role=role, suggested_by=suggested_by, pair_with=pair_with, review=review)
 
 
@@ -124,15 +154,15 @@ def find_other_side(
     saved: Sequence[Mapping[str, Any]],
 ) -> OtherSide:
     """Run the steps in the module docstring, and return the first answer."""
-    review: tuple[str, ...] = ()
+    review: tuple[ReviewReason, ...] = ()
 
     pairs = _find_pairs(row, upload_account_id, saved)
     if len(pairs) == 1:
         pair = pairs[0]
         pair_with = {"yearMonth": str(pair["yearMonth"]), "sortId": str(pair["sortId"])}
-        return _account_side(accounts_by_id.get(str(pair["accountId"])), "PAIR", pair_with=pair_with)
+        return _account_side(accounts_by_id.get(str(pair["accountId"])), SuggestedBy.PAIR, pair_with=pair_with)
     if len(pairs) > 1:
-        review = (REVIEW_MANY_PAIRS,)
+        review = (ReviewReason.MANY_PAIRS,)
 
     digit_groups = set(_FOUR_DIGITS.findall(str(row["description"])))
     if digit_groups:
@@ -142,71 +172,70 @@ def find_other_side(
             if account_id != upload_account_id and digit_groups & set(account.get("lastFour") or [])
         ]
         if len(matching) == 1:
-            return _account_side(matching[0], "LAST_FOUR", review=review)
+            return _account_side(matching[0], SuggestedBy.LAST_FOUR, review=review)
 
     hint = row.get("_bankHint")
-    if hint == "INCOME":
-        return OtherSide(kind=_OUTSIDE, suggested_by="BANK", detail="income", review=review)
-    if hint == "CARD_PAYMENT":
-        return OtherSide(kind=_OWN_UNKNOWN, suggested_by="BANK", detail="card_payment", review=review)
-    if hint == "TRANSFER":
-        return OtherSide(kind=_OWN_UNKNOWN, suggested_by="BANK", detail="own_transfer", review=review)
+    if isinstance(hint, BankHint):
+        side_kind, detail = _BANK_HINT_SIDES[hint]
+        return OtherSide(kind=side_kind, suggested_by=SuggestedBy.BANK, detail=detail, review=review)
 
     kind = row.get("_kind")
-    if kind in ("expense", "refund", "income"):
-        return OtherSide(kind=_OUTSIDE, suggested_by="LLM", detail=str(kind), review=review)
-    if kind in ("card_payment", "own_transfer"):
-        return OtherSide(kind=_OWN_UNKNOWN, suggested_by="LLM", detail=str(kind), review=review)
+    if kind in _OUTSIDE_KINDS:
+        detail = TransactionKind(kind)
+        return OtherSide(kind=SideKind.OUTSIDE, suggested_by=SuggestedBy.LLM, detail=detail, review=review)
+    if kind in _OWN_ACCOUNT_KINDS:
+        detail = TransactionKind(kind)
+        return OtherSide(kind=SideKind.OWN_UNKNOWN, suggested_by=SuggestedBy.LLM, detail=detail, review=review)
 
-    return OtherSide(kind=_UNKNOWN, suggested_by="DEFAULT", review=review)
+    return OtherSide(kind=SideKind.UNKNOWN, suggested_by=SuggestedBy.DEFAULT, review=review)
 
 
-def suggest(row: Mapping[str, Any], upload_role: str, side: OtherSide) -> Suggestion:
+def suggest(row: Mapping[str, Any], upload_role: BudgetRole, side: OtherSide) -> Suggestion:
     """Apply the direction table to one row. See docs/budget-income-design.md "Step 7"."""
     category_id = str(row.get("categoryId") or "")
     money_out = int(row["amount"]) >= 0
     review = list(side.review)
 
-    def result(disposition: str, *reasons: str) -> Suggestion:
+    def result(disposition: Disposition, *reasons: ReviewReason) -> Suggestion:
         # A SKIP row has no category.
         return Suggestion(
             disposition=disposition,
-            category_id="" if disposition == DISPOSITION_SKIP else category_id,
+            category_id="" if disposition == Disposition.SKIP else category_id,
             suggested_by=side.suggested_by,
             pair_with=side.pair_with,
             review=review + [r for r in reasons if r not in review],
         )
 
-    if side.kind == _UNKNOWN:
-        return result(DISPOSITION_SKIP, REVIEW_UNKNOWN_DIRECTION)
+    if side.kind == SideKind.UNKNOWN:
+        return result(Disposition.SKIP, ReviewReason.UNKNOWN_DIRECTION)
 
-    own_account = side.kind in ("ACCOUNT", _OWN_UNKNOWN)
+    own_account = side.kind in (SideKind.ACCOUNT, SideKind.OWN_UNKNOWN)
 
-    if upload_role == BUDGET_ROLE_HOLDING:
+    if upload_role == BudgetRole.HOLDING:
         # Money into a fund is counted on the spending side. Money out of a fund to the outside
         # world already had its job, so it is Off-budget.
         if money_out and not own_account:
-            return result(DISPOSITION_OFF_BUDGET)
-        return result(DISPOSITION_SKIP)
+            return result(Disposition.OFF_BUDGET)
+        return result(Disposition.SKIP)
 
     # The upload account is a spending account.
     if not money_out:
-        if own_account or side.detail == "income":
-            return result(DISPOSITION_SKIP)
-        return result(DISPOSITION_BUDGET)  # a refund
+        if own_account or side.detail == TransactionKind.INCOME:
+            return result(Disposition.SKIP)
+        return result(Disposition.BUDGET)  # a refund
 
-    if side.kind == _OUTSIDE:
-        return result(DISPOSITION_BUDGET)
-    if side.kind == "ACCOUNT":
-        if side.role == BUDGET_ROLE_SPENDING:
-            return result(DISPOSITION_SKIP)  # such as checking pays the card
-        return result(DISPOSITION_BUDGET)  # to a holding account: the actual of a savings category
+    if side.kind == SideKind.OUTSIDE:
+        return result(Disposition.BUDGET)
+    if side.kind == SideKind.ACCOUNT:
+        if side.role == BudgetRole.SPENDING:
+            return result(Disposition.SKIP)  # such as checking pays the card
+        return result(Disposition.BUDGET)  # to a holding account: the actual of a savings category
     # One of the user's own accounts, but the app cannot tell which.
-    if side.detail == "card_payment":
-        return result(DISPOSITION_SKIP)
-    if side.detail == "own_transfer" and category_id:
-        return result(DISPOSITION_BUDGET, REVIEW_LLM_GUESS)
-    return result(DISPOSITION_SKIP, REVIEW_NO_PAIR_FOUND)
+    if side.detail == TransactionKind.CARD_PAYMENT:
+        return result(Disposition.SKIP)
+    if side.detail == TransactionKind.OWN_TRANSFER and category_id:
+        return result(Disposition.BUDGET, ReviewReason.LLM_GUESS)
+    return result(Disposition.SKIP, ReviewReason.NO_PAIR_FOUND)
 
 
 def suggest_dispositions(
@@ -222,6 +251,6 @@ def suggest_dispositions(
     transactions of the months around the upload, in every account.
     """
     upload_account_id = str(upload_account["accountId"])
-    upload_role = budget_role_of(dict(upload_account)) or BUDGET_ROLE_SPENDING
+    upload_role = budget_role_of(dict(upload_account)) or BudgetRole.SPENDING
     accounts_by_id = {str(a["accountId"]): a for a in accounts}
     return [suggest(row, upload_role, find_other_side(row, upload_account_id, accounts_by_id, saved)) for row in rows]

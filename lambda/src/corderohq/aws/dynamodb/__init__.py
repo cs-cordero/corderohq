@@ -2,7 +2,7 @@
 
 from corderohq.aws.dynamodb.account import AccountTable
 from corderohq.aws.dynamodb.budget import BudgetCarryStore, BudgetTable
-from corderohq.aws.dynamodb.budget_audit_log import BudgetAuditLogTable
+from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable
 from corderohq.aws.dynamodb.category import CategoryTable, active_category_ids
 from corderohq.aws.dynamodb.category_group import CategoryGroupTable
 from corderohq.aws.dynamodb.income_plan import IncomePlanCarryStore, IncomePlanTable
@@ -16,6 +16,7 @@ from corderohq.aws.dynamodb.util import current_year_month
 
 __all__ = [
     "AccountTable",
+    "AuditAction",
     "BudgetAuditLogTable",
     "BudgetCarryStore",
     "BudgetTable",

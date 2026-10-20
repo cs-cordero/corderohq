@@ -12,12 +12,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
-DISPOSITION_BUDGET = "BUDGET"
-DISPOSITION_OFF_BUDGET = "OFF_BUDGET"
-DISPOSITION_SKIP = "SKIP"
-DISPOSITIONS = frozenset({DISPOSITION_BUDGET, DISPOSITION_OFF_BUDGET, DISPOSITION_SKIP})
+
+class Disposition(StrEnum):
+    """How the budget counts a transaction. The value is stored in `Transactions.disposition`."""
+
+    BUDGET = "BUDGET"
+    OFF_BUDGET = "OFF_BUDGET"
+    SKIP = "SKIP"
+
 
 NOTE_MAX_LENGTH = 200
 
@@ -25,17 +30,17 @@ NOTE_MAX_LENGTH = 200
 DISPOSITION_ATTRIBUTES = ("disposition", "categoryId", "accountId", "note")
 
 
-def disposition_of(txn: Mapping[str, Any]) -> str:
+def disposition_of(txn: Mapping[str, Any]) -> Disposition:
     """Return the disposition of a transaction. An absent value means BUDGET."""
     value = txn.get("disposition")
-    return str(value) if value else DISPOSITION_BUDGET
+    return Disposition(value) if value else Disposition.BUDGET
 
 
 @dataclass(frozen=True)
 class DispositionFields:
     """The checked values of the attributes in `DISPOSITION_ATTRIBUTES`. `None` means absent."""
 
-    disposition: str
+    disposition: Disposition
     category_id: str | None
     account_id: str | None
     note: str | None
@@ -86,17 +91,18 @@ def resolve_disposition_fields(
 
     raw_disposition = pick("disposition")
     if raw_disposition is None or raw_disposition == "":
-        disposition = DISPOSITION_BUDGET
-    elif isinstance(raw_disposition, str) and raw_disposition in DISPOSITIONS:
-        disposition = raw_disposition
+        disposition = Disposition.BUDGET
     else:
-        raise ValueError(f"disposition must be one of {sorted(DISPOSITIONS)}")
+        try:
+            disposition = Disposition(raw_disposition)
+        except ValueError:
+            raise ValueError(f"disposition must be one of {[d.value for d in Disposition]}") from None
 
     category_id = _optional_str(pick("categoryId"), "categoryId")
-    if disposition == DISPOSITION_SKIP:
+    if disposition == Disposition.SKIP:
         # A SKIP row counts nowhere, so a category on it means nothing. Drop it.
         category_id = None
-    elif disposition == DISPOSITION_BUDGET and category_id is None and require_category:
+    elif disposition == Disposition.BUDGET and category_id is None and require_category:
         raise ValueError("categoryId is required for a BUDGET transaction")
 
     account_id = _optional_str(pick("accountId"), "accountId")

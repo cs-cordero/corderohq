@@ -9,7 +9,7 @@ from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_pages, scan_pages
 from corderohq.budget.densify import CarryRow
-from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, payment_line_id
+from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, IncomeLineType, payment_line_id
 
 
 def payment_of(row: dict[str, Any]) -> dict[str, Any]:
@@ -59,7 +59,7 @@ class IncomePlanTable:
         item: dict[str, Any] = {
             "yearMonth": year_month,
             "lineId": payment_line_id(income_source_id),
-            "lineType": "PAYMENT",
+            "lineType": IncomeLineType.PAYMENT,
             "incomeSourceId": income_source_id,
             **payment,
         }
@@ -90,7 +90,7 @@ class IncomePlanTable:
         item: dict[str, Any] = {
             "yearMonth": year_month,
             "lineId": line_id or f"{ONE_TIME_LINE_PREFIX}{ULID()}",
-            "lineType": "ONE_TIME",
+            "lineType": IncomeLineType.ONE_TIME,
             "label": label,
             "amount": amount,
             "createdAt": existing["createdAt"] if existing else now,

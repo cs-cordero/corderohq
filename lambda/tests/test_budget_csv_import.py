@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 
 from corderohq.budget.csv_import import (
+    BankHint,
     assign_fingerprints,
     bank_category_hint,
     categorize_transactions,
@@ -167,10 +168,10 @@ class TestLocalChecks:
         assert spending_account_needs_flip([5, -5]) is False
 
     def test_bank_category_hint(self) -> None:
-        assert bank_category_hint("Payroll Deposit") == "INCOME"
-        assert bank_category_hint("Interest Paid") == "INCOME"
-        assert bank_category_hint("Credit Card Payment") == "CARD_PAYMENT"
-        assert bank_category_hint("Transfer") == "TRANSFER"
+        assert bank_category_hint("Payroll Deposit") == BankHint.INCOME
+        assert bank_category_hint("Interest Paid") == BankHint.INCOME
+        assert bank_category_hint("Credit Card Payment") == BankHint.CARD_PAYMENT
+        assert bank_category_hint("Transfer") == BankHint.TRANSFER
         assert bank_category_hint("Groceries") is None
         assert bank_category_hint(None) is None
 

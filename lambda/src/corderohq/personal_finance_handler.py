@@ -6,11 +6,13 @@ import io
 import json
 import logging
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from corderohq.aws.dynamodb import (
     AccountTable,
+    AuditAction,
     BudgetAuditLogTable,
     BudgetCarryStore,
     BudgetTable,
@@ -49,14 +51,14 @@ from corderohq.budget.densify import (
 )
 from corderohq.budget.dispositions import (
     DISPOSITION_ATTRIBUTES,
-    DISPOSITION_BUDGET,
-    DISPOSITION_SKIP,
+    Disposition,
     disposition_of,
     resolve_disposition_fields,
 )
-from corderohq.budget.editability import editability
+from corderohq.budget.editability import EditabilityState, editability
 from corderohq.budget.income import (
     ONE_TIME_LINE_PREFIX,
+    IncomeLineType,
     payment_line_id,
     payments_equal,
     validate_frequency,
@@ -64,7 +66,7 @@ from corderohq.budget.income import (
     validate_one_time_amount,
     validate_payment,
 )
-from corderohq.networth.models import BUDGET_ROLE_SPENDING, budget_role_of, validate_asset_class
+from corderohq.networth.models import BudgetRole, budget_role_of, validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -291,13 +293,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _post_income_pin(event, year_month, user, now)
         elif path.startswith("/api/income/") and path.endswith("/one-time") and method == "POST":
             year_month = path.split("/")[-2]
-            return _post_one_time(event, year_month, user, now, line_action="CREATE")
+            return _post_one_time(event, year_month, user, now, line_action=AuditAction.ONE_TIME_CREATE)
         elif path.startswith("/api/income/") and path.endswith("/one-time/update") and method == "POST":
             year_month = path.split("/")[-3]
-            return _post_one_time(event, year_month, user, now, line_action="UPDATE")
+            return _post_one_time(event, year_month, user, now, line_action=AuditAction.ONE_TIME_UPDATE)
         elif path.startswith("/api/income/") and path.endswith("/one-time/delete") and method == "POST":
             year_month = path.split("/")[-3]
-            return _post_one_time(event, year_month, user, now, line_action="DELETE")
+            return _post_one_time(event, year_month, user, now, line_action=AuditAction.ONE_TIME_DELETE)
 
         # Summary
         elif path == "/api/summary" and method == "GET":
@@ -491,7 +493,7 @@ def _deactivate_category(
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
             category_id=category_id,
-            action="UNPIN",
+            action=AuditAction.UNPIN,
             explanation=explanation,
             user=user,
             changes={"amount": {"before": old_amount, "after": None}},
@@ -538,7 +540,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
     # open to change, so we count it as not locked. This matches the editability function.
     current_ym = _year_month_of(now)
     past_months = _BUDGET_TABLE.find_past_months_with_category(category_id, current_ym)
-    locked_months = [ym for ym in past_months if editability(ym, now) == "LOCKED"]
+    locked_months = [ym for ym in past_months if editability(ym, now) == EditabilityState.LOCKED]
 
     return _json_response(
         200,
@@ -597,7 +599,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=None,
         category_id=category_id,
-        action="CATEGORY_HARD_DELETE",
+        action=AuditAction.CATEGORY_HARD_DELETE,
         explanation=explanation,
         user=user,
         changes={
@@ -816,7 +818,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     existing = _BUDGET_TABLE.get_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
     txns = _TRANSACTIONS_TABLE.list_for_month(year_month)
-    txn_cat_ids = {t["categoryId"] for t in txns if disposition_of(t) == DISPOSITION_BUDGET and t.get("amount") != 0}
+    txn_cat_ids = {t["categoryId"] for t in txns if disposition_of(t) == Disposition.BUDGET and t.get("amount") != 0}
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
     body_cat_ids = {t["categoryId"] for t in targets}
@@ -845,10 +847,10 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             continue
 
         if old_amount is None:
-            action = "CREATE"
+            action = AuditAction.CREATE
             changes: dict[str, Any] = {"amount": {"before": None, "after": new_amount}}
         else:
-            action = "UPDATE"
+            action = AuditAction.UPDATE
             changes = {"amount": {"before": old_amount, "after": new_amount}}
 
         _AUDIT_LOG_TABLE.write_entry(
@@ -912,7 +914,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             ),
         )
     state = editability(year_month, now)
-    if state != "EDITABLE":
+    if state != EditabilityState.EDITABLE:
         return _json_response(
             409,
             json.dumps(
@@ -945,7 +947,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
-                action="UNPIN",
+                action=AuditAction.UNPIN,
                 explanation=explanation,
                 user=user,
                 changes={"amount": {"before": old_amount, "after": None}},
@@ -961,7 +963,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
-                action="PIN",
+                action=AuditAction.PIN,
                 explanation=explanation,
                 user=user,
                 changes={"amount": {"before": old_amount, "after": new_amount}},
@@ -1048,7 +1050,7 @@ def _post_income_source(event: dict[str, Any], user: dict[str, str], now: dateti
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=current_ym,
         category_id=None,
-        action="INCOME_CREATE",
+        action=AuditAction.INCOME_CREATE,
         explanation=explanation,
         user=user,
         changes={"payment": {"before": None, "after": payment}, "label": label},
@@ -1133,7 +1135,7 @@ def _deactivate_income_source(
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
             category_id=None,
-            action="INCOME_UNPIN",
+            action=AuditAction.INCOME_UNPIN,
             explanation=explanation,
             user=user,
             changes={"payment": {"before": _payment_or_none(old_row), "after": None}},
@@ -1242,7 +1244,9 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
         )
 
     existing = {
-        str(r["incomeSourceId"]): r for r in _INCOME_PLAN_TABLE.get_month(year_month) if r.get("lineType") == "PAYMENT"
+        str(r["incomeSourceId"]): r
+        for r in _INCOME_PLAN_TABLE.get_month(year_month)
+        if r.get("lineType") == IncomeLineType.PAYMENT
     }
     missing = sorted(set(existing) - {source_id for source_id, _ in rows})
     if missing:
@@ -1267,7 +1271,7 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=year_month,
             category_id=None,
-            action="INCOME_CREATE" if before is None else "INCOME_UPDATE",
+            action=AuditAction.INCOME_CREATE if before is None else AuditAction.INCOME_UPDATE,
             explanation=explanation,
             user=user,
             changes={"payment": {"before": before, "after": payment}},
@@ -1314,7 +1318,7 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             ),
         )
     state = editability(year_month, now)
-    if state != "EDITABLE":
+    if state != EditabilityState.EDITABLE:
         return _json_response(
             409,
             json.dumps(
@@ -1340,7 +1344,7 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             if before is None:
                 continue
             _INCOME_PLAN_TABLE.delete_payment(year_month, source_id)
-            action = "INCOME_UNPIN"
+            action = AuditAction.INCOME_UNPIN
         else:
             if payments_equal(before, payment):
                 continue
@@ -1348,7 +1352,7 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             sans_pin = {k: v for k, v in by_key_before.items() if k != (year_month, source_id)}
             if payments_equal(walk_back_for(sans_pin, year_month, source_id), payment):
                 pin_matches_carried.append(source_id)
-            action = "INCOME_PIN"
+            action = AuditAction.INCOME_PIN
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=year_month,
             category_id=None,
@@ -1386,9 +1390,9 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
 
 
 def _post_one_time(
-    event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime, line_action: str
+    event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime, line_action: AuditAction
 ) -> dict[str, Any]:
-    """Create, change, or delete a one-time income line. `line_action` is CREATE, UPDATE, or DELETE.
+    """Create, change, or delete a one-time income line. `line_action` is ONE_TIME_CREATE, _UPDATE, or _DELETE.
 
     Bodies:
     - CREATE: `{label, amount, explanation, override?}`
@@ -1409,7 +1413,7 @@ def _post_one_time(
         return _response(400, "explanation is required")
 
     new_line: dict[str, Any] | None = None
-    if line_action != "DELETE":
+    if line_action != AuditAction.ONE_TIME_DELETE:
         try:
             label = validate_label(body.get("label"))
             amount = validate_one_time_amount(body.get("amount"))
@@ -1419,7 +1423,7 @@ def _post_one_time(
 
     existing_line_id: str | None = None
     old_line: dict[str, Any] | None = None
-    if line_action != "CREATE":
+    if line_action != AuditAction.ONE_TIME_CREATE:
         raw_line_id = body.get("lineId")
         if not isinstance(raw_line_id, str) or not raw_line_id.startswith(ONE_TIME_LINE_PREFIX):
             return _response(400, "lineId of a one-time line is required")
@@ -1446,14 +1450,14 @@ def _post_one_time(
             year_month, new_line["label"], new_line["amount"], line_id=existing_line_id
         )
         line_id = str(item["lineId"])
-        status, result = (201 if line_action == "CREATE" else 200), item
+        status, result = (201 if line_action == AuditAction.ONE_TIME_CREATE else 200), item
     else:
         return _response(400, f"unknown one-time action '{line_action}'")
 
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=year_month,
         category_id=None,
-        action=f"ONE_TIME_{line_action}",
+        action=line_action,
         explanation=explanation,
         user=user,
         changes={"line": {"before": old_line, "after": new_line}},
@@ -1524,6 +1528,13 @@ def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     return _json_response(201, json.dumps(item, default=_json_default))
 
 
+class RowIssue(StrEnum):
+    """A problem with one CSV row that blocks the commit. The upload and the commit send the value."""
+
+    MISSING_CATEGORY = "missing_category"
+    LOCKED_MONTH = "locked_month"
+
+
 def _validate_commit_rows(
     rows: list[dict[str, Any]],
     valid_category_ids: set[str],
@@ -1544,18 +1555,18 @@ def _validate_commit_rows(
     """
     results: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
-        issues: list[str] = []
+        issues: list[RowIssue] = []
         cat_id = row.get("categoryId")
         disposition = disposition_of(row)
         category_unknown = bool(cat_id) and cat_id not in valid_category_ids
-        if (disposition == DISPOSITION_BUDGET and not cat_id) or (disposition != DISPOSITION_SKIP and category_unknown):
-            issues.append("missing_category")
+        if (disposition == Disposition.BUDGET and not cat_id) or (disposition != Disposition.SKIP and category_unknown):
+            issues.append(RowIssue.MISSING_CATEGORY)
         txn_date = row.get("transactionDate") or ""
         ym = txn_date[:7] if len(txn_date) >= 7 else ""
         if ym and YEAR_MONTH_PATTERN.match(ym):
             state = editability(ym, now)
-            if state == "LOCKED" and not override_active:
-                issues.append("locked_month")
+            if state == EditabilityState.LOCKED and not override_active:
+                issues.append(RowIssue.LOCKED_MONTH)
         results.append({"index": i, "issues": issues})
     return results
 
@@ -1761,7 +1772,7 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     # guess from the header names; a local check for a spending account, where most rows are
     # money out; and the user's "flip all signs" button on the review screen.
     amounts_after_llm = [-t["amount"] if amount_invert else t["amount"] for t in parsed_transactions]
-    is_spending_account = budget_role_of(account) == BUDGET_ROLE_SPENDING
+    is_spending_account = budget_role_of(account) == BudgetRole.SPENDING
     locally_flipped = is_spending_account and spending_account_needs_flip(amounts_after_llm)
     user_flipped = body.get("flipSigns") is True
     if amount_invert ^ locally_flipped ^ user_flipped:
@@ -2304,14 +2315,14 @@ def _check_year_month_editable(year_month: str, override_active: bool, now: date
     if override_active:
         return None
     state = editability(year_month, now)
-    if state == "LOCKED":
+    if state == EditabilityState.LOCKED:
         return _json_response(
             409,
             json.dumps(
                 {
                     "error": "year-month is locked; admin override required to mutate",
                     "yearMonth": year_month,
-                    "state": "LOCKED",
+                    "state": EditabilityState.LOCKED,
                 }
             ),
         )
@@ -2332,7 +2343,7 @@ def _check_year_months_editable(
         ym = item.get(year_month_key)
         if not isinstance(ym, str) or not YEAR_MONTH_PATTERN.match(ym):
             continue
-        if editability(ym, now) == "LOCKED":
+        if editability(ym, now) == EditabilityState.LOCKED:
             offending.append({"index": index, "yearMonth": ym})
     if offending:
         return _json_response(

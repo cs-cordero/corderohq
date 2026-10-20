@@ -18,14 +18,39 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 
 # The sort keys of the IncomePlan table.
 PAYMENT_LINE_PREFIX = "SRC#"
 ONE_TIME_LINE_PREFIX = "ONE#"
 
-FREQUENCIES = frozenset({"weekly", "biweekly", "semimonthly", "monthly"})
-DEDUCTION_KINDS = frozenset({"TAX", "PRETAX_SAVINGS", "PRETAX_BENEFIT", "POSTTAX_SAVINGS"})
+
+
+class IncomeLineType(StrEnum):
+    """The kind of an IncomePlan row. The value is stored in `IncomePlan.lineType`."""
+
+    PAYMENT = "PAYMENT"  # lineId "SRC#{incomeSourceId}"; carries forward
+    ONE_TIME = "ONE_TIME"  # lineId "ONE#{ULID}"; this month only
+
+
+class PayFrequency(StrEnum):
+    """How often an income source pays. For display only. No calculation uses it."""
+
+    WEEKLY = "weekly"
+    BIWEEKLY = "biweekly"
+    SEMIMONTHLY = "semimonthly"
+    MONTHLY = "monthly"
+
+
+class DeductionKind(StrEnum):
+    """The kind of a deduction from a payment. For display only. No calculation uses it."""
+
+    TAX = "TAX"
+    PRETAX_SAVINGS = "PRETAX_SAVINGS"
+    PRETAX_BENEFIT = "PRETAX_BENEFIT"
+    POSTTAX_SAVINGS = "POSTTAX_SAVINGS"
+
 
 MIN_PAYMENTS_PER_MONTH = 1
 MAX_PAYMENTS_PER_MONTH = 5
@@ -58,11 +83,12 @@ def validate_label(value: Any, name: str = "label") -> str:
     return label
 
 
-def validate_frequency(value: Any) -> str:
-    """Return the pay frequency. It is for display only. No calculation uses it."""
-    if not isinstance(value, str) or value not in FREQUENCIES:
-        raise ValueError(f"frequency must be one of {sorted(FREQUENCIES)}")
-    return value
+def validate_frequency(value: Any) -> PayFrequency:
+    """Return the pay frequency."""
+    try:
+        return PayFrequency(value)
+    except ValueError:
+        raise ValueError(f"frequency must be one of {[f.value for f in PayFrequency]}") from None
 
 
 def validate_payment(raw: Any) -> dict[str, Any]:
@@ -90,9 +116,10 @@ def validate_payment(raw: Any) -> dict[str, Any]:
         where = f"deductions[{index}]"
         if not isinstance(raw_deduction, Mapping):
             raise ValueError(f"{where} must be an object")
-        kind = raw_deduction.get("kind")
-        if not isinstance(kind, str) or kind not in DEDUCTION_KINDS:
-            raise ValueError(f"{where}.kind must be one of {sorted(DEDUCTION_KINDS)}")
+        try:
+            kind = DeductionKind(raw_deduction.get("kind"))
+        except ValueError:
+            raise ValueError(f"{where}.kind must be one of {[k.value for k in DeductionKind]}") from None
         amount = _as_int(raw_deduction.get("amount"), f"{where}.amount")
         if amount < 0:
             raise ValueError(f"{where}.amount must not be negative")

@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from corderohq.budget.csv_import.directions import Suggestion, suggest_dispositions
+from corderohq.budget.csv_import.local_checks import BankHint
 
 _CHECKING = {"accountId": "chk", "accountType": "checking"}
 _CARD = {"accountId": "card", "accountType": "credit_card", "lastFour": ["4321"]}
@@ -38,7 +39,7 @@ class TestSpendingAccount:
         assert (s.disposition, s.category_id) == ("SKIP", "")
 
     def test_bank_income_label_wins_over_the_llm(self) -> None:
-        s = _one(_row(-500, _bankHint="INCOME", _kind="refund"))
+        s = _one(_row(-500, _bankHint=BankHint.INCOME, _kind="refund"))
         assert (s.disposition, s.suggested_by) == ("SKIP", "BANK")
 
     def test_card_payment_from_the_llm_is_skip_with_no_mark(self) -> None:
@@ -50,7 +51,7 @@ class TestSpendingAccount:
         assert (s.disposition, s.category_id, s.review) == ("BUDGET", "vacation-fund", ["llm_guess"])
 
     def test_own_transfer_without_a_category_is_skip_and_marked(self) -> None:
-        s = _one(_row(500, _bankHint="TRANSFER"))
+        s = _one(_row(500, _bankHint=BankHint.TRANSFER))
         assert (s.disposition, s.review) == ("SKIP", ["no_pair_found"])
 
     def test_unknown_direction_is_skip_and_marked(self) -> None:
