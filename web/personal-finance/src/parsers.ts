@@ -478,7 +478,7 @@ export function parseIncomeSource(raw: unknown): IncomeSource {
     const obj = requireObject(raw, "IncomeSource");
     return {
         incomeSourceId: requireString(obj, "incomeSourceId", "IncomeSource"),
-        personId: requireString(obj, "personId", "IncomeSource"),
+        owners: stringArray(obj.owners, "IncomeSource.owners"),
         label: requireString(obj, "label", "IncomeSource"),
         frequency: requireString(obj, "frequency", "IncomeSource"),
         active: requireBoolean(obj, "active", "IncomeSource"),
@@ -529,7 +529,7 @@ function parseIncomeMonthPayment(raw: unknown): IncomeMonthPayment {
         ...parsePaymentFields(obj, "IncomeMonth.payments[]"),
         incomeSourceId: requireString(obj, "incomeSourceId", "IncomeMonth.payments[]"),
         label: requireString(obj, "label", "IncomeMonth.payments[]"),
-        personId: requireString(obj, "personId", "IncomeMonth.payments[]"),
+        owners: stringArray(obj.owners, "IncomeMonth.payments[].owners"),
         active: requireBoolean(obj, "active", "IncomeMonth.payments[]"),
         net: requireNumber(obj, "net", "IncomeMonth.payments[]"),
         monthlyNet: requireNumber(obj, "monthlyNet", "IncomeMonth.payments[]"),

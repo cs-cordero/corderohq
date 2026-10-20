@@ -105,7 +105,7 @@ month. The money is in `IncomePlan-{stage}`.
 | Field               | Notes                                                            |
 +---------------------+------------------------------------------------------------------+
 | incomeSourceId (PK) | ULID.                                                            |
-| personId            | The person in the Profile table.                                 |
+| owners              | One or more personIds in the Profile table, the same as Account. |
 | label               | Free text, such as "Employer A". Not unique.                     |
 | frequency           | "weekly" | "biweekly" | "semimonthly" | "monthly". Display only.   |
 | active              | Soft delete, the same as Category (Spec 37).                     |
@@ -351,7 +351,7 @@ All routes need a JWT, and all sit under `/api`, the same as today.
 | GET    | /api/income-sources?include_inactive=true  | List income sources.                   |
 | POST   | /api/income-sources/reorder                | Body: {order: [incomeSourceId]}.       |
 |        |                                            | Writes sortOrder = index.              |
-| POST   | /api/income-sources                        | Create. Body: personId, label,         |
+| POST   | /api/income-sources                        | Create. Body: owners, label,           |
 |        |                                            | frequency, initialPayment (P),        |
 |        |                                            | explanation. Densify first, then write |
 |        |                                            | the payment row at current_ym. One    |
@@ -383,7 +383,7 @@ delete becomes necessary later, it copies the category hard delete.
   "state": "EDITABLE" | "GRACE" | "LOCKED",
   "payments": [
     {
-      "incomeSourceId", "label", "personId",
+      "incomeSourceId", "label", "owners",
       "paymentsPerMonth", "gross", "deductions": [...],
       "net",            // one paycheck
       "monthlyNet",     // net × paymentsPerMonth

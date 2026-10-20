@@ -64,7 +64,7 @@ def compute_income(
         entry: dict[str, Any] = {
             "incomeSourceId": source_id,
             "label": source["label"],
-            "personId": source["personId"],
+            "owners": list(source.get("owners", [])),
             "active": bool(source.get("active", False)),
             **payment,
             "net": net_amount(payment),

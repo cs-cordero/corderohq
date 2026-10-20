@@ -255,7 +255,7 @@ export interface Payment {
 
 export interface IncomeSource {
     incomeSourceId: string;
-    personId: string;
+    owners: string[]; // one or more personIds, the same as an account; a joint source has 2+
     label: string;
     frequency: string; // one of PAY_FREQUENCIES; kept as string so an unknown DB value doesn't crash the parser
     active: boolean;
@@ -265,7 +265,7 @@ export interface IncomeSource {
 export interface IncomeMonthPayment extends Payment {
     incomeSourceId: string;
     label: string;
-    personId: string;
+    owners: string[];
     active: boolean;
     net: number; // one payment
     monthlyNet: number; // net × paymentsPerMonth

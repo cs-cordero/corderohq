@@ -183,7 +183,7 @@ def _one_time_row(year_month: str, line: str, amount: int) -> dict[str, Any]:
 def _source(source_id: str, active: bool = True, sort_order: int = 0) -> dict[str, Any]:
     return {
         "incomeSourceId": source_id,
-        "personId": "p1",
+        "owners": ["p1"],
         "label": f"Employer {source_id}",
         "frequency": "biweekly",
         "active": active,
@@ -225,7 +225,7 @@ class TestIncomeSourceTable:
 
     def test_create_goes_to_the_end(self) -> None:
         table = _source_table([_source("a", sort_order=4)])
-        item = table.create("p1", "Employer A", "biweekly")
+        item = table.create(["p1"], "Employer A", "biweekly")
         assert item["sortOrder"] == 5
         assert item["active"] is True
 
@@ -337,7 +337,7 @@ class TestIncomeSourceRoutes:
     def test_create_writes_the_first_payment_in_the_current_month(self, tables: dict[str, MagicMock]) -> None:
         tables["source"].create.return_value = _source("s1")
         body = {
-            "personId": "p1",
+            "owners": ["p1"],
             "label": "Employer A",
             "frequency": "biweekly",
             "initialPayment": _PAYMENT,
@@ -346,7 +346,7 @@ class TestIncomeSourceRoutes:
         result = handler(_event("POST", "/api/income-sources", body), None)
 
         assert result["statusCode"] == 201
-        tables["source"].create.assert_called_once_with("p1", "Employer A", "biweekly")
+        tables["source"].create.assert_called_once_with(["p1"], "Employer A", "biweekly")
         tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", _PAYMENT)
         audit = tables["audit"].write_entry.call_args.kwargs
         assert audit["action"] == "INCOME_CREATE"
@@ -356,14 +356,14 @@ class TestIncomeSourceRoutes:
 
     def test_create_needs_a_known_person(self, tables: dict[str, MagicMock]) -> None:
         tables["profile"].get_person.return_value = None
-        body = {"personId": "nobody", "label": "A", "frequency": "biweekly", "initialPayment": _PAYMENT}
+        body = {"owners": ["nobody"], "label": "A", "frequency": "biweekly", "initialPayment": _PAYMENT}
         result = handler(_event("POST", "/api/income-sources", {**body, "explanation": "x"}), None)
         assert result["statusCode"] == 400
         tables["source"].create.assert_not_called()
 
     def test_create_with_a_broken_payment_returns_400(self, tables: dict[str, MagicMock]) -> None:
         body = {
-            "personId": "p1",
+            "owners": ["p1"],
             "label": "A",
             "frequency": "biweekly",
             "initialPayment": {**_PAYMENT, "gross": 1},
@@ -394,6 +394,25 @@ class TestIncomeSourceRoutes:
         tables["plan"].delete_payment.assert_called_once_with(_FUTURE, "s1")
         assert _audit_actions(tables["audit"]) == ["INCOME_UNPIN"]
         tables["source"].set_active.assert_called_once_with("s1", False)
+
+    def test_joint_source_has_two_owners(self, tables: dict[str, MagicMock]) -> None:
+        tables["source"].create.return_value = _source("s1")
+        body = {
+            "owners": ["p1", "p2", "p1"],
+            "label": "Joint interest",
+            "frequency": "monthly",
+            "initialPayment": {"paymentsPerMonth": 1, "gross": 50_000_000, "deductions": []},
+            "explanation": "interest",
+        }
+        result = handler(_event("POST", "/api/income-sources", body), None)
+        assert result["statusCode"] == 201
+        tables["source"].create.assert_called_once_with(["p1", "p2"], "Joint interest", "monthly")
+
+    def test_change_of_owners_checks_each_person(self, tables: dict[str, MagicMock]) -> None:
+        tables["profile"].get_person.return_value = None
+        result = handler(_event("PUT", "/api/income-sources/s1", {"owners": ["nobody"]}), None)
+        assert result["statusCode"] == 400
+        tables["source"].update.assert_not_called()
 
     def test_rename_has_no_audit_entry(self, tables: dict[str, MagicMock]) -> None:
         tables["source"].update.return_value = _source("s1")

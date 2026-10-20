@@ -210,7 +210,7 @@ export const commitTransactions = (
 // Income sources and the income plan
 export const fetchAllIncomeSources = () => request("/income-sources?include_inactive=true", parseIncomeSourceArray);
 export const createIncomeSource = (data: {
-    personId: string;
+    owners: string[];
     label: string;
     frequency: string;
     initialPayment: Payment;

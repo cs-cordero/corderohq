@@ -164,7 +164,8 @@ it.
 |                        |                    |            | sorts chronologically       |
 |                        |                    |            | within a month.             |
 +------------------------+--------------------+------------+-----------------------------+
-| IncomeSource-{stage}   | incomeSourceId     | —          | ULID. Fields: personId,     |
+| IncomeSource-{stage}   | incomeSourceId     | —          | ULID. Fields: owners (one or|
+|                        |                    |            | more personIds),            |
 |                        |                    |            | label, frequency (display   |
 |                        |                    |            | only), active, sortOrder,   |
 |                        |                    |            | timestamps.                 |
@@ -896,9 +897,10 @@ active keys:
 ## Income Plan and Left to Assign
 
 An **income source** is one stream of income that the plan counts, such as a job, interest, or
-dividends (`IncomeSource-{stage}`). It belongs to one person, and a person can have any number of
-them. Every kind works the same way: for a source with no deductions, the gross amount equals the net
-pay. Each dense month holds one **payment row** for each active income source, in
+dividends (`IncomeSource-{stage}`). It has one or more owners, the same as an account, so a joint
+source has two. A person can own any number of them, and the app does not delete a person who still
+owns one. Every kind works the same way: for a source with no deductions, the gross amount equals the
+net amount. Each dense month holds one **payment row** for each active income source, in
 `IncomePlan-{stage}`, with the same month rules as a Budget row: dense past and current months,
 sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
 entry with an explanation for each change.

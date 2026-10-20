@@ -1633,11 +1633,13 @@ class TestPutPerson:
 
 
 class TestDeletePerson:
+    @patch("corderohq.personal_finance_handler._INCOME_SOURCE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
-    def test_deletes_when_unreferenced(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
+    def test_deletes_when_unreferenced(self, mock_pt: MagicMock, mock_at: MagicMock, mock_ist: MagicMock) -> None:
         mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = []
+        mock_ist.sources_with_owner.return_value = []
         result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
         assert result["statusCode"] == 200
         mock_pt.delete_person.assert_called_once_with("p1")
@@ -1648,15 +1650,31 @@ class TestDeletePerson:
         result = handler(_make_event("POST", "/api/profile/people/nope/delete"), None)
         assert result["statusCode"] == 404
 
+    @patch("corderohq.personal_finance_handler._INCOME_SOURCE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
-    def test_blocked_when_owner_of_accounts(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
+    def test_blocked_when_owner_of_accounts(self, mock_pt: MagicMock, mock_at: MagicMock, mock_ist: MagicMock) -> None:
         mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = [{"accountId": "a1", "name": "His 401k"}]
+        mock_ist.sources_with_owner.return_value = []
         result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["blockingAccounts"][0]["accountId"] == "a1"
+        mock_pt.delete_person.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._INCOME_SOURCE_TABLE")
+    @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
+    @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
+    def test_blocked_when_owner_of_an_income_source(
+        self, mock_pt: MagicMock, mock_at: MagicMock, mock_ist: MagicMock
+    ) -> None:
+        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_at.accounts_with_owner.return_value = []
+        mock_ist.sources_with_owner.return_value = [{"incomeSourceId": "s1", "label": "Employer A"}]
+        result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
+        assert result["statusCode"] == 409
+        assert json.loads(result["body"])["blockingIncomeSources"][0]["incomeSourceId"] == "s1"
         mock_pt.delete_person.assert_not_called()
 
 

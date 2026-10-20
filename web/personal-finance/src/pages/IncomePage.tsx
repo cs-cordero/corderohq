@@ -242,7 +242,7 @@ function PaymentBreakdown({ payment }: { payment: IncomeMonthPayment }) {
 // --- The page -----------------------------------------------------------------
 
 interface NewSourceDraft {
-    personId: string;
+    owners: string[];
     label: string;
     frequency: string;
     payment: PaymentDraft;
@@ -250,7 +250,7 @@ interface NewSourceDraft {
 }
 
 const EMPTY_NEW_SOURCE: NewSourceDraft = {
-    personId: "",
+    owners: [],
     label: "",
     frequency: "biweekly",
     payment: EMPTY_PAYCHECK,
@@ -316,8 +316,10 @@ export default function IncomePage() {
         load();
     }, [load]);
 
-    const personName = useCallback(
-        (personId: string) => people.find((p) => p.personId === personId)?.name ?? "Unknown person",
+    // The names of the owners of a source. A joint source has two or more.
+    const ownerNames = useCallback(
+        (owners: string[]) =>
+            owners.map((id) => people.find((p) => p.personId === id)?.name ?? "Unknown person").join(" & "),
         [people],
     );
 
@@ -476,14 +478,14 @@ export default function IncomePage() {
             showError(payment);
             return;
         }
-        if (!newSource.personId || !newSource.label.trim() || !newSource.explanation.trim()) {
-            showError("Person, label, and explanation are required");
+        if (newSource.owners.length === 0 || !newSource.label.trim() || !newSource.explanation.trim()) {
+            showError("At least one owner, a label, and an explanation are required");
             return;
         }
         showLoading("Saving...");
         try {
             await createIncomeSource({
-                personId: newSource.personId,
+                owners: newSource.owners,
                 label: newSource.label.trim(),
                 frequency: newSource.frequency,
                 initialPayment: payment,
@@ -612,7 +614,7 @@ export default function IncomePage() {
                         <div key={p.incomeSourceId} className={`payment-card ${p.active ? "" : "faded"}`}>
                             <h3>
                                 {p.label}
-                                <span className="muted"> — {personName(p.personId)}</span>
+                                <span className="muted"> — {ownerNames(p.owners)}</span>
                                 {!p.active && <span className="muted"> (deactivated)</span>}
                                 {p.pinned && <span className="badge badge-pinned">pinned</span>}
                             </h3>
@@ -645,7 +647,7 @@ export default function IncomePage() {
                             <div key={s.incomeSourceId} className="payment-card">
                                 <h3>
                                     {s.label}
-                                    <span className="muted"> — {personName(s.personId)}</span>
+                                    <span className="muted"> — {ownerNames(s.owners)}</span>
                                 </h3>
                                 {editingId === s.incomeSourceId ? (
                                     renderEditor(s.incomeSourceId, s.label)
@@ -758,7 +760,7 @@ export default function IncomePage() {
                 <thead>
                     <tr>
                         <th>Label</th>
-                        <th>Person</th>
+                        <th>Owners</th>
                         <th>Pay frequency</th>
                         <th>Actions</th>
                     </tr>
@@ -780,7 +782,7 @@ export default function IncomePage() {
                                     </>
                                 )}
                             </td>
-                            <td>{personName(s.personId)}</td>
+                            <td>{ownerNames(s.owners)}</td>
                             <td>{frequencyLabel(s.frequency)}</td>
                             <td className="actions">
                                 {renaming?.id === s.incomeSourceId ? (
@@ -849,17 +851,26 @@ export default function IncomePage() {
                 </button>
             ) : (
                 <div className="add-form payment-editor">
-                    <select
-                        value={newSource.personId}
-                        onChange={(e) => setNewSource({ ...newSource, personId: e.target.value })}
-                    >
-                        <option value="">Select person...</option>
+                    <fieldset>
+                        <legend>Owners (two or more for a joint source)</legend>
                         {people.map((p) => (
-                            <option key={p.personId} value={p.personId}>
+                            <label key={p.personId} className="checkbox-label">
+                                <input
+                                    type="checkbox"
+                                    checked={newSource.owners.includes(p.personId)}
+                                    onChange={(e) =>
+                                        setNewSource({
+                                            ...newSource,
+                                            owners: e.target.checked
+                                                ? [...newSource.owners, p.personId]
+                                                : newSource.owners.filter((id) => id !== p.personId),
+                                        })
+                                    }
+                                />
                                 {p.name}
-                            </option>
+                            </label>
                         ))}
-                    </select>
+                    </fieldset>
                     <input
                         type="text"
                         placeholder="Label, such as the employer"

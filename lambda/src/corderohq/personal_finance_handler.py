@@ -1016,7 +1016,8 @@ def _get_income_sources(event: dict[str, Any]) -> dict[str, Any]:
 def _post_income_source(event: dict[str, Any], user: dict[str, str], now: datetime) -> dict[str, Any]:
     """Make an income source, and write its first payment row in the current month.
 
-    Body: `{personId, label, frequency, initialPayment, explanation}`. The first payment makes
+    Body: `{owners, label, frequency, initialPayment, explanation}`. `owners` is one or more
+    personIds, the same as on an account. The first payment makes
     one INCOME_CREATE audit entry.
     """
     body = _parse_json_body(event)
@@ -1026,9 +1027,11 @@ def _post_income_source(event: dict[str, Any], user: dict[str, str], now: dateti
     explanation = (body.get("explanation") or "").strip()
     if not explanation:
         return _response(400, "explanation is required")
-    person_id = body.get("personId")
-    if not isinstance(person_id, str) or _PROFILE_TABLE.get_person(person_id) is None:
-        return _response(400, "personId must name a person in the household")
+    owners, err = _validate_owners(body.get("owners"))
+    if err:
+        return err
+    if owners is None:
+        return _response(400, "owners is required")  # _validate_owners returns a list when it returns no error
     try:
         label = validate_label(body.get("label"))
         frequency = validate_frequency(body.get("frequency"))
@@ -1040,7 +1043,7 @@ def _post_income_source(event: dict[str, Any], user: dict[str, str], now: dateti
     _ensure_hydrated(now)
 
     current_ym = _year_month_of(now)
-    source = _INCOME_SOURCE_TABLE.create(person_id, label, frequency)
+    source = _INCOME_SOURCE_TABLE.create(owners, label, frequency)
     row = _INCOME_PLAN_TABLE.put_payment(current_ym, source["incomeSourceId"], payment)
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=current_ym,
@@ -1056,7 +1059,7 @@ def _post_income_source(event: dict[str, Any], user: dict[str, str], now: dateti
 
 
 def _put_income_source(event: dict[str, Any], income_source_id: str) -> dict[str, Any]:
-    """Change the label or the frequency. This has no editability check, and no audit entry."""
+    """Change the label, the frequency, or the owners. This has no editability check, and no audit entry."""
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1068,8 +1071,13 @@ def _put_income_source(event: dict[str, Any], income_source_id: str) -> dict[str
             updates["frequency"] = validate_frequency(body["frequency"])
     except ValueError as e:
         return _response(400, str(e))
+    if "owners" in body:
+        owners, err = _validate_owners(body["owners"])
+        if err:
+            return err
+        updates["owners"] = owners
     if not updates:
-        return _response(400, "label or frequency is required")
+        return _response(400, "label, frequency, or owners is required")
     item = _INCOME_SOURCE_TABLE.update(income_source_id, updates)
     if item is None:
         return _response(404, "Income source not found")
@@ -1960,7 +1968,7 @@ def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
 
 
 def _delete_person(person_id: str) -> dict[str, Any]:
-    """Hard-delete a person, blocked if any account still names them as owner.
+    """Hard-delete a person, blocked if any account or income source still names them as owner.
 
     People are rarely removed — this endpoint exists to undo a fat-fingered create,
     so a 409 listing the referencing accounts (rather than cascading) keeps owner
@@ -1970,14 +1978,16 @@ def _delete_person(person_id: str) -> dict[str, Any]:
         return _response(404, "Person not found")
 
     blocking = _ACCOUNT_TABLE.accounts_with_owner(person_id)
-    if blocking:
+    blocking_sources = _INCOME_SOURCE_TABLE.sources_with_owner(person_id)
+    if blocking or blocking_sources:
         return _json_response(
             409,
             json.dumps(
                 {
-                    "error": "Person is the owner of one or more accounts; reassign them first",
+                    "error": "Person is the owner of one or more accounts or income sources; reassign them first",
                     "personId": person_id,
                     "blockingAccounts": blocking,
+                    "blockingIncomeSources": blocking_sources,
                 }
             ),
         )

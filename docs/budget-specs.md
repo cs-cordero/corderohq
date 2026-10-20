@@ -14,7 +14,8 @@
 - **Override** — a way for the user to act on a locked year-month. The server must enforce the
   override. It is not enough to hide the action in the UI.
 - **Income source** — one stream of income that the plan counts, such as a job, interest, or
-  dividends. Each income source belongs to one person, and a person can have any number of them.
+  dividends. Each income source has one or more owners, the same as an account: a joint source,
+  such as the interest of a joint account, has two. A person can own any number of income sources.
   Every kind of income source works the same way.
 - **Payment** — the gross amount of one payment from an income source, such as one paycheck, and
   the list of deductions from it. A payment with no deductions, such as interest, is also valid.
@@ -162,8 +163,9 @@
 
 ## Income Plan
 
-31. I want to record each income source. An income source has a person, a label, and a pay
-    frequency, such as every two weeks. A person can have any number of income sources. The code
+31. I want to record each income source. An income source has one or more owners (people), a
+    label, and a pay frequency, such as every two weeks. A person can own any number of income
+    sources. I cannot delete a person who still owns an income source. The code
     must not contain an employer name or any other real income data.
 32. For each income source, I want to record one payment: the gross amount, and a list of
     deductions. Each deduction has a label, a kind, and an amount for one payment. The kinds are: tax, pre-tax
