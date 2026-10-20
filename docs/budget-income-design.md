@@ -1,5 +1,9 @@
 # Design - Budget Income and Left to Assign
 
+> **Names (2026-10-20):** the income model now uses neutral names: a *payment* in place of a *paycheck*
+> (`paymentsPerMonth`, `initialPayment`, `payments`, lineType `PAYMENT`), and *net amount* in place of
+> *net pay*. Some prose below still says "paycheck" for the same thing.
+
 This is the design for Specs 31 to 57 in `docs/budget-specs.md`. It is a proposal. The code does not
 do any of this yet. When the work is complete, move the final design into
 `docs/personal-finance-architecture.md`, and delete this file.
@@ -116,16 +120,16 @@ The label is real data, so it lives only in DynamoDB. The code holds no employer
 
 PK `yearMonth`, SK `lineId`. This table holds two kinds of row.
 
-**A paycheck row.** `lineId = "SRC#{incomeSourceId}"`. One row for each income source in each
+**A payment row.** `lineId = "SRC#{incomeSourceId}"`. One row for each income source in each
 dense year-month. This row obeys the month rules of a Budget row (see **Income Plan Month Rules**).
 
 ```
 {
   yearMonth: "2026-11",
   lineId: "SRC#01J...",
-  lineType: "PAYCHECK",
+  lineType: "PAYMENT",
   incomeSourceId: "01J...",
-  paychecksPerMonth: 2,            // Spec 33
+  paymentsPerMonth: 2,            // Spec 33
   gross: 5000000000,               // one paycheck
   deductions: [                    // one paycheck; order is the display order
     { label: "Federal tax", kind: "TAX",              amount: 600000000 },
@@ -139,8 +143,8 @@ dense year-month. This row obeys the month rules of a Budget row (see **Income P
 - The deduction kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`
   (Spec 32). The kind is for display and for later features only. No calculation uses it.
 - The app does not store the net pay. It calculates the net pay on each read:
-  `net = gross − sum(deductions.amount)`, and `monthlyNet = net × paychecksPerMonth`.
-- Validation: `gross >= 0`, each deduction `amount >= 0`, `net >= 0`, `paychecksPerMonth` is an
+  `net = gross − sum(deductions.amount)`, and `monthlyNet = net × paymentsPerMonth`.
+- Validation: `gross >= 0`, each deduction `amount >= 0`, `net >= 0`, `paymentsPerMonth` is an
   integer from 1 to 5, and each label is not empty.
 - The whole paycheck is one value. A change to one deduction writes the whole row again. This
   keeps the month rules simple: the walk-back copies one value, the same as for a Budget row.
@@ -264,15 +268,15 @@ for a paycheck, `incomeSourceId`. It has no `categoryId`.
 
 | Action | Made by | `changes` |
 |---|---|---|
-| `INCOME_CREATE` | `/replace` writes a new paycheck row; the create of an income source | `{paycheck: {before: null, after: P}}` |
-| `INCOME_UPDATE` | `/replace` changes a paycheck row | `{paycheck: {before: P, after: P}}` |
-| `INCOME_PIN` | `/pin` writes a future paycheck pin | `{paycheck: {before: P \| null, after: P}}` |
-| `INCOME_UNPIN` | `/pin` with `paycheck: null`; a deactivation that drops a pin | `{paycheck: {before: P, after: null}}` |
+| `INCOME_CREATE` | `/replace` writes a new payment row; the create of an income source | `{payment: {before: null, after: P}}` |
+| `INCOME_UPDATE` | `/replace` changes a payment row | `{payment: {before: P, after: P}}` |
+| `INCOME_PIN` | `/pin` writes a future paycheck pin | `{payment: {before: P \| null, after: P}}` |
+| `INCOME_UNPIN` | `/pin` with `paycheck: null`; a deactivation that drops a pin | `{payment: {before: P, after: null}}` |
 | `ONE_TIME_CREATE` | a one-time line is added | `{line: {before: null, after: L}}` |
 | `ONE_TIME_UPDATE` | a one-time line changes | `{line: {before: L, after: L}}` |
 | `ONE_TIME_DELETE` | a one-time line is deleted | `{line: {before: L, after: null}}` |
 
-`P` is `{paychecksPerMonth, gross, deductions}`. `L` is `{label, amount}`. The audit log page shows
+`P` is `{paymentsPerMonth, gross, deductions}`. `L` is `{label, amount}`. The audit log page shows
 the label of the income source, or the label of the one-time line, where it shows a category name
 today. In `types.ts`, `AuditEntry.categoryId` becomes optional, and `incomeSourceId` and
 `incomeLineId` are new optional fields. For a one-time line, store the label in `changes`, because
@@ -284,9 +288,9 @@ category.
 The income plan obeys every month rule of the Budget table (Spec 34). The rules are in
 **Carry-Forward** in the architecture doc. In short:
 
-- The current month, the grace month, and every locked month are **dense**: one paycheck row for
+- The current month, the grace month, and every locked month are **dense**: one payment row for
   each income source that was active when the month became dense.
-- A future month is **sparse**: only the paycheck rows that the user pinned.
+- A future month is **sparse**: only the payment rows that the user pinned.
 - A future month resolves each active income source: a pin, or else a walk-back to the most recent
   earlier row.
 - The densify step fills each missing month, oldest first, for each active income source. It
@@ -325,7 +329,7 @@ def value_at_or_before(by_key, year_month, key) -> Any: ... # the row in `year_m
 Other rules:
 
 - **Cold start.** If the income plan has no rows, the densify step writes nothing. An income source
-  always has a paycheck row from its create (see below), so the empty case means "no income
+  always has a payment row from its create (see below), so the empty case means "no income
   sources yet".
 - **No earlier row.** The walk-back finds no row only for an income source with no history. That
   cannot happen through the API. If it does happen, the densify step writes no row, and the source
@@ -348,9 +352,9 @@ All routes need a JWT, and all sit under `/api`, the same as today.
 | POST   | /api/income-sources/reorder                | Body: {order: [incomeSourceId]}.       |
 |        |                                            | Writes sortOrder = index.              |
 | POST   | /api/income-sources                        | Create. Body: personId, label,         |
-|        |                                            | frequency, initialPaycheck (P),        |
+|        |                                            | frequency, initialPayment (P),        |
 |        |                                            | explanation. Densify first, then write |
-|        |                                            | the paycheck row at current_ym. One    |
+|        |                                            | the payment row at current_ym. One    |
 |        |                                            | INCOME_CREATE entry.                   |
 | PUT    | /api/income-sources/{id}                   | Change label or frequency. No          |
 |        |                                            | editability check. No audit entry.     |
@@ -360,7 +364,7 @@ All routes need a JWT, and all sit under `/api`, the same as today.
 |        |                                            | the pins and writes INCOME_UNPIN.      |
 | POST   | /api/income-sources/{id}/reactivate        | Same as a category.                    |
 | GET    | /api/income/{YYYY-MM}                      | The income plan of a month. See below. |
-| POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of paycheck rows.    |
+| POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of payment rows.    |
 | POST   | /api/income/{YYYY-MM}/pin                  | Future-month write of paycheck pins.   |
 | POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time line.                |
 | POST   | /api/income/{YYYY-MM}/one-time/update      | Change a one-time line.                |
@@ -377,12 +381,12 @@ delete becomes necessary later, it copies the category hard delete.
 {
   "yearMonth": "2026-11",
   "state": "EDITABLE" | "GRACE" | "LOCKED",
-  "paychecks": [
+  "payments": [
     {
       "incomeSourceId", "label", "personId",
-      "paychecksPerMonth", "gross", "deductions": [...],
+      "paymentsPerMonth", "gross", "deductions": [...],
       "net",            // one paycheck
-      "monthlyNet",     // net × paychecksPerMonth
+      "monthlyNet",     // net × paymentsPerMonth
       "pinned": bool    // future months only, the same as a budget row
     }, ...
   ],
@@ -392,10 +396,10 @@ delete becomes necessary later, it copies the category hard delete.
 ```
 
 Membership is the same as Spec 5. An editable month shows the active income sources. A locked
-month shows every income source with a paycheck row in that month, active or not.
+month shows every income source with a payment row in that month, active or not.
 
 **`/replace`** and **`/pin`** copy the Budget endpoints. The budget endpoints take the body key
-`targets`. The income endpoints take the body key `paychecks`, a list of
+`targets`. The income endpoints take the body key `payments`, a list of
 `{incomeSourceId, paycheck}`. Each income source in the body must exist. Each body has an
 `explanation`, and `/replace` also takes an optional `override`.
 
@@ -405,7 +409,7 @@ month shows every income source with a paycheck row in that month, active or not
   `GET /api/income/{YYYY-MM}`.
 - `/pin` takes `null` to remove a pin. It returns `{income: <the month>, warnings:
   {downstreamPins: [{incomeSourceId, yearMonth}], pinMatchesCarriedValue: [incomeSourceId]}}`.
-- Two paychecks match when `paychecksPerMonth`, `gross`, and the full deduction list are equal,
+- Two paychecks match when `paymentsPerMonth`, `gross`, and the full deduction list are equal,
   after each goes through the checks (so a stored `Decimal` equals an `int`). The same paycheck
   again is a no-op with no audit entry.
 
@@ -417,8 +421,8 @@ This includes a future month. Each body has an `explanation`. `amount` must be m
 `personal-finance-web-stack.ts`). Each new route must be in that list, or API Gateway returns a
 404 before the Lambda sees the request.
 
-**The code.** `budget/income.py` holds the paycheck rules (`validate_paycheck()`, `net_pay()`,
-`monthly_net()`, `paychecks_equal()`) and the row IDs. `aws/dynamodb/` holds
+**The code.** `budget/income.py` holds the paycheck rules (`validate_payment()`, `net_amount()`,
+`monthly_net()`, `payments_equal()`) and the row IDs. `aws/dynamodb/` holds
 `IncomeSourceTable`, `IncomePlanTable`, the adapter `IncomePlanCarryStore`,
 `active_income_source_ids()`, and `compute_income()`. Each paycheck entry in the response also
 has `active`, so the Income page can mark an inactive source in a locked month.
@@ -426,14 +430,14 @@ has `active`, so the Income page can mark an inactive source in a locked month.
 ## Left to Assign
 
 ```
-plannedNetIncome(M) = sum(monthlyNet of each paycheck row in M that is a member of M)
+plannedNetIncome(M) = sum(monthlyNet of each payment row in M that is a member of M)
                     + sum(amount of each ONE# row in M)
 leftToAssign(M)     = plannedNetIncome(M) − totals.budgeted(M)
 ```
 
 - `totals.budgeted(M)` is the existing value from `compute_summary()`. The two numbers therefore
   use the same category membership (Spec 5).
-- For a future month, the paycheck rows come from the walk-back, the same as the targets.
+- For a future month, the payment rows come from the walk-back, the same as the targets.
 - A locked month uses its own dense rows only, so the value never changes after the lock (Spec
   42).
 - No transaction changes either number (Spec 43).
@@ -701,7 +705,7 @@ does these steps:
   and a parser in `parsers.ts`, the same as the existing ones. `api.ts` gets one wrapper for each
   new route.
 - **`IncomePage`** (new, Spec 38). A month picker. For each income source: the paycheck as a list,
-  from gross pay through each deduction to net pay, then `× paychecksPerMonth = monthlyNet`. The
+  from gross pay through each deduction to net pay, then `× paymentsPerMonth = monthlyNet`. The
   one-time lines of the month. The planned net income at the bottom. The edit flow copies the
   budget editor: `/replace` for a dense month, `/pin` for a future month, the same pin chip, the
   same downstream-pin warnings, and an explanation box. A section to add, rename, deactivate, and

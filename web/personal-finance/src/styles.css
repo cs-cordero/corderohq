@@ -290,23 +290,23 @@ main {
     color: #991b1b;
 }
 
-/* The Income page: one card for each paycheck, and the paycheck form. */
-.paycheck-card {
+/* The Income page: one card for each payment, and the payment form. */
+.payment-card {
     border: 1px solid #e2e8f0;
     border-radius: 6px;
     padding: 0.75rem 1rem;
     margin-bottom: 1rem;
 }
 
-.paycheck-card h3 {
+.payment-card h3 {
     margin: 0 0 0.5rem;
 }
 
-.paycheck-breakdown {
+.payment-breakdown {
     max-width: 32rem;
 }
 
-.paycheck-editor {
+.payment-editor {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;

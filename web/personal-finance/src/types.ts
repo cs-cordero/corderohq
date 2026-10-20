@@ -126,7 +126,7 @@ export interface AuditEntry {
     sortId: string;
     changedAt: string;
     effectiveYearMonth: string | null;
-    // A budget entry has a categoryId. An income plan entry has incomeLineId, and a paycheck
+    // A budget entry has a categoryId. An income plan entry has incomeLineId, and a payment
     // entry also has incomeSourceId.
     categoryId?: string;
     incomeSourceId?: string;
@@ -243,13 +243,13 @@ export const DEDUCTION_KIND_LABELS: Record<DeductionKind, string> = {
 export interface Deduction {
     label: string;
     kind: DeductionKind;
-    amount: number; // millionths, for one paycheck
+    amount: number; // millionths, for one payment
 }
 
-// One paycheck of one income source. The server calculates the net pay; it never stores it.
-export interface Paycheck {
-    paychecksPerMonth: number;
-    gross: number; // millionths, for one paycheck
+// One payment of one income source. The server calculates the net amount; it never stores it.
+export interface Payment {
+    paymentsPerMonth: number;
+    gross: number; // millionths, for one payment
     deductions: Deduction[];
 }
 
@@ -262,13 +262,13 @@ export interface IncomeSource {
     sortOrder: number;
 }
 
-export interface IncomeMonthPaycheck extends Paycheck {
+export interface IncomeMonthPayment extends Payment {
     incomeSourceId: string;
     label: string;
     personId: string;
     active: boolean;
-    net: number; // one paycheck
-    monthlyNet: number; // net × paychecksPerMonth
+    net: number; // one payment
+    monthlyNet: number; // net × paymentsPerMonth
     pinned?: boolean; // future months only
 }
 
@@ -281,7 +281,7 @@ export interface OneTimeLine {
 export interface IncomeMonth {
     yearMonth: string;
     state: "EDITABLE" | "GRACE" | "LOCKED";
-    paychecks: IncomeMonthPaycheck[];
+    payments: IncomeMonthPayment[];
     oneTime: OneTimeLine[];
     plannedNetIncome: number;
 }

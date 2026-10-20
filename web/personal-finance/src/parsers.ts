@@ -19,7 +19,7 @@ import type {
     DeletionPreview,
     HardDeleteResult,
     IncomeMonth,
-    IncomeMonthPaycheck,
+    IncomeMonthPayment,
     IncomePinResult,
     IncomeSource,
     LoanTerms,
@@ -30,7 +30,7 @@ import type {
     NetWorthRow,
     NetWorthTotals,
     OneTimeLine,
-    Paycheck,
+    Payment,
     PairWith,
     ParsedTransaction,
     Person,
@@ -501,9 +501,9 @@ export function parseDeactivateIncomeSourceResult(raw: unknown): {
     };
 }
 
-function parsePaycheckFields(obj: Record<string, unknown>, label: string): Paycheck {
+function parsePaymentFields(obj: Record<string, unknown>, label: string): Payment {
     return {
-        paychecksPerMonth: requireNumber(obj, "paychecksPerMonth", label),
+        paymentsPerMonth: requireNumber(obj, "paymentsPerMonth", label),
         gross: requireNumber(obj, "gross", label),
         deductions: arrayOf(
             obj.deductions,
@@ -523,17 +523,17 @@ function parsePaycheckFields(obj: Record<string, unknown>, label: string): Paych
     };
 }
 
-function parseIncomeMonthPaycheck(raw: unknown): IncomeMonthPaycheck {
-    const obj = requireObject(raw, "IncomeMonth.paychecks[]");
+function parseIncomeMonthPayment(raw: unknown): IncomeMonthPayment {
+    const obj = requireObject(raw, "IncomeMonth.payments[]");
     return {
-        ...parsePaycheckFields(obj, "IncomeMonth.paychecks[]"),
-        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeMonth.paychecks[]"),
-        label: requireString(obj, "label", "IncomeMonth.paychecks[]"),
-        personId: requireString(obj, "personId", "IncomeMonth.paychecks[]"),
-        active: requireBoolean(obj, "active", "IncomeMonth.paychecks[]"),
-        net: requireNumber(obj, "net", "IncomeMonth.paychecks[]"),
-        monthlyNet: requireNumber(obj, "monthlyNet", "IncomeMonth.paychecks[]"),
-        pinned: optionalBoolean(obj, "pinned", "IncomeMonth.paychecks[]"),
+        ...parsePaymentFields(obj, "IncomeMonth.payments[]"),
+        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeMonth.payments[]"),
+        label: requireString(obj, "label", "IncomeMonth.payments[]"),
+        personId: requireString(obj, "personId", "IncomeMonth.payments[]"),
+        active: requireBoolean(obj, "active", "IncomeMonth.payments[]"),
+        net: requireNumber(obj, "net", "IncomeMonth.payments[]"),
+        monthlyNet: requireNumber(obj, "monthlyNet", "IncomeMonth.payments[]"),
+        pinned: optionalBoolean(obj, "pinned", "IncomeMonth.payments[]"),
     };
 }
 
@@ -555,7 +555,7 @@ export function parseIncomeMonth(raw: unknown): IncomeMonth {
     return {
         yearMonth: requireString(obj, "yearMonth", "IncomeMonth"),
         state,
-        paychecks: arrayOf(obj.paychecks, parseIncomeMonthPaycheck, "IncomeMonth.paychecks"),
+        payments: arrayOf(obj.payments, parseIncomeMonthPayment, "IncomeMonth.payments"),
         oneTime: arrayOf(obj.oneTime, parseOneTimeLine, "IncomeMonth.oneTime"),
         plannedNetIncome: requireNumber(obj, "plannedNetIncome", "IncomeMonth"),
     };

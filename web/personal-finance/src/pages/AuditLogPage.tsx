@@ -8,19 +8,19 @@ import type { AuditEntry, AuditUser, Category, IncomeSource } from "../types";
 
 const DEFAULT_LIMIT = 10;
 
-// Show one side of a {before, after} pair: an amount, a paycheck as its monthly net pay, or a
+// Show one side of a {before, after} pair: an amount, a payment as its monthly net amount, or a
 // one-time line as its amount.
 function describeAuditValue(value: unknown): string {
     if (typeof value === "number") return formatCurrency(value);
     if (typeof value !== "object" || value === null) return "none";
     const obj = value as Record<string, unknown>;
-    if (typeof obj.gross === "number" && typeof obj.paychecksPerMonth === "number" && Array.isArray(obj.deductions)) {
+    if (typeof obj.gross === "number" && typeof obj.paymentsPerMonth === "number" && Array.isArray(obj.deductions)) {
         let deductions = 0;
         for (const d of obj.deductions) {
             const amount: unknown = typeof d === "object" && d !== null ? (d as { amount?: unknown }).amount : null;
             if (typeof amount === "number") deductions += amount;
         }
-        return `${formatCurrency((obj.gross - deductions) * obj.paychecksPerMonth)}/month net`;
+        return `${formatCurrency((obj.gross - deductions) * obj.paymentsPerMonth)}/month net`;
     }
     if (typeof obj.amount === "number") return formatCurrency(obj.amount);
     return "none";
@@ -70,7 +70,7 @@ export default function AuditLogPage() {
     // CATEGORY_HARD_DELETE entries reference a category that no longer exists in the
     // Category table, so categoryName(id) wouldn't resolve. The audit row carries the
     // historical name in changes.name; we surface it here as a tooltip.
-    // An income plan entry has no category. A paycheck entry names its income source. A
+    // An income plan entry has no category. A payment entry names its income source. A
     // one-time line can be deleted later, so its entry holds the label in `changes.line`.
     const renderIncome = (entry: AuditEntry) => {
         const source = incomeSources.find((s) => s.incomeSourceId === entry.incomeSourceId);
@@ -108,8 +108,8 @@ export default function AuditLogPage() {
             if (typeof c.transactionsDeleted === "number") bits.push(`transactions: ${c.transactionsDeleted}`);
             return bits.join(", ");
         }
-        // CREATE / UPDATE / PIN / UNPIN — {before, after} per field. A paycheck shows as its
-        // monthly net pay, and a one-time line as its amount.
+        // CREATE / UPDATE / PIN / UNPIN — {before, after} per field. A payment shows as its
+        // monthly net amount, and a one-time line as its amount.
         return Object.entries(entry.changes)
             .map(([field, value]) => {
                 if (typeof value !== "object" || value === null) return `${field}: ${String(value)}`;

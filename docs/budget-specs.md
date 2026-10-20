@@ -16,11 +16,11 @@
 - **Income source** — one stream of income that the plan counts, such as a job, interest, or
   dividends. Each income source belongs to one person, and a person can have any number of them.
   Every kind of income source works the same way.
-- **Paycheck** — the gross pay of one income source for one pay period, and the list of deductions
-  from it.
-- **Net pay** — the gross pay of a paycheck minus all its deductions.
-- **Planned net income** — for one year-month, the net pay of each active income source times its
-  paychecks per month, plus every one-time income line in that year-month.
+- **Payment** — the gross amount of one payment from an income source, such as one paycheck, and
+  the list of deductions from it. A payment with no deductions, such as interest, is also valid.
+- **Net amount** — the gross amount of a payment minus all its deductions.
+- **Planned net income** — for one year-month, the net amount of each active income source times its
+  payments per month, plus every one-time income line in that year-month.
 - **Left to assign** — for one year-month, the planned net income minus the sum of all budget
   targets. The goal is `$0`.
 - **Disposition** — the effect of a transaction on the budget: **Budget**, **Off-budget**, or
@@ -165,32 +165,32 @@
 31. I want to record each income source. An income source has a person, a label, and a pay
     frequency, such as every two weeks. A person can have any number of income sources. The code
     must not contain an employer name or any other real income data.
-32. For each income source, I want to record one paycheck: the gross pay, and a list of deductions.
-    Each deduction has a label, a kind, and an amount for one paycheck. The kinds are: tax, pre-tax
+32. For each income source, I want to record one payment: the gross amount, and a list of
+    deductions. Each deduction has a label, a kind, and an amount for one payment. The kinds are: tax, pre-tax
     savings (such as a 401k or an HSA), pre-tax benefit (such as medical insurance or a DCFSA), and
-    post-tax savings (such as a Roth 401k). The app calculates the net pay.
-33. Each income source has a number of **paychecks per month** for the plan. The default for a pay
+    post-tax savings (such as a Roth 401k). The app calculates the net amount.
+33. Each income source has a number of **payments per month** for the plan. The default for a pay
     period of two weeks is 2. The app uses the same number in every month. It does not add the
     third paycheck in a month that has three paychecks. I accept that the plan is then lower than
     the real income.
 34. The income plan obeys the same month rules as a budget target. These are the grace period and
     the lock (Spec 4), the editable year-months (Spec 12), the override, the carry-forward (Spec
-    17), and the pins (Specs 18 to 20). A change to a paycheck in one year-month carries forward to
-    later year-months. A locked year-month keeps the paycheck that it had (Spec 2).
+    17), and the pins (Specs 18 to 20). A change to a payment in one year-month carries forward to
+    later year-months. A locked year-month keeps the payment that it had (Spec 2).
 35. I want to add a **one-time income line** to an editable year-month. It has a label and a net
     amount. It applies to that year-month only, and it never carries forward. I use it for a bonus,
     an RSU payout, a DCFSA payout, a third paycheck, or any other extra money that I want to
     budget. Extra money without a one-time income line is not part of the plan.
-36. The app does not model a change in net pay during the year. Examples are a 401k deduction that
+36. The app does not model a change in the net amount during the year. Examples are a 401k deduction that
     stops at the annual limit, or a Social Security tax that stops at the wage limit. I change the
-    paycheck myself when I want to.
+    payment myself when I want to.
 37. I can deactivate an income source. The rules are the same as for a category (Spec 15). It keeps
     its history in the current, grace, and locked year-months. It drops its future pins when I
     confirm.
-38. I want an **Income** page. It shows each income source, and the breakdown from gross pay to
-    net pay for a year-month that I choose. It also shows the one-time income lines of that
+38. I want an **Income** page. It shows each income source, and the breakdown from the gross amount
+    to the net amount for a year-month that I choose. It also shows the one-time income lines of that
     year-month. I make every change to the income plan on this page.
-39. The audit log records each change to a paycheck, a pin or an unpin of a paycheck, and each
+39. The audit log records each change to a payment, a pin or an unpin of a payment, and each
     change to a one-time income line. Each change needs an explanation, the same as a change to a
     budget target.
 
@@ -199,7 +199,7 @@
 40. I want to see the **left to assign** amount for a year-month. The budget editor, the Budget
     Summary, and every other page that shows a top line must show it. These pages show the
     planned net income and the left to assign amount only. They do not show the breakdown from
-    gross pay to net pay.
+    the gross amount to the net amount.
 41. A positive left to assign amount is money with no job. A negative amount means that the
     targets are more than the planned net income. The app shows the amount, and it must make a
     value other than `$0` easy to see. It does not block a save.
@@ -291,9 +291,9 @@ These items are out of scope now. The design must not block them.
 - **Memory of past choices.** The import uses the category that I chose before for the same
   description, and it does not ask the LLM.
 - **A stored column mapping for each account.** The LLM then sees each bank format one time only.
-- **A retirement-limit estimate.** A rough guess, from the paychecks, of whether we reach the
+- **A retirement-limit estimate.** A rough guess, from the payments, of whether we reach the
   annual 401k limit.
-- **A paystub upload.** An LLM reads a paystub PDF and fills in the paycheck.
+- **A paystub upload.** An LLM reads a paystub PDF and fills in the payment.
 - **A link from a savings deduction to an account** of the net worth record.
 - **Actual income against the plan.**
 

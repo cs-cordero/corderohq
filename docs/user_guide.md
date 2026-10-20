@@ -206,11 +206,12 @@ The budget's top line is **left to assign**: the planned net income minus the bu
 goal is `$0`. The summary page and the Allocations page show it.
 
 1. **Set up the income.** On the Income page, add one income source for each stream of income
-   that you want to plan, such as each job, or interest or dividends. For a job, type the gross pay
-   and each deduction from a paystub. For a source with no deductions, type only the gross amount. The app calculates the net pay. Set the
-   paychecks per month that the plan counts, usually 2 for pay every two weeks. The first paycheck
-   goes in the current month and carries forward.
-2. **Change a paycheck.** Change it in the month where the change starts. A change in the current
+   that you want to plan, such as each job, or interest or dividends. For a job, type the gross
+   amount and each deduction from a paystub. For a source with no deductions, type only the gross
+   amount. The app calculates the net amount. Set the payments per month that the plan counts,
+   usually 2 for pay every two weeks. The first payment goes in the current month and carries
+   forward.
+2. **Change a payment.** Change it in the month where the change starts. A change in the current
    month carries forward. A change in a future month is a pin.
 3. **Add extra money.** For a bonus, an RSU payout, a third paycheck, or a DCFSA payout that you
    want to budget, add a one-time income line in that month. Extra money with no line is not part

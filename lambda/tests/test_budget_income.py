@@ -1,4 +1,4 @@
-"""Tests for the income plan: paycheck rules, the tables, compute_income, and the routes."""
+"""Tests for the income plan: payment rules, the tables, compute_income, and the routes."""
 
 import json
 import os
@@ -32,12 +32,12 @@ from corderohq.aws.dynamodb import (
 from corderohq.budget.densify import densify
 from corderohq.budget.income import (
     monthly_net,
-    net_pay,
-    paychecks_equal,
+    net_amount,
+    payments_equal,
     validate_frequency,
     validate_label,
     validate_one_time_amount,
-    validate_paycheck,
+    validate_payment,
 )
 from corderohq.personal_finance_handler import handler
 
@@ -49,8 +49,8 @@ _FUTURE = "2026-09"
 _LOCKED = "2026-03"
 _ADMIN_GROUP = "budget-admin-test"
 
-_PAYCHECK: dict[str, Any] = {
-    "paychecksPerMonth": 2,
+_PAYMENT: dict[str, Any] = {
+    "paymentsPerMonth": 2,
     "gross": 5_000_000_000,
     "deductions": [
         {"label": "Federal tax", "kind": "TAX", "amount": 600_000_000},
@@ -60,71 +60,71 @@ _PAYCHECK: dict[str, Any] = {
 _NET = 4_000_000_000
 
 
-def _raised(paycheck: dict[str, Any], gross: int) -> dict[str, Any]:
-    return {**paycheck, "gross": gross}
+def _raised(payment: dict[str, Any], gross: int) -> dict[str, Any]:
+    return {**payment, "gross": gross}
 
 
-# --- The paycheck rules ---
+# --- The payment rules ---
 
 
-class TestValidatePaycheck:
+class TestValidatePayment:
     def test_returns_the_stored_shape(self) -> None:
-        assert validate_paycheck(_PAYCHECK) == _PAYCHECK
+        assert validate_payment(_PAYMENT) == _PAYMENT
 
     def test_label_is_trimmed(self) -> None:
-        raw = {**_PAYCHECK, "deductions": [{"label": "  Tax  ", "kind": "TAX", "amount": 1}]}
-        assert validate_paycheck(raw)["deductions"][0]["label"] == "Tax"
+        raw = {**_PAYMENT, "deductions": [{"label": "  Tax  ", "kind": "TAX", "amount": 1}]}
+        assert validate_payment(raw)["deductions"][0]["label"] == "Tax"
 
     def test_accepts_integral_decimals_from_dynamodb(self) -> None:
         raw = {
-            "paychecksPerMonth": Decimal("2"),
+            "paymentsPerMonth": Decimal("2"),
             "gross": Decimal("5000000000"),
             "deductions": [{"label": "Tax", "kind": "TAX", "amount": Decimal("1000000000")}],
         }
-        result = validate_paycheck(raw)
+        result = validate_payment(raw)
         assert result["gross"] == 5_000_000_000
         assert isinstance(result["gross"], int)
 
     @pytest.mark.parametrize(
         ("change", "message"),
         [
-            ({"paychecksPerMonth": 0}, "paychecksPerMonth must be from 1 to 5"),
-            ({"paychecksPerMonth": 6}, "paychecksPerMonth must be from 1 to 5"),
-            ({"paychecksPerMonth": True}, "paychecksPerMonth must be an integer"),
+            ({"paymentsPerMonth": 0}, "paymentsPerMonth must be from 1 to 5"),
+            ({"paymentsPerMonth": 6}, "paymentsPerMonth must be from 1 to 5"),
+            ({"paymentsPerMonth": True}, "paymentsPerMonth must be an integer"),
             ({"gross": -1}, "gross must not be negative"),
             ({"gross": 1.5}, "gross must be an integer"),
             ({"deductions": "x"}, "deductions must be a list"),
             ({"deductions": [{"label": "x", "kind": "OTHER", "amount": 1}]}, "kind must be one of"),
             ({"deductions": [{"label": "", "kind": "TAX", "amount": 1}]}, "label is required"),
             ({"deductions": [{"label": "x", "kind": "TAX", "amount": -1}]}, "amount must not be negative"),
-            ({"gross": 100}, "the deductions must not be more than the gross pay"),
+            ({"gross": 100}, "the deductions must not be more than the gross amount"),
         ],
     )
-    def test_rejects_a_broken_paycheck(self, change: dict[str, Any], message: str) -> None:
+    def test_rejects_a_broken_payment(self, change: dict[str, Any], message: str) -> None:
         with pytest.raises(ValueError, match=message):
-            validate_paycheck({**_PAYCHECK, **change})
+            validate_payment({**_PAYMENT, **change})
 
     def test_rejects_a_value_that_is_not_an_object(self) -> None:
-        with pytest.raises(ValueError, match="paycheck must be an object"):
-            validate_paycheck(None)
+        with pytest.raises(ValueError, match="payment must be an object"):
+            validate_payment(None)
 
 
 class TestNetPay:
     def test_net_and_monthly_net(self) -> None:
-        assert net_pay(_PAYCHECK) == _NET
-        assert monthly_net(_PAYCHECK) == 2 * _NET
+        assert net_amount(_PAYMENT) == _NET
+        assert monthly_net(_PAYMENT) == 2 * _NET
 
     def test_no_deductions(self) -> None:
-        assert net_pay({"paychecksPerMonth": 1, "gross": 7, "deductions": []}) == 7
+        assert net_amount({"paymentsPerMonth": 1, "gross": 7, "deductions": []}) == 7
 
 
 class TestSmallRules:
-    def test_paychecks_equal_ignores_int_and_decimal(self) -> None:
-        stored = {**_PAYCHECK, "gross": Decimal("5000000000"), "paychecksPerMonth": Decimal("2")}
-        assert paychecks_equal(stored, _PAYCHECK)
-        assert not paychecks_equal(stored, _raised(_PAYCHECK, 6_000_000_000))
-        assert paychecks_equal(None, None)
-        assert not paychecks_equal(None, _PAYCHECK)
+    def test_payments_equal_ignores_int_and_decimal(self) -> None:
+        stored = {**_PAYMENT, "gross": Decimal("5000000000"), "paymentsPerMonth": Decimal("2")}
+        assert payments_equal(stored, _PAYMENT)
+        assert not payments_equal(stored, _raised(_PAYMENT, 6_000_000_000))
+        assert payments_equal(None, None)
+        assert not payments_equal(None, _PAYMENT)
 
     def test_one_time_amount_must_be_positive(self) -> None:
         assert validate_one_time_amount(5) == 5
@@ -160,13 +160,13 @@ def _source_table(sources: list[dict[str, Any]]) -> IncomeSourceTable:
     return table
 
 
-def _paycheck_row(year_month: str, source_id: str, paycheck: dict[str, Any] = _PAYCHECK) -> dict[str, Any]:
+def _payment_row(year_month: str, source_id: str, payment: dict[str, Any] = _PAYMENT) -> dict[str, Any]:
     return {
         "yearMonth": year_month,
         "lineId": f"SRC#{source_id}",
-        "lineType": "PAYCHECK",
+        "lineType": "PAYMENT",
         "incomeSourceId": source_id,
-        **paycheck,
+        **payment,
     }
 
 
@@ -192,24 +192,24 @@ def _source(source_id: str, active: bool = True, sort_order: int = 0) -> dict[st
 
 
 class TestIncomePlanCarryStore:
-    def test_reads_paycheck_rows_only_and_strips_the_prefix(self) -> None:
-        table, _ = _plan_table([_paycheck_row("2026-05", "s1"), _one_time_row("2026-05", "x", 9)])
+    def test_reads_payment_rows_only_and_strips_the_prefix(self) -> None:
+        table, _ = _plan_table([_payment_row("2026-05", "s1"), _one_time_row("2026-05", "x", 9)])
         rows = IncomePlanCarryStore(table).scan_carry_rows()
-        assert rows == [("2026-05", "s1", _PAYCHECK)]
+        assert rows == [("2026-05", "s1", _PAYMENT)]
 
     def test_writes_nothing_for_none(self) -> None:
         table, mock = _plan_table([])
         IncomePlanCarryStore(table).put_carry_row("2026-06", "s1", None)
         mock.put_item.assert_not_called()
 
-    def test_densify_copies_the_paycheck_and_never_a_one_time_line(self) -> None:
-        table, mock = _plan_table([_paycheck_row("2026-04", "s1"), _one_time_row("2026-04", "x", 9)])
+    def test_densify_copies_the_payment_and_never_a_one_time_line(self) -> None:
+        table, mock = _plan_table([_payment_row("2026-04", "s1"), _one_time_row("2026-04", "x", 9)])
         written = densify(IncomePlanCarryStore(table), ["s1"], "2026-06", cold_start_value=None)
         assert written == 2
         items = [call.kwargs["Item"] for call in mock.put_item.call_args_list]
         assert [(i["yearMonth"], i["lineId"], i["gross"]) for i in items] == [
-            ("2026-05", "SRC#s1", _PAYCHECK["gross"]),
-            ("2026-06", "SRC#s1", _PAYCHECK["gross"]),
+            ("2026-05", "SRC#s1", _PAYMENT["gross"]),
+            ("2026-06", "SRC#s1", _PAYMENT["gross"]),
         ]
 
     def test_densify_with_no_history_writes_nothing(self) -> None:
@@ -236,8 +236,8 @@ class TestIncomeSourceTable:
 class TestComputeIncome:
     def test_editable_month_counts_active_sources_and_one_time_lines(self) -> None:
         rows = [
-            _paycheck_row(_CURRENT, "s1"),
-            _paycheck_row(_CURRENT, "s2"),
+            _payment_row(_CURRENT, "s1"),
+            _payment_row(_CURRENT, "s2"),
             _one_time_row(_CURRENT, "b", 1_000_000),
         ]
         plan, _ = _plan_table(rows)
@@ -246,32 +246,32 @@ class TestComputeIncome:
         result = compute_income(plan, sources, _CURRENT, _NOW)
 
         assert result["state"] == "EDITABLE"
-        assert [p["incomeSourceId"] for p in result["paychecks"]] == ["s1"]
-        assert result["paychecks"][0]["net"] == _NET
-        assert result["paychecks"][0]["monthlyNet"] == 2 * _NET
-        assert "pinned" not in result["paychecks"][0]
+        assert [p["incomeSourceId"] for p in result["payments"]] == ["s1"]
+        assert result["payments"][0]["net"] == _NET
+        assert result["payments"][0]["monthlyNet"] == 2 * _NET
+        assert "pinned" not in result["payments"][0]
         assert result["oneTime"] == [{"lineId": "ONE#b", "label": "Bonus", "amount": 1_000_000}]
         assert result["plannedNetIncome"] == 2 * _NET + 1_000_000
 
     def test_locked_month_counts_inactive_sources_with_a_row(self) -> None:
-        plan, _ = _plan_table([_paycheck_row(_LOCKED, "s2")])
+        plan, _ = _plan_table([_payment_row(_LOCKED, "s2")])
         sources = _source_table([_source("s1"), _source("s2", active=False)])
 
         result = compute_income(plan, sources, _LOCKED, _NOW)
 
         assert result["state"] == "LOCKED"
-        assert [p["incomeSourceId"] for p in result["paychecks"]] == ["s2"]
+        assert [p["incomeSourceId"] for p in result["payments"]] == ["s2"]
         assert result["plannedNetIncome"] == 2 * _NET
 
     def test_future_month_uses_pins_and_the_walk_back(self) -> None:
-        raised = _raised(_PAYCHECK, 6_000_000_000)
-        rows = [_paycheck_row(_CURRENT, "s1"), _paycheck_row(_CURRENT, "s2"), _paycheck_row(_FUTURE, "s2", raised)]
+        raised = _raised(_PAYMENT, 6_000_000_000)
+        rows = [_payment_row(_CURRENT, "s1"), _payment_row(_CURRENT, "s2"), _payment_row(_FUTURE, "s2", raised)]
         plan, _ = _plan_table(rows)
         sources = _source_table([_source("s1"), _source("s2"), _source("s3")])
 
         result = compute_income(plan, sources, _FUTURE, _NOW)
 
-        by_id = {p["incomeSourceId"]: p for p in result["paychecks"]}
+        by_id = {p["incomeSourceId"]: p for p in result["payments"]}
         assert set(by_id) == {"s1", "s2"}
         assert by_id["s1"]["pinned"] is False
         assert by_id["s2"]["pinned"] is True
@@ -306,7 +306,7 @@ def tables() -> Iterator[dict[str, MagicMock]]:
     ):
         source_table.get.return_value = _source("s1")
         profile_table.get_person.return_value = {"personId": "p1"}
-        plan_table.put_paycheck.side_effect = lambda ym, sid, paycheck: _paycheck_row(ym, sid, paycheck)
+        plan_table.put_payment.side_effect = lambda ym, sid, payment: _payment_row(ym, sid, payment)
         yield {
             "source": source_table,
             "plan": plan_table,
@@ -334,20 +334,20 @@ def _audit_actions(audit: MagicMock) -> list[str]:
 
 
 class TestIncomeSourceRoutes:
-    def test_create_writes_the_first_paycheck_in_the_current_month(self, tables: dict[str, MagicMock]) -> None:
+    def test_create_writes_the_first_payment_in_the_current_month(self, tables: dict[str, MagicMock]) -> None:
         tables["source"].create.return_value = _source("s1")
         body = {
             "personId": "p1",
             "label": "Employer A",
             "frequency": "biweekly",
-            "initialPaycheck": _PAYCHECK,
+            "initialPayment": _PAYMENT,
             "explanation": "new job",
         }
         result = handler(_event("POST", "/api/income-sources", body), None)
 
         assert result["statusCode"] == 201
         tables["source"].create.assert_called_once_with("p1", "Employer A", "biweekly")
-        tables["plan"].put_paycheck.assert_called_once_with(_CURRENT, "s1", _PAYCHECK)
+        tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", _PAYMENT)
         audit = tables["audit"].write_entry.call_args.kwargs
         assert audit["action"] == "INCOME_CREATE"
         assert audit["category_id"] is None
@@ -356,17 +356,17 @@ class TestIncomeSourceRoutes:
 
     def test_create_needs_a_known_person(self, tables: dict[str, MagicMock]) -> None:
         tables["profile"].get_person.return_value = None
-        body = {"personId": "nobody", "label": "A", "frequency": "biweekly", "initialPaycheck": _PAYCHECK}
+        body = {"personId": "nobody", "label": "A", "frequency": "biweekly", "initialPayment": _PAYMENT}
         result = handler(_event("POST", "/api/income-sources", {**body, "explanation": "x"}), None)
         assert result["statusCode"] == 400
         tables["source"].create.assert_not_called()
 
-    def test_create_with_a_broken_paycheck_returns_400(self, tables: dict[str, MagicMock]) -> None:
+    def test_create_with_a_broken_payment_returns_400(self, tables: dict[str, MagicMock]) -> None:
         body = {
             "personId": "p1",
             "label": "A",
             "frequency": "biweekly",
-            "initialPaycheck": {**_PAYCHECK, "gross": 1},
+            "initialPayment": {**_PAYMENT, "gross": 1},
             "explanation": "x",
         }
         result = handler(_event("POST", "/api/income-sources", body), None)
@@ -386,12 +386,12 @@ class TestIncomeSourceRoutes:
 
     def test_deactivate_with_confirm_drops_the_pins(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].find_future_months_with_source.return_value = [_FUTURE]
-        tables["plan"].get_line.return_value = _paycheck_row(_FUTURE, "s1")
+        tables["plan"].get_line.return_value = _payment_row(_FUTURE, "s1")
         tables["source"].set_active.return_value = _source("s1", active=False)
         body = {"confirm": True, "explanation": "job ended"}
         result = handler(_event("POST", "/api/income-sources/s1/deactivate", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].delete_paycheck.assert_called_once_with(_FUTURE, "s1")
+        tables["plan"].delete_payment.assert_called_once_with(_FUTURE, "s1")
         assert _audit_actions(tables["audit"]) == ["INCOME_UNPIN"]
         tables["source"].set_active.assert_called_once_with("s1", False)
 
@@ -404,43 +404,43 @@ class TestIncomeSourceRoutes:
 
 
 class TestIncomeReplace:
-    def test_writes_a_changed_paycheck_with_an_update_entry(self, tables: dict[str, MagicMock]) -> None:
-        tables["plan"].get_month.return_value = [_paycheck_row(_CURRENT, "s1")]
-        raised = _raised(_PAYCHECK, 6_000_000_000)
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": raised}], "explanation": "raise"}
+    def test_writes_a_changed_payment_with_an_update_entry(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].get_month.return_value = [_payment_row(_CURRENT, "s1")]
+        raised = _raised(_PAYMENT, 6_000_000_000)
+        body = {"payments": [{"incomeSourceId": "s1", "payment": raised}], "explanation": "raise"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].put_paycheck.assert_called_once_with(_CURRENT, "s1", raised)
+        tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", raised)
         assert _audit_actions(tables["audit"]) == ["INCOME_UPDATE"]
 
-    def test_same_paycheck_is_a_no_op(self, tables: dict[str, MagicMock]) -> None:
-        tables["plan"].get_month.return_value = [_paycheck_row(_CURRENT, "s1")]
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": _PAYCHECK}], "explanation": "same"}
+    def test_same_payment_is_a_no_op(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].get_month.return_value = [_payment_row(_CURRENT, "s1")]
+        body = {"payments": [{"incomeSourceId": "s1", "payment": _PAYMENT}], "explanation": "same"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].put_paycheck.assert_not_called()
+        tables["plan"].put_payment.assert_not_called()
         tables["audit"].write_entry.assert_not_called()
 
     def test_body_must_hold_every_source_with_a_row(self, tables: dict[str, MagicMock]) -> None:
-        tables["plan"].get_month.return_value = [_paycheck_row(_CURRENT, "s1"), _paycheck_row(_CURRENT, "s2")]
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": _PAYCHECK}], "explanation": "x"}
+        tables["plan"].get_month.return_value = [_payment_row(_CURRENT, "s1"), _payment_row(_CURRENT, "s2")]
+        body = {"payments": [{"incomeSourceId": "s1", "payment": _PAYMENT}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 409
         assert json.loads(result["body"])["missingIncomeSourceIds"] == ["s2"]
 
-    def test_null_paycheck_returns_400(self, tables: dict[str, MagicMock]) -> None:
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": None}], "explanation": "x"}
+    def test_null_payment_returns_400(self, tables: dict[str, MagicMock]) -> None:
+        body = {"payments": [{"incomeSourceId": "s1", "payment": None}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 400
 
     def test_future_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
-        body = {"paychecks": [], "explanation": "x"}
+        body = {"payments": [], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/replace", body), None)
         assert result["statusCode"] == 409
 
     def test_locked_month_needs_the_override(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].get_month.return_value = []
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": _PAYCHECK}], "explanation": "x"}
+        body = {"payments": [{"incomeSourceId": "s1", "payment": _PAYMENT}], "explanation": "x"}
         locked = handler(_event("POST", f"/api/income/{_LOCKED}/replace", body), None)
         assert locked["statusCode"] == 409
 
@@ -452,40 +452,40 @@ class TestIncomeReplace:
 
 class TestIncomePin:
     def test_pin_writes_and_warns_when_it_matches_the_carried_value(self, tables: dict[str, MagicMock]) -> None:
-        tables["plan"].scan_paychecks.return_value = [_paycheck_row(_CURRENT, "s1")]
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": _PAYCHECK}], "explanation": "x"}
+        tables["plan"].scan_payments.return_value = [_payment_row(_CURRENT, "s1")]
+        body = {"payments": [{"incomeSourceId": "s1", "payment": _PAYMENT}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/pin", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].put_paycheck.assert_called_once_with(_FUTURE, "s1", _PAYCHECK)
+        tables["plan"].put_payment.assert_called_once_with(_FUTURE, "s1", _PAYMENT)
         assert _audit_actions(tables["audit"]) == ["INCOME_PIN"]
         assert json.loads(result["body"])["warnings"]["pinMatchesCarriedValue"] == ["s1"]
 
     def test_pin_lists_downstream_pins(self, tables: dict[str, MagicMock]) -> None:
         later = "2026-12"
-        tables["plan"].scan_paychecks.return_value = [_paycheck_row(_CURRENT, "s1"), _paycheck_row(later, "s1")]
-        raised = _raised(_PAYCHECK, 6_000_000_000)
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": raised}], "explanation": "x"}
+        tables["plan"].scan_payments.return_value = [_payment_row(_CURRENT, "s1"), _payment_row(later, "s1")]
+        raised = _raised(_PAYMENT, 6_000_000_000)
+        body = {"payments": [{"incomeSourceId": "s1", "payment": raised}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/pin", body), None)
         warnings = json.loads(result["body"])["warnings"]
         assert warnings["downstreamPins"] == [{"incomeSourceId": "s1", "yearMonth": later}]
         assert warnings["pinMatchesCarriedValue"] == []
 
     def test_unpin_deletes_the_row(self, tables: dict[str, MagicMock]) -> None:
-        tables["plan"].scan_paychecks.return_value = [_paycheck_row(_FUTURE, "s1")]
-        body = {"paychecks": [{"incomeSourceId": "s1", "paycheck": None}], "explanation": "x"}
+        tables["plan"].scan_payments.return_value = [_payment_row(_FUTURE, "s1")]
+        body = {"payments": [{"incomeSourceId": "s1", "payment": None}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/pin", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].delete_paycheck.assert_called_once_with(_FUTURE, "s1")
+        tables["plan"].delete_payment.assert_called_once_with(_FUTURE, "s1")
         assert _audit_actions(tables["audit"]) == ["INCOME_UNPIN"]
 
     def test_current_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
-        body = {"paychecks": [], "explanation": "x"}
+        body = {"payments": [], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/pin", body), None)
         assert result["statusCode"] == 409
 
     def test_unknown_source_returns_400(self, tables: dict[str, MagicMock]) -> None:
         tables["source"].get.return_value = None
-        body = {"paychecks": [{"incomeSourceId": "nope", "paycheck": _PAYCHECK}], "explanation": "x"}
+        body = {"payments": [{"incomeSourceId": "nope", "payment": _PAYMENT}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/pin", body), None)
         assert result["statusCode"] == 400
 
@@ -518,7 +518,7 @@ class TestOneTimeLines:
         assert audit["action"] == "ONE_TIME_DELETE"
         assert audit["changes"] == {"line": {"before": {"label": "Bonus", "amount": 1_000}, "after": None}}
 
-    def test_paycheck_line_id_is_not_a_one_time_line(self, tables: dict[str, MagicMock]) -> None:
+    def test_payment_line_id_is_not_a_one_time_line(self, tables: dict[str, MagicMock]) -> None:
         body = {"lineId": "SRC#s1", "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/one-time/delete", body), None)
         assert result["statusCode"] == 400

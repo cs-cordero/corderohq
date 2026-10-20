@@ -46,7 +46,7 @@ class BudgetAuditLogTable:
         `effective_year_month` may be None for actions not scoped to a single month
         (e.g. CATEGORY_HARD_DELETE).
         A budget entry has a `category_id`. An income plan entry has an `income_line_id`, and a
-        paycheck entry also has an `income_source_id`. An ID that is None is not stored.
+        payment entry also has an `income_source_id`. An ID that is None is not stored.
         """
         now = datetime.now(tz=UTC)
 

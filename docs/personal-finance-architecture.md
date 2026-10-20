@@ -11,10 +11,10 @@ can then compare the actual amounts against the budget. The app records each bud
 audit log, and each change needs an explanation.
 
 The budget also has an **income plan**. Each income source (any stream of income, such as a job,
-interest, or dividends) has a paycheck
-with gross pay and deductions, and the app calculates the net pay. The top line of the budget is
+interest, or dividends) has a payment
+with gross amount and deductions, and the app calculates the net amount. The top line of the budget is
 **left to assign**: the planned net income minus the budget targets. The goal is `$0`, so every
-dollar of net pay has a job. See **Income Plan and Left to Assign**.
+dollar of net amount has a job. See **Income Plan and Left to Assign**.
 
 Each transaction has a **disposition**: Budget (a normal expense), Off-budget (such as work travel
 that an employer pays back), or Skip (such as a paycheck or a transfer). Only Budget rows are
@@ -51,7 +51,7 @@ lambda/src/corderohq/
         fingerprints.py    The fingerprint of each row, to find a row that was saved before
         directions.py      The direction table: a suggested disposition for each CSV row
     budget/dispositions.py The Budget / Off-budget / Skip rules of a transaction
-    budget/income.py       Paycheck rules, net pay, and the IncomePlan row IDs
+    budget/income.py       Payment rules, net amount, and the IncomePlan row IDs
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
     budget/editability.py  The editability state function
     budget/auth.py         Admin group check
@@ -170,8 +170,8 @@ it.
 |                        |                    |            | timestamps.                 |
 +------------------------+--------------------+------------+-----------------------------+
 | IncomePlan-{stage}     | yearMonth          | lineId     | "SRC#{incomeSourceId}": a   |
-|                        |                    |            | paycheck row (lineType      |
-|                        |                    |            | PAYCHECK; paychecksPerMonth,|
+|                        |                    |            | payment row (lineType       |
+|                        |                    |            | PAYMENT; paymentsPerMonth,  |
 |                        |                    |            | gross, deductions[{label,   |
 |                        |                    |            | kind, amount}]). Dense/     |
 |                        |                    |            | sparse like Budget rows.    |
@@ -576,17 +576,17 @@ The shape of the `changes` field on a `BudgetAuditLog-{stage}` row depends on th
 ### Audit entries of the income plan
 
 The income plan writes these actions to the same log. An income entry has no `categoryId`. It has
-`incomeLineId`, and a paycheck entry also has `incomeSourceId`.
+`incomeLineId`, and a payment entry also has `incomeSourceId`.
 
 | Action | Made by | `changes` |
 |---|---|---|
-| `INCOME_CREATE` | the create of an income source; `/replace` writes a new paycheck row | `{paycheck: {before: null, after: P}}` (the create also has `label`) |
-| `INCOME_UPDATE` | `/replace` changes a paycheck row | `{paycheck: {before: P, after: P}}` |
-| `INCOME_PIN` | `/pin` writes a future paycheck | `{paycheck: {before: P \| null, after: P}}` |
-| `INCOME_UNPIN` | `/pin` with `paycheck: null`; a deactivation that drops a pin | `{paycheck: {before: P, after: null}}` |
+| `INCOME_CREATE` | the create of an income source; `/replace` writes a new payment row | `{payment: {before: null, after: P}}` (the create also has `label`) |
+| `INCOME_UPDATE` | `/replace` changes a payment row | `{payment: {before: P, after: P}}` |
+| `INCOME_PIN` | `/pin` writes a future payment | `{payment: {before: P \| null, after: P}}` |
+| `INCOME_UNPIN` | `/pin` with `payment: null`; a deactivation that drops a pin | `{payment: {before: P, after: null}}` |
 | `ONE_TIME_CREATE` / `_UPDATE` / `_DELETE` | the `/one-time` routes | `{line: {before: L \| null, after: L \| null}}` |
 
-`P` is `{paychecksPerMonth, gross, deductions}`. `L` is `{label, amount}`. The entry holds the label
+`P` is `{paymentsPerMonth, gross, deductions}`. `L` is `{label, amount}`. The entry holds the label
 of a one-time line, because the line can be deleted later. The rename, the reorder, and the
 reactivation of an income source make no entry, the same as for a category.
 
@@ -885,9 +885,9 @@ active keys:
 - `BudgetCarryStore(budget_table)`: the key is a `categoryId`, and the value is the amount.
   The cold-start value is `0`.
 - `IncomePlanCarryStore(income_plan_table)`: the key is an `incomeSourceId`, and the value is the
-  paycheck. It reads only the `SRC#` rows, so a one-time line never carries forward. The
+  payment. It reads only the `SRC#` rows, so a one-time line never carries forward. The
   cold-start value is `None`, and the store writes no row for `None`: an income source always gets
-  its first paycheck row when it is made.
+  its first payment row when it is made.
 
 `_ensure_hydrated()` and the scheduled Lambda densify both tables. `compute_summary()` and
 `compute_income()` use the shared walk-back functions (`walk_back_for()`,
@@ -897,35 +897,35 @@ active keys:
 
 An **income source** is one stream of income that the plan counts, such as a job, interest, or
 dividends (`IncomeSource-{stage}`). It belongs to one person, and a person can have any number of
-them. Every kind works the same way: for a source with no deductions, the gross pay equals the net
-pay. Each dense month holds one **paycheck row** for each active income source, in
+them. Every kind works the same way: for a source with no deductions, the gross amount equals the net
+pay. Each dense month holds one **payment row** for each active income source, in
 `IncomePlan-{stage}`, with the same month rules as a Budget row: dense past and current months,
 sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
 entry with an explanation for each change.
 
-A paycheck is `{paychecksPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount
-for one paycheck. The kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`;
-they are for display only. `budget/income.py` checks a paycheck (`validate_paycheck()`), and
-calculates `net = gross − sum(deductions)` and `monthlyNet = net × paychecksPerMonth`. The app never
-stores the net pay. The plan uses the same `paychecksPerMonth` (usually 2) in every month, so a
+A payment is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount
+for one payment. The kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`;
+they are for display only. `budget/income.py` checks a payment (`validate_payment()`), and
+calculates `net = gross − sum(deductions)` and `monthlyNet = net × paymentsPerMonth`. The app never
+stores the net amount. The plan uses the same `paymentsPerMonth` (usually 2) in every month, so a
 third paycheck is not in the plan.
 
 A **one-time income line** (`ONE#{ULID}`) is a net amount in one month only, such as a bonus, an
 RSU payout, a DCFSA payout, or a third paycheck. It never carries forward.
 
-`compute_income()` returns one month: the paychecks, the one-time lines, and
+`compute_income()` returns one month: the payments, the one-time lines, and
 `plannedNetIncome = sum(monthlyNet) + sum(one-time amounts)`. Membership copies the summary:
 
 - **A future month** — each active income source, with a pin or a value from the walk back.
-- **The current month and the grace month** — each active income source with a paycheck row.
-- **A locked month** — each income source with a paycheck row, active or not.
+- **The current month and the grace month** — each active income source with a payment row.
+- **A locked month** — each income source with a payment row, active or not.
 
 **Left to assign** = `plannedNetIncome − totals.budgeted`. `GET /api/summary` returns it in
 `income`. The budget page fetches `GET /api/income/{YYYY-MM}` and calculates it live from the form,
 for the active categories. It never blocks a save, and no transaction changes it.
 
 `/replace` needs every income source with a row in that month, and it does not take a `null`
-paycheck: to stop a source, deactivate it. `/pin` takes `null` to remove a pin, and returns the
+payment: to stop a source, deactivate it. `/pin` takes `null` to remove a pin, and returns the
 month and the same two warnings as the budget `/pin`. A deactivation drops the future pins after a
 confirmation, the same as for a category. There is no hard delete for an income source.
 
@@ -1280,7 +1280,7 @@ React and TypeScript, built by Vite.
 
 The pages are `SummaryPage`, `BudgetPage`, `IncomePage`, `TransactionsPage`, `UploadPage`,
 `CategoriesPage`, `AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. `IncomePage` shows the
-paycheck breakdown of each income source for a month, the one-time lines, and the income sources.
+payment breakdown of each income source for a month, the one-time lines, and the income sources.
 The summary page and the budget page show the shared `LeftToAssign` line at the top. The net worth record adds `AccountsPage` and
 `NetWorthEntryPage`. `App.tsx` holds the routes. `components/Layout.tsx` holds the navigation, with
 one list of links for the budget (`BUDGET_LINKS`) and one for the net worth record.
@@ -1333,7 +1333,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 ## Key Design Decisions
 
 - **A plan-based budget** — Left to assign = planned net income − targets. The plan counts the
-  same number of paychecks every month, so extra money (a third paycheck, a bonus) is not in the
+  same number of payments every month, so extra money (a third paycheck, a bonus) is not in the
   plan unless the user adds a one-time line. The app does not track actual income.
 - **The income plan obeys the budget's month rules** — A locked month shows the same left to
   assign amount for ever. One generic densify step serves both tables.

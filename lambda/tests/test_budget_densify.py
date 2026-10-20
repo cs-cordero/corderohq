@@ -187,10 +187,10 @@ class TestGenericStore:
         assert store.rows == [("2026-06", "x", "start")]
 
     def test_walk_forward_copies_any_value_type(self) -> None:
-        paycheck = {"gross": 100, "deductions": []}
-        store = _MemoryStore([("2026-04", "x", paycheck)])
+        payment = {"gross": 100, "deductions": []}
+        store = _MemoryStore([("2026-04", "x", payment)])
         densify(store, ["x"], "2026-06", cold_start_value=None)
-        assert store.rows[1:] == [("2026-05", "x", paycheck), ("2026-06", "x", paycheck)]
+        assert store.rows[1:] == [("2026-05", "x", payment), ("2026-06", "x", payment)]
 
     def test_resolve_future_gives_pinned_and_carried_values(self) -> None:
         store = _MemoryStore([("2026-06", "x", 1), ("2026-06", "y", 2), ("2026-09", "y", 3)])

@@ -1,4 +1,4 @@
-"""The IncomePlan table: the paycheck rows and one-time income lines of each month."""
+"""The IncomePlan table: the payment rows and one-time income lines of each month."""
 
 from __future__ import annotations
 
@@ -9,22 +9,22 @@ from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_pages, scan_pages
 from corderohq.budget.densify import CarryRow
-from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYCHECK_LINE_PREFIX, paycheck_line_id
+from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, payment_line_id
 
 
-def _paycheck_of(row: dict[str, Any]) -> dict[str, Any]:
-    """Return the paycheck value of a stored paycheck row."""
+def payment_of(row: dict[str, Any]) -> dict[str, Any]:
+    """Return the payment value of a stored payment row."""
     return {
-        "paychecksPerMonth": row["paychecksPerMonth"],
+        "paymentsPerMonth": row["paymentsPerMonth"],
         "gross": row["gross"],
         "deductions": row.get("deductions", []),
     }
 
 
 class IncomePlanTable:
-    """The income plan of each month: paycheck rows and one-time income lines.
+    """The income plan of each month: payment rows and one-time income lines.
 
-    PK `yearMonth`, SK `lineId`. A paycheck row has `lineId = "SRC#{incomeSourceId}"`. It obeys
+    PK `yearMonth`, SK `lineId`. A payment row has `lineId = "SRC#{incomeSourceId}"`. It obeys
     the dense-past, sparse-future rules of a Budget row (see `IncomePlanCarryStore`). A one-time
     line has `lineId = "ONE#{ULID}"`. It belongs to its month only.
     """
@@ -33,7 +33,7 @@ class IncomePlanTable:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
     def get_month(self, year_month: str) -> list[dict[str, Any]]:
-        """Return every row of one month: paycheck rows and one-time lines."""
+        """Return every row of one month: payment rows and one-time lines."""
         items: list[dict[str, Any]] = []
         params: dict[str, Any] = {
             "KeyConditionExpression": "yearMonth = :ym",
@@ -43,38 +43,38 @@ class IncomePlanTable:
             items.extend(response.get("Items", []))
         return items
 
-    def scan_paychecks(self) -> list[dict[str, Any]]:
-        """Return every paycheck row in the table. The one-time lines are left out."""
+    def scan_payments(self) -> list[dict[str, Any]]:
+        """Return every payment row in the table. The one-time lines are left out."""
         items: list[dict[str, Any]] = []
         params: dict[str, Any] = {
             "FilterExpression": "begins_with(lineId, :prefix)",
-            "ExpressionAttributeValues": {":prefix": PAYCHECK_LINE_PREFIX},
+            "ExpressionAttributeValues": {":prefix": PAYMENT_LINE_PREFIX},
         }
         for response in scan_pages(self._table, **params):
             items.extend(response.get("Items", []))
-        return [item for item in items if str(item["lineId"]).startswith(PAYCHECK_LINE_PREFIX)]
+        return [item for item in items if str(item["lineId"]).startswith(PAYMENT_LINE_PREFIX)]
 
-    def put_paycheck(self, year_month: str, income_source_id: str, paycheck: dict[str, Any]) -> dict[str, Any]:
-        """Write the paycheck row of one income source in one month. The caller checks the paycheck."""
+    def put_payment(self, year_month: str, income_source_id: str, payment: dict[str, Any]) -> dict[str, Any]:
+        """Write the payment row of one income source in one month. The caller checks the payment."""
         item: dict[str, Any] = {
             "yearMonth": year_month,
-            "lineId": paycheck_line_id(income_source_id),
-            "lineType": "PAYCHECK",
+            "lineId": payment_line_id(income_source_id),
+            "lineType": "PAYMENT",
             "incomeSourceId": income_source_id,
-            **paycheck,
+            **payment,
         }
         self._table.put_item(Item=item)
         return item
 
-    def delete_paycheck(self, year_month: str, income_source_id: str) -> None:
-        self._table.delete_item(Key={"yearMonth": year_month, "lineId": paycheck_line_id(income_source_id)})
+    def delete_payment(self, year_month: str, income_source_id: str) -> None:
+        self._table.delete_item(Key={"yearMonth": year_month, "lineId": payment_line_id(income_source_id)})
 
     def find_future_months_with_source(self, income_source_id: str, after_month: str) -> list[str]:
-        """Return the months after `after_month` that hold a paycheck row (a pin) for this source."""
+        """Return the months after `after_month` that hold a payment row (a pin) for this source."""
         return sorted(
             {
                 str(row["yearMonth"])
-                for row in self.scan_paychecks()
+                for row in self.scan_payments()
                 if row["incomeSourceId"] == income_source_id and str(row["yearMonth"]) > after_month
             }
         )
@@ -104,9 +104,9 @@ class IncomePlanTable:
 
 
 class IncomePlanCarryStore:
-    """The paycheck rows of the IncomePlan table as a `DenseSparseStore` for `budget/densify.py`.
+    """The payment rows of the IncomePlan table as a `DenseSparseStore` for `budget/densify.py`.
 
-    The key of a row is its `incomeSourceId`, and the value is its paycheck. The one-time lines
+    The key of a row is its `incomeSourceId`, and the value is its payment. The one-time lines
     are not part of it, so they never carry forward. A source with no earlier row gets no row:
     `put_carry_row` writes nothing for a `None` value.
     """
@@ -116,11 +116,11 @@ class IncomePlanCarryStore:
 
     def scan_carry_rows(self) -> list[CarryRow]:
         return [
-            (str(row["yearMonth"]), str(row["incomeSourceId"]), _paycheck_of(row))
-            for row in self._income_plan_table.scan_paychecks()
+            (str(row["yearMonth"]), str(row["incomeSourceId"]), payment_of(row))
+            for row in self._income_plan_table.scan_payments()
         ]
 
     def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
         if value is None:
             return
-        self._income_plan_table.put_paycheck(year_month, key, value)
+        self._income_plan_table.put_payment(year_month, key, value)

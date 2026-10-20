@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 class IncomeSourceTable:
     """CRUD operations for income sources. An income source is any stream of income, such as a job.
 
-    The money is not here. Each month of the plan holds a paycheck row in `IncomePlanTable`.
+    The money is not here. Each month of the plan holds a payment row in `IncomePlanTable`.
     """
 
     def __init__(self, table_name: str) -> None:

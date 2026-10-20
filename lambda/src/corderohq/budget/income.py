@@ -1,10 +1,11 @@
-"""The income plan: income sources, paychecks, and one-time income lines.
+"""The income plan: income sources, payments, and one-time income lines.
 
 An income source is any stream of income that the plan counts, such as a job, interest, or
-dividends. Every kind works the same way. Each dense month holds one paycheck row for each
-income source, with the same month rules as a budget target. A paycheck is one value: the gross
-pay of one pay period, a list of deductions, and the number of paychecks that the plan counts in
-each month. The app calculates the net pay. It never stores it.
+dividends. Every kind works the same way. Each dense month holds one payment row for each
+income source, with the same month rules as a budget target. A payment is one value: the gross
+amount of one payment, a list of deductions, and the number of payments that the plan counts in
+each month. For a source with no deductions, such as interest, the net amount is the gross
+amount. The app calculates the net amount. It never stores it.
 
 A one-time income line is a net amount in one month only, such as a bonus. It never carries
 forward.
@@ -20,20 +21,20 @@ from decimal import Decimal
 from typing import Any
 
 # The sort keys of the IncomePlan table.
-PAYCHECK_LINE_PREFIX = "SRC#"
+PAYMENT_LINE_PREFIX = "SRC#"
 ONE_TIME_LINE_PREFIX = "ONE#"
 
 FREQUENCIES = frozenset({"weekly", "biweekly", "semimonthly", "monthly"})
 DEDUCTION_KINDS = frozenset({"TAX", "PRETAX_SAVINGS", "PRETAX_BENEFIT", "POSTTAX_SAVINGS"})
 
-MIN_PAYCHECKS_PER_MONTH = 1
-MAX_PAYCHECKS_PER_MONTH = 5
+MIN_PAYMENTS_PER_MONTH = 1
+MAX_PAYMENTS_PER_MONTH = 5
 LABEL_MAX_LENGTH = 100
 
 
-def paycheck_line_id(income_source_id: str) -> str:
-    """Return the IncomePlan sort key of the paycheck row of one income source."""
-    return f"{PAYCHECK_LINE_PREFIX}{income_source_id}"
+def payment_line_id(income_source_id: str) -> str:
+    """Return the IncomePlan sort key of the payment row of one income source."""
+    return f"{PAYMENT_LINE_PREFIX}{income_source_id}"
 
 
 def _as_int(value: Any, name: str) -> int:
@@ -64,18 +65,18 @@ def validate_frequency(value: Any) -> str:
     return value
 
 
-def validate_paycheck(raw: Any) -> dict[str, Any]:
-    """Check a paycheck, and return it in its stored shape. Raise `ValueError` if a rule fails.
+def validate_payment(raw: Any) -> dict[str, Any]:
+    """Check a payment, and return it in its stored shape. Raise `ValueError` if a rule fails.
 
-    The stored shape is `{paychecksPerMonth, gross, deductions: [{label, kind, amount}]}`. Each
-    amount is for one paycheck. The net pay must not be negative.
+    The stored shape is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`. Each
+    amount is for one payment. The net amount must not be negative.
     """
     if not isinstance(raw, Mapping):
-        raise ValueError("paycheck must be an object")
+        raise ValueError("payment must be an object")
 
-    paychecks_per_month = _as_int(raw.get("paychecksPerMonth"), "paychecksPerMonth")
-    if not MIN_PAYCHECKS_PER_MONTH <= paychecks_per_month <= MAX_PAYCHECKS_PER_MONTH:
-        raise ValueError(f"paychecksPerMonth must be from {MIN_PAYCHECKS_PER_MONTH} to {MAX_PAYCHECKS_PER_MONTH}")
+    payments_per_month = _as_int(raw.get("paymentsPerMonth"), "paymentsPerMonth")
+    if not MIN_PAYMENTS_PER_MONTH <= payments_per_month <= MAX_PAYMENTS_PER_MONTH:
+        raise ValueError(f"paymentsPerMonth must be from {MIN_PAYMENTS_PER_MONTH} to {MAX_PAYMENTS_PER_MONTH}")
 
     gross = _as_int(raw.get("gross"), "gross")
     if gross < 0:
@@ -99,28 +100,28 @@ def validate_paycheck(raw: Any) -> dict[str, Any]:
             {"label": validate_label(raw_deduction.get("label"), f"{where}.label"), "kind": kind, "amount": amount}
         )
 
-    paycheck = {"paychecksPerMonth": paychecks_per_month, "gross": gross, "deductions": deductions}
-    if net_pay(paycheck) < 0:
-        raise ValueError("the deductions must not be more than the gross pay")
-    return paycheck
+    payment = {"paymentsPerMonth": payments_per_month, "gross": gross, "deductions": deductions}
+    if net_amount(payment) < 0:
+        raise ValueError("the deductions must not be more than the gross amount")
+    return payment
 
 
-def net_pay(paycheck: Mapping[str, Any]) -> int:
-    """Return the net pay of one paycheck: the gross pay minus every deduction."""
-    total_deductions = sum(_as_int(d["amount"], "amount") for d in paycheck["deductions"])
-    return _as_int(paycheck["gross"], "gross") - total_deductions
+def net_amount(payment: Mapping[str, Any]) -> int:
+    """Return the net amount of one payment: the gross amount minus every deduction."""
+    total_deductions = sum(_as_int(d["amount"], "amount") for d in payment["deductions"])
+    return _as_int(payment["gross"], "gross") - total_deductions
 
 
-def monthly_net(paycheck: Mapping[str, Any]) -> int:
-    """Return the net pay that the plan counts in one month."""
-    return net_pay(paycheck) * _as_int(paycheck["paychecksPerMonth"], "paychecksPerMonth")
+def monthly_net(payment: Mapping[str, Any]) -> int:
+    """Return the net amount that the plan counts in one month."""
+    return net_amount(payment) * _as_int(payment["paymentsPerMonth"], "paymentsPerMonth")
 
 
-def paychecks_equal(first: Mapping[str, Any] | None, second: Mapping[str, Any] | None) -> bool:
-    """Return True if two paychecks are the same, after each one goes through the checks."""
+def payments_equal(first: Mapping[str, Any] | None, second: Mapping[str, Any] | None) -> bool:
+    """Return True if two payments are the same, after each one goes through the checks."""
     if first is None or second is None:
         return first is None and second is None
-    return validate_paycheck(first) == validate_paycheck(second)
+    return validate_payment(first) == validate_payment(second)
 
 
 def validate_one_time_amount(value: Any) -> int:

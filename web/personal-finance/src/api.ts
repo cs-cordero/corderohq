@@ -33,7 +33,7 @@ import {
     parseTransactionArray,
     parseUploadResult,
 } from "./parsers";
-import type { AccountCreate, AccountUpdate, Disposition, Paycheck, Transaction } from "./types";
+import type { AccountCreate, AccountUpdate, Disposition, Payment, Transaction } from "./types";
 
 const API_BASE = "/api";
 
@@ -213,7 +213,7 @@ export const createIncomeSource = (data: {
     personId: string;
     label: string;
     frequency: string;
-    initialPaycheck: Paycheck;
+    initialPayment: Payment;
     explanation: string;
 }) => request("/income-sources", parseIncomeSource, { method: "POST", ...jsonBody(data) });
 export const updateIncomeSource = (id: string, updates: { label?: string; frequency?: string }) =>
@@ -230,22 +230,22 @@ export const reactivateIncomeSource = (id: string) =>
 export const fetchIncomeMonth = (yearMonth: string) => request(`/income/${yearMonth}`, parseIncomeMonth);
 export const replaceIncome = (
     yearMonth: string,
-    paychecks: { incomeSourceId: string; paycheck: Paycheck }[],
+    payments: { incomeSourceId: string; payment: Payment }[],
     explanation: string,
     override = false,
 ) =>
     request(`/income/${yearMonth}/replace`, parseIncomeMonth, {
         method: "POST",
-        ...jsonBody({ paychecks, explanation, ...(override ? { override: true } : {}) }),
+        ...jsonBody({ payments, explanation, ...(override ? { override: true } : {}) }),
     });
 export const pinIncome = (
     yearMonth: string,
-    paychecks: { incomeSourceId: string; paycheck: Paycheck | null }[],
+    payments: { incomeSourceId: string; payment: Payment | null }[],
     explanation: string,
 ) =>
     request(`/income/${yearMonth}/pin`, parseIncomePinResult, {
         method: "POST",
-        ...jsonBody({ paychecks, explanation }),
+        ...jsonBody({ payments, explanation }),
     });
 export const createOneTimeLine = (
     yearMonth: string,

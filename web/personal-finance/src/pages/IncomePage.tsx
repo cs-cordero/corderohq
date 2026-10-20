@@ -28,18 +28,18 @@ import {
     PAY_FREQUENCY_LABELS,
     type DeductionKind,
     type IncomeMonth,
-    type IncomeMonthPaycheck,
+    type IncomeMonthPayment,
     type IncomeSource,
     type OneTimeLine,
-    type Paycheck,
+    type Payment,
     type Person,
 } from "../types";
 
 const MAX_EXPLANATION_LENGTH = 1000;
 
-// --- The paycheck form -------------------------------------------------------
+// --- The payment form -------------------------------------------------------
 //
-// The form holds each amount as the text that the user types. toPaycheck() turns it into
+// The form holds each amount as the text that the user types. toPayment() turns it into
 // millionths, and returns an error message when a value is not a number.
 
 interface DeductionDraft {
@@ -48,19 +48,19 @@ interface DeductionDraft {
     amount: string;
 }
 
-interface PaycheckDraft {
-    paychecksPerMonth: string;
+interface PaymentDraft {
+    paymentsPerMonth: string;
     gross: string;
     deductions: DeductionDraft[];
 }
 
-const EMPTY_PAYCHECK: PaycheckDraft = { paychecksPerMonth: "2", gross: "", deductions: [] };
+const EMPTY_PAYCHECK: PaymentDraft = { paymentsPerMonth: "2", gross: "", deductions: [] };
 
-function toDraft(paycheck: Paycheck): PaycheckDraft {
+function toDraft(payment: Payment): PaymentDraft {
     return {
-        paychecksPerMonth: String(paycheck.paychecksPerMonth),
-        gross: (paycheck.gross / 1_000_000).toFixed(2),
-        deductions: paycheck.deductions.map((d) => ({
+        paymentsPerMonth: String(payment.paymentsPerMonth),
+        gross: (payment.gross / 1_000_000).toFixed(2),
+        deductions: payment.deductions.map((d) => ({
             label: d.label,
             kind: d.kind,
             amount: (d.amount / 1_000_000).toFixed(2),
@@ -68,30 +68,30 @@ function toDraft(paycheck: Paycheck): PaycheckDraft {
     };
 }
 
-function toPaycheck(draft: PaycheckDraft): Paycheck | string {
-    const paychecksPerMonth = parseInt(draft.paychecksPerMonth, 10);
-    if (!Number.isInteger(paychecksPerMonth) || paychecksPerMonth < 1 || paychecksPerMonth > 5) {
-        return "Paychecks per month must be from 1 to 5";
+function toPayment(draft: PaymentDraft): Payment | string {
+    const paymentsPerMonth = parseInt(draft.paymentsPerMonth, 10);
+    if (!Number.isInteger(paymentsPerMonth) || paymentsPerMonth < 1 || paymentsPerMonth > 5) {
+        return "Payments per month must be from 1 to 5";
     }
     const gross = parseCurrencyInput(draft.gross);
-    if (gross === null) return "Gross pay must be an amount";
-    const deductions: Paycheck["deductions"] = [];
+    if (gross === null) return "Gross amount must be an amount";
+    const deductions: Payment["deductions"] = [];
     for (const d of draft.deductions) {
         const amount = parseCurrencyInput(d.amount);
         if (amount === null) return `The amount of "${d.label || "a deduction"}" must be an amount`;
         if (!d.label.trim()) return "Each deduction needs a label";
         deductions.push({ label: d.label.trim(), kind: d.kind, amount });
     }
-    return { paychecksPerMonth, gross, deductions };
+    return { paymentsPerMonth, gross, deductions };
 }
 
-function draftNet(draft: PaycheckDraft): number | null {
-    const paycheck = toPaycheck(draft);
-    if (typeof paycheck === "string") return null;
-    return paycheck.gross - paycheck.deductions.reduce((sum, d) => sum + d.amount, 0);
+function draftNet(draft: PaymentDraft): number | null {
+    const payment = toPayment(draft);
+    if (typeof payment === "string") return null;
+    return payment.gross - payment.deductions.reduce((sum, d) => sum + d.amount, 0);
 }
 
-function PaycheckForm({ draft, onChange }: { draft: PaycheckDraft; onChange: (draft: PaycheckDraft) => void }) {
+function PaymentForm({ draft, onChange }: { draft: PaymentDraft; onChange: (draft: PaymentDraft) => void }) {
     const net = draftNet(draft);
     const setDeduction = (index: number, change: Partial<DeductionDraft>) =>
         onChange({
@@ -99,9 +99,9 @@ function PaycheckForm({ draft, onChange }: { draft: PaycheckDraft; onChange: (dr
             deductions: draft.deductions.map((d, i) => (i === index ? { ...d, ...change } : d)),
         });
     return (
-        <div className="paycheck-form">
+        <div className="payment-form">
             <label>
-                Gross pay (one paycheck){" "}
+                Gross amount (one payment){" "}
                 <input
                     type="text"
                     className="currency-input"
@@ -177,16 +177,16 @@ function PaycheckForm({ draft, onChange }: { draft: PaycheckDraft; onChange: (dr
                 + Add deduction
             </button>
             <p>
-                Net pay (one paycheck): <strong>{net === null ? "—" : formatCurrency(net)}</strong>
+                Net amount (one payment): <strong>{net === null ? "—" : formatCurrency(net)}</strong>
             </p>
             <label>
-                Paychecks per month in the plan{" "}
+                Payments per month in the plan{" "}
                 <input
                     type="number"
                     min={1}
                     max={5}
-                    value={draft.paychecksPerMonth}
-                    onChange={(e) => onChange({ ...draft, paychecksPerMonth: e.target.value })}
+                    value={draft.paymentsPerMonth}
+                    onChange={(e) => onChange({ ...draft, paymentsPerMonth: e.target.value })}
                 />
             </label>
         </div>
@@ -200,16 +200,16 @@ function frequencyLabel(frequency: string): string {
 
 // --- The read-only breakdown --------------------------------------------------
 
-function PaycheckBreakdown({ paycheck }: { paycheck: IncomeMonthPaycheck }) {
+function PaymentBreakdown({ payment }: { payment: IncomeMonthPayment }) {
     return (
-        <table className="data-table paycheck-breakdown">
+        <table className="data-table payment-breakdown">
             <tbody>
                 <tr>
-                    <td>Gross pay</td>
+                    <td>Gross amount</td>
                     <td />
-                    <td className="num">{formatCurrency(paycheck.gross)}</td>
+                    <td className="num">{formatCurrency(payment.gross)}</td>
                 </tr>
-                {paycheck.deductions.map((d, i) => (
+                {payment.deductions.map((d, i) => (
                     <tr key={i}>
                         <td>{d.label}</td>
                         <td className="muted">{DEDUCTION_KIND_LABELS[d.kind]}</td>
@@ -218,20 +218,20 @@ function PaycheckBreakdown({ paycheck }: { paycheck: IncomeMonthPaycheck }) {
                 ))}
                 <tr>
                     <td>
-                        <strong>Net pay</strong>
+                        <strong>Net amount</strong>
                     </td>
                     <td />
                     <td className="num">
-                        <strong>{formatCurrency(paycheck.net)}</strong>
+                        <strong>{formatCurrency(payment.net)}</strong>
                     </td>
                 </tr>
                 <tr>
                     <td>
-                        × {paycheck.paychecksPerMonth} paycheck{paycheck.paychecksPerMonth !== 1 ? "s" : ""} in the plan
+                        × {payment.paymentsPerMonth} payment{payment.paymentsPerMonth !== 1 ? "s" : ""} in the plan
                     </td>
                     <td />
                     <td className="num">
-                        <strong>{formatCurrency(paycheck.monthlyNet)}</strong>
+                        <strong>{formatCurrency(payment.monthlyNet)}</strong>
                     </td>
                 </tr>
             </tbody>
@@ -245,7 +245,7 @@ interface NewSourceDraft {
     personId: string;
     label: string;
     frequency: string;
-    paycheck: PaycheckDraft;
+    payment: PaymentDraft;
     explanation: string;
 }
 
@@ -253,7 +253,7 @@ const EMPTY_NEW_SOURCE: NewSourceDraft = {
     personId: "",
     label: "",
     frequency: "biweekly",
-    paycheck: EMPTY_PAYCHECK,
+    payment: EMPTY_PAYCHECK,
     explanation: "",
 };
 
@@ -272,9 +272,9 @@ export default function IncomePage() {
     const { status, showLoading, showSuccess, showError, clear } = useStatus();
     const { adminModeOn } = useAdmin();
 
-    // The paycheck that is open for edit, by incomeSourceId.
+    // The payment that is open for edit, by incomeSourceId.
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [editDraft, setEditDraft] = useState<PaycheckDraft>(EMPTY_PAYCHECK);
+    const [editDraft, setEditDraft] = useState<PaymentDraft>(EMPTY_PAYCHECK);
     const [editExplanation, setEditExplanation] = useState("");
 
     const [oneTimeDraft, setOneTimeDraft] = useState<OneTimeDraft | null>(null);
@@ -321,17 +321,17 @@ export default function IncomePage() {
         [people],
     );
 
-    // An active source with no paycheck row in a dense month, such as a reactivated source.
-    // The user can give it a paycheck in this month.
-    const sourcesWithoutPaycheck = useMemo(() => {
+    // An active source with no payment row in a dense month, such as a reactivated source.
+    // The user can give it a payment in this month.
+    const sourcesWithoutPayment = useMemo(() => {
         if (!income) return [];
-        const withPaycheck = new Set(income.paychecks.map((p) => p.incomeSourceId));
-        return sources.filter((s) => s.active && !withPaycheck.has(s.incomeSourceId));
+        const withPayment = new Set(income.payments.map((p) => p.incomeSourceId));
+        return sources.filter((s) => s.active && !withPayment.has(s.incomeSourceId));
     }, [income, sources]);
 
-    const startEdit = (incomeSourceId: string, paycheck: Paycheck | null) => {
+    const startEdit = (incomeSourceId: string, payment: Payment | null) => {
         setEditingId(incomeSourceId);
-        setEditDraft(paycheck ? toDraft(paycheck) : EMPTY_PAYCHECK);
+        setEditDraft(payment ? toDraft(payment) : EMPTY_PAYCHECK);
         setEditExplanation("");
     };
 
@@ -340,11 +340,11 @@ export default function IncomePage() {
         setEditExplanation("");
     };
 
-    const handleSavePaycheck = async (incomeSourceId: string, label: string) => {
+    const handleSavePayment = async (incomeSourceId: string, label: string) => {
         if (!income) return;
-        const paycheck = toPaycheck(editDraft);
-        if (typeof paycheck === "string") {
-            showError(paycheck);
+        const payment = toPayment(editDraft);
+        if (typeof payment === "string") {
+            showError(payment);
             return;
         }
         const explanation = editExplanation.trim();
@@ -355,21 +355,21 @@ export default function IncomePage() {
         showLoading("Saving...");
         try {
             if (isFutureMonth) {
-                const result = await pinIncome(month, [{ incomeSourceId, paycheck }], explanation);
+                const result = await pinIncome(month, [{ incomeSourceId, payment }], explanation);
                 setIncome(result.income);
                 cancelEdit();
                 const downstream = result.warnings.downstreamPins.filter((p) => p.incomeSourceId === incomeSourceId);
                 if (downstream.length > 0) {
                     const monthsList = downstream.map((p) => p.yearMonth).join(", ");
                     const shouldClear = window.confirm(
-                        `${label} has pins in later months that won't see this paycheck: ${monthsList}. ` +
-                            `Clear those pins so this paycheck carries forward?`,
+                        `${label} has pins in later months that won't see this payment: ${monthsList}. ` +
+                            `Clear those pins so this payment carries forward?`,
                     );
                     if (shouldClear) {
                         for (const pin of downstream) {
                             await pinIncome(
                                 pin.yearMonth,
-                                [{ incomeSourceId, paycheck: null }],
+                                [{ incomeSourceId, payment: null }],
                                 `Clearing later pins after a pin of ${label} in ${month}`,
                             );
                         }
@@ -379,21 +379,21 @@ export default function IncomePage() {
                         showSuccess("Pin saved; later pins kept");
                     }
                 } else if (result.warnings.pinMatchesCarriedValue.includes(incomeSourceId)) {
-                    showSuccess("Pin saved — note: this matches the paycheck that would carry forward without a pin.");
+                    showSuccess("Pin saved — note: this matches the payment that would carry forward without a pin.");
                 } else {
                     showSuccess("Pin saved");
                 }
             } else {
                 // /replace needs every source with a row in this month. Send the others as they are.
-                const others = income.paychecks
+                const others = income.payments
                     .filter((p) => p.incomeSourceId !== incomeSourceId)
                     .map((p) => ({
                         incomeSourceId: p.incomeSourceId,
-                        paycheck: { paychecksPerMonth: p.paychecksPerMonth, gross: p.gross, deductions: p.deductions },
+                        payment: { paymentsPerMonth: p.paymentsPerMonth, gross: p.gross, deductions: p.deductions },
                     }));
                 const updated = await replaceIncome(
                     month,
-                    [...others, { incomeSourceId, paycheck }],
+                    [...others, { incomeSourceId, payment }],
                     explanation,
                     willOverride,
                 );
@@ -407,8 +407,8 @@ export default function IncomePage() {
         }
     };
 
-    const handleRemovePin = async (paycheck: IncomeMonthPaycheck) => {
-        const message = `Remove the pin for ${paycheck.label}? The paycheck will carry forward from earlier months.`;
+    const handleRemovePin = async (payment: IncomeMonthPayment) => {
+        const message = `Remove the pin for ${payment.label}? The payment will carry forward from earlier months.`;
         if (!window.confirm(message)) {
             return;
         }
@@ -416,8 +416,8 @@ export default function IncomePage() {
         try {
             await pinIncome(
                 month,
-                [{ incomeSourceId: paycheck.incomeSourceId, paycheck: null }],
-                `Removed pin for ${paycheck.label}`,
+                [{ incomeSourceId: payment.incomeSourceId, payment: null }],
+                `Removed pin for ${payment.label}`,
             );
             await load();
             showSuccess("Pin removed");
@@ -471,9 +471,9 @@ export default function IncomePage() {
 
     const handleCreateSource = async () => {
         if (!newSource) return;
-        const paycheck = toPaycheck(newSource.paycheck);
-        if (typeof paycheck === "string") {
-            showError(paycheck);
+        const payment = toPayment(newSource.payment);
+        if (typeof payment === "string") {
+            showError(payment);
             return;
         }
         if (!newSource.personId || !newSource.label.trim() || !newSource.explanation.trim()) {
@@ -486,7 +486,7 @@ export default function IncomePage() {
                 personId: newSource.personId,
                 label: newSource.label.trim(),
                 frequency: newSource.frequency,
-                initialPaycheck: paycheck,
+                initialPayment: payment,
                 explanation: newSource.explanation.trim(),
             });
             setNewSource(null);
@@ -565,8 +565,8 @@ export default function IncomePage() {
     const saveLabel = isFutureMonth ? "Pin" : willOverride ? "Save with override" : "Save";
 
     const renderEditor = (incomeSourceId: string, label: string) => (
-        <div className="paycheck-editor">
-            <PaycheckForm draft={editDraft} onChange={setEditDraft} />
+        <div className="payment-editor">
+            <PaymentForm draft={editDraft} onChange={setEditDraft} />
             <div className="edit-actions">
                 <input
                     type="text"
@@ -576,7 +576,7 @@ export default function IncomePage() {
                     placeholder="Explanation (required)"
                     maxLength={MAX_EXPLANATION_LENGTH}
                 />
-                <button className="small-btn" onClick={() => handleSavePaycheck(incomeSourceId, label)}>
+                <button className="small-btn" onClick={() => handleSavePayment(incomeSourceId, label)}>
                     {saveLabel}
                 </button>
                 <button className="small-btn" onClick={cancelEdit}>
@@ -595,7 +595,7 @@ export default function IncomePage() {
 
             {isReadOnly && <p className="hint">This month is locked. Toggle Admin mode to edit with override.</p>}
             {isFutureMonth && (
-                <p className="hint">Future month: paychecks carry forward from earlier months. Edits create pins.</p>
+                <p className="hint">Future month: payments carry forward from earlier months. Edits create pins.</p>
             )}
 
             {income && (
@@ -604,12 +604,12 @@ export default function IncomePage() {
                         Planned net income: <span className="num">{formatCurrency(income.plannedNetIncome)}</span>
                     </h2>
 
-                    <h2>Paychecks</h2>
-                    {income.paychecks.length === 0 && sourcesWithoutPaycheck.length === 0 && (
+                    <h2>Payments</h2>
+                    {income.payments.length === 0 && sourcesWithoutPayment.length === 0 && (
                         <p className="hint">No income sources yet. Add one below.</p>
                     )}
-                    {income.paychecks.map((p) => (
-                        <div key={p.incomeSourceId} className={`paycheck-card ${p.active ? "" : "faded"}`}>
+                    {income.payments.map((p) => (
+                        <div key={p.incomeSourceId} className={`payment-card ${p.active ? "" : "faded"}`}>
                             <h3>
                                 {p.label}
                                 <span className="muted"> — {personName(p.personId)}</span>
@@ -620,7 +620,7 @@ export default function IncomePage() {
                                 renderEditor(p.incomeSourceId, p.label)
                             ) : (
                                 <>
-                                    <PaycheckBreakdown paycheck={p} />
+                                    <PaymentBreakdown payment={p} />
                                     {!isReadOnly && p.active && (
                                         <div className="edit-actions">
                                             <button
@@ -641,8 +641,8 @@ export default function IncomePage() {
                         </div>
                     ))}
                     {!isReadOnly &&
-                        sourcesWithoutPaycheck.map((s) => (
-                            <div key={s.incomeSourceId} className="paycheck-card">
+                        sourcesWithoutPayment.map((s) => (
+                            <div key={s.incomeSourceId} className="payment-card">
                                 <h3>
                                     {s.label}
                                     <span className="muted"> — {personName(s.personId)}</span>
@@ -651,9 +651,9 @@ export default function IncomePage() {
                                     renderEditor(s.incomeSourceId, s.label)
                                 ) : (
                                     <>
-                                        <p className="hint">No paycheck in this month.</p>
+                                        <p className="hint">No payment in this month.</p>
                                         <button className="small-btn" onClick={() => startEdit(s.incomeSourceId, null)}>
-                                            Add paycheck
+                                            Add payment
                                         </button>
                                     </>
                                 )}
@@ -752,7 +752,7 @@ export default function IncomePage() {
             <h2>Income sources</h2>
             <p className="hint">
                 An income source is any stream of income that you plan, such as a job, interest, or dividends. A change
-                here affects every month. A change to a paycheck goes in the month above.
+                here affects every month. A change to a payment goes in the month above.
             </p>
             <table className="data-table">
                 <thead>
@@ -848,7 +848,7 @@ export default function IncomePage() {
                     + Add income source
                 </button>
             ) : (
-                <div className="add-form paycheck-editor">
+                <div className="add-form payment-editor">
                     <select
                         value={newSource.personId}
                         onChange={(e) => setNewSource({ ...newSource, personId: e.target.value })}
@@ -876,10 +876,10 @@ export default function IncomePage() {
                             </option>
                         ))}
                     </select>
-                    <p className="hint">The first paycheck goes in the current month, and carries forward.</p>
-                    <PaycheckForm
-                        draft={newSource.paycheck}
-                        onChange={(paycheck) => setNewSource({ ...newSource, paycheck })}
+                    <p className="hint">The first payment goes in the current month, and carries forward.</p>
+                    <PaymentForm
+                        draft={newSource.payment}
+                        onChange={(payment) => setNewSource({ ...newSource, payment })}
                     />
                     <input
                         type="text"

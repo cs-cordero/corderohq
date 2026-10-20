@@ -57,12 +57,12 @@ from corderohq.budget.dispositions import (
 from corderohq.budget.editability import editability
 from corderohq.budget.income import (
     ONE_TIME_LINE_PREFIX,
-    paycheck_line_id,
-    paychecks_equal,
+    payment_line_id,
+    payments_equal,
     validate_frequency,
     validate_label,
     validate_one_time_amount,
-    validate_paycheck,
+    validate_payment,
 )
 from corderohq.networth.models import BUDGET_ROLE_SPENDING, budget_role_of, validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
@@ -176,7 +176,7 @@ def _ensure_hydrated(now: datetime) -> None:
         current_ym,
         cold_start_value=0,
     )
-    # An income source always gets its first paycheck row when it is made, so a source with no
+    # An income source always gets its first payment row when it is made, so a source with no
     # history cannot happen. If it does, the store writes no row for the `None` value.
     densify(
         IncomePlanCarryStore(_INCOME_PLAN_TABLE),
@@ -1000,7 +1000,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
 
 # --- Income sources and the income plan ---
 #
-# These routes copy the budget routes. A paycheck row obeys the same month rules as a budget
+# These routes copy the budget routes. A payment row obeys the same month rules as a budget
 # target: /replace writes a dense month, /pin writes a future month, and each change makes an
 # audit entry with an explanation. See docs/budget-income-design.md "Income Plan API".
 
@@ -1014,9 +1014,9 @@ def _get_income_sources(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _post_income_source(event: dict[str, Any], user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Make an income source, and write its first paycheck row in the current month.
+    """Make an income source, and write its first payment row in the current month.
 
-    Body: `{personId, label, frequency, initialPaycheck, explanation}`. The first paycheck makes
+    Body: `{personId, label, frequency, initialPayment, explanation}`. The first payment makes
     one INCOME_CREATE audit entry.
     """
     body = _parse_json_body(event)
@@ -1032,23 +1032,23 @@ def _post_income_source(event: dict[str, Any], user: dict[str, str], now: dateti
     try:
         label = validate_label(body.get("label"))
         frequency = validate_frequency(body.get("frequency"))
-        paycheck = validate_paycheck(body.get("initialPaycheck"))
+        payment = validate_payment(body.get("initialPayment"))
     except ValueError as e:
         return _response(400, str(e))
 
-    # Densify first. The first paycheck row then goes into a current month that is dense.
+    # Densify first. The first payment row then goes into a current month that is dense.
     _ensure_hydrated(now)
 
     current_ym = _year_month_of(now)
     source = _INCOME_SOURCE_TABLE.create(person_id, label, frequency)
-    row = _INCOME_PLAN_TABLE.put_paycheck(current_ym, source["incomeSourceId"], paycheck)
+    row = _INCOME_PLAN_TABLE.put_payment(current_ym, source["incomeSourceId"], payment)
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=current_ym,
         category_id=None,
         action="INCOME_CREATE",
         explanation=explanation,
         user=user,
-        changes={"paycheck": {"before": None, "after": paycheck}, "label": label},
+        changes={"payment": {"before": None, "after": payment}, "label": label},
         income_source_id=source["incomeSourceId"],
         income_line_id=row["lineId"],
     )
@@ -1119,16 +1119,16 @@ def _deactivate_income_source(
         return _response(400, "explanation is required when dropping future pin rows")
 
     for month in affected_months:
-        line_id = paycheck_line_id(income_source_id)
+        line_id = payment_line_id(income_source_id)
         old_row = _INCOME_PLAN_TABLE.get_line(month, line_id)
-        _INCOME_PLAN_TABLE.delete_paycheck(month, income_source_id)
+        _INCOME_PLAN_TABLE.delete_payment(month, income_source_id)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
             category_id=None,
             action="INCOME_UNPIN",
             explanation=explanation,
             user=user,
-            changes={"paycheck": {"before": _paycheck_or_none(old_row), "after": None}},
+            changes={"payment": {"before": _payment_or_none(old_row), "after": None}},
             income_source_id=income_source_id,
             income_line_id=line_id,
         )
@@ -1147,11 +1147,11 @@ def _reactivate_income_source(income_source_id: str) -> dict[str, Any]:
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
-def _paycheck_or_none(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Return the paycheck value of a stored paycheck row, for an audit entry."""
+def _payment_or_none(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the payment value of a stored payment row, for an audit entry."""
     if row is None:
         return None
-    return {"paychecksPerMonth": row["paychecksPerMonth"], "gross": row["gross"], "deductions": row["deductions"]}
+    return {"paymentsPerMonth": row["paymentsPerMonth"], "gross": row["gross"], "deductions": row["deductions"]}
 
 
 def _income_month_response(year_month: str, now: datetime) -> dict[str, Any]:
@@ -1165,40 +1165,40 @@ def _get_income(year_month: str, now: datetime) -> dict[str, Any]:
     return _json_response(200, json.dumps(_income_month_response(year_month, now), default=_json_default))
 
 
-def _parse_paycheck_rows(
+def _parse_payment_rows(
     body: dict[str, Any], allow_null: bool
 ) -> tuple[list[tuple[str, dict[str, Any] | None]], dict[str, Any] | None]:
-    """Read and check `body.paychecks`: a list of `{incomeSourceId, paycheck}`.
+    """Read and check `body.payments`: a list of `{incomeSourceId, payment}`.
 
-    Returns `(rows, error_response)`. With `allow_null`, a `null` paycheck means "remove the pin".
+    Returns `(rows, error_response)`. With `allow_null`, a `null` payment means "remove the pin".
     """
-    raw_rows = body.get("paychecks")
+    raw_rows = body.get("payments")
     if not isinstance(raw_rows, list):
-        return [], _response(400, "paychecks array is required")
+        return [], _response(400, "payments array is required")
     rows: list[tuple[str, dict[str, Any] | None]] = []
     for index, raw in enumerate(raw_rows):
-        if not isinstance(raw, dict) or not isinstance(raw.get("incomeSourceId"), str) or "paycheck" not in raw:
-            return [], _response(400, f"paychecks[{index}] must have incomeSourceId and paycheck")
+        if not isinstance(raw, dict) or not isinstance(raw.get("incomeSourceId"), str) or "payment" not in raw:
+            return [], _response(400, f"payments[{index}] must have incomeSourceId and payment")
         source_id = raw["incomeSourceId"]
         if _INCOME_SOURCE_TABLE.get(source_id) is None:
-            return [], _response(400, f"paychecks[{index}]: income source '{source_id}' does not exist")
-        if raw["paycheck"] is None:
+            return [], _response(400, f"payments[{index}]: income source '{source_id}' does not exist")
+        if raw["payment"] is None:
             if not allow_null:
-                return [], _response(400, f"paychecks[{index}]: paycheck must not be null here")
+                return [], _response(400, f"payments[{index}]: payment must not be null here")
             rows.append((source_id, None))
             continue
         try:
-            rows.append((source_id, validate_paycheck(raw["paycheck"])))
+            rows.append((source_id, validate_payment(raw["payment"])))
         except ValueError as e:
-            return [], _response(400, f"paychecks[{index}]: {e}")
+            return [], _response(400, f"payments[{index}]: {e}")
     return rows, None
 
 
 def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Write the paycheck rows of a dense month (current, grace, or locked through the override).
+    """Write the payment rows of a dense month (current, grace, or locked through the override).
 
-    Body: `{paychecks: [{incomeSourceId, paycheck}], explanation, override?}`. The body must hold
-    every income source with a paycheck row in that month. A paycheck must not be null here: to
+    Body: `{payments: [{incomeSourceId, payment}], explanation, override?}`. The body must hold
+    every income source with a payment row in that month. A payment must not be null here: to
     stop a source, deactivate it. Each change makes one INCOME_CREATE or INCOME_UPDATE entry.
     """
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -1209,7 +1209,7 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     explanation = (body.get("explanation") or "").strip()
     if not explanation:
         return _response(400, "explanation is required")
-    rows, err = _parse_paycheck_rows(body, allow_null=False)
+    rows, err = _parse_payment_rows(body, allow_null=False)
     if err:
         return err
 
@@ -1234,7 +1234,7 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
         )
 
     existing = {
-        str(r["incomeSourceId"]): r for r in _INCOME_PLAN_TABLE.get_month(year_month) if r.get("lineType") == "PAYCHECK"
+        str(r["incomeSourceId"]): r for r in _INCOME_PLAN_TABLE.get_month(year_month) if r.get("lineType") == "PAYMENT"
     }
     missing = sorted(set(existing) - {source_id for source_id, _ in rows})
     if missing:
@@ -1242,27 +1242,27 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
             409,
             json.dumps(
                 {
-                    "error": "body must include every income source with a paycheck row in this month",
+                    "error": "body must include every income source with a payment row in this month",
                     "yearMonth": year_month,
                     "missingIncomeSourceIds": missing,
                 }
             ),
         )
 
-    for source_id, paycheck in rows:
-        if paycheck is None:
-            continue  # _parse_paycheck_rows rejects null here. This line tells the type checker so.
-        before = _paycheck_or_none(existing.get(source_id))
-        if paychecks_equal(before, paycheck):
+    for source_id, payment in rows:
+        if payment is None:
+            continue  # _parse_payment_rows rejects null here. This line tells the type checker so.
+        before = _payment_or_none(existing.get(source_id))
+        if payments_equal(before, payment):
             continue
-        row = _INCOME_PLAN_TABLE.put_paycheck(year_month, source_id, paycheck)
+        row = _INCOME_PLAN_TABLE.put_payment(year_month, source_id, payment)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=year_month,
             category_id=None,
             action="INCOME_CREATE" if before is None else "INCOME_UPDATE",
             explanation=explanation,
             user=user,
-            changes={"paycheck": {"before": before, "after": paycheck}},
+            changes={"payment": {"before": before, "after": payment}},
             override=override_active,
             income_source_id=source_id,
             income_line_id=row["lineId"],
@@ -1272,12 +1272,12 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
 
 
 def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Pin or unpin the paycheck of a future month.
+    """Pin or unpin the payment of a future month.
 
     The same rules as the budget /pin: the month must be EDITABLE and later than the current
-    month, and the override does not change that. Body: `{paychecks: [{incomeSourceId,
-    paycheck | null}], explanation}`. A source left out of the body does not change. `null`
-    deletes the pin (INCOME_UNPIN). A paycheck writes the pin (INCOME_PIN). The same paycheck
+    month, and the override does not change that. Body: `{payments: [{incomeSourceId,
+    payment | null}], explanation}`. A source left out of the body does not change. `null`
+    deletes the pin (INCOME_UNPIN). A payment writes the pin (INCOME_PIN). The same payment
     again is a no-op with no audit entry.
 
     Returns `{income: <the month, as GET /api/income>, warnings: {downstreamPins,
@@ -1291,7 +1291,7 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     explanation = (body.get("explanation") or "").strip()
     if not explanation:
         return _response(400, "explanation is required")
-    rows, err = _parse_paycheck_rows(body, allow_null=True)
+    rows, err = _parse_payment_rows(body, allow_null=True)
     if err:
         return err
 
@@ -1325,20 +1325,20 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     by_key_before = carry_map(store.scan_carry_rows())
     pin_matches_carried: list[str] = []
 
-    for source_id, paycheck in rows:
+    for source_id, payment in rows:
         before = by_key_before.get((year_month, source_id))
-        line_id = paycheck_line_id(source_id)
-        if paycheck is None:
+        line_id = payment_line_id(source_id)
+        if payment is None:
             if before is None:
                 continue
-            _INCOME_PLAN_TABLE.delete_paycheck(year_month, source_id)
+            _INCOME_PLAN_TABLE.delete_payment(year_month, source_id)
             action = "INCOME_UNPIN"
         else:
-            if paychecks_equal(before, paycheck):
+            if payments_equal(before, payment):
                 continue
-            _INCOME_PLAN_TABLE.put_paycheck(year_month, source_id, paycheck)
+            _INCOME_PLAN_TABLE.put_payment(year_month, source_id, payment)
             sans_pin = {k: v for k, v in by_key_before.items() if k != (year_month, source_id)}
-            if paychecks_equal(walk_back_for(sans_pin, year_month, source_id), paycheck):
+            if payments_equal(walk_back_for(sans_pin, year_month, source_id), payment):
                 pin_matches_carried.append(source_id)
             action = "INCOME_PIN"
         _AUDIT_LOG_TABLE.write_entry(
@@ -1347,7 +1347,7 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             action=action,
             explanation=explanation,
             user=user,
-            changes={"paycheck": {"before": before, "after": paycheck}},
+            changes={"payment": {"before": before, "after": payment}},
             income_source_id=source_id,
             income_line_id=line_id,
         )
