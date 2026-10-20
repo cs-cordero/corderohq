@@ -13,6 +13,23 @@
 - **Locked year-month** — any year-month that is not editable.
 - **Override** — a way for the user to act on a locked year-month. The server must enforce the
   override. It is not enough to hide the action in the UI.
+- **Income source** — one stream of income that the plan counts, such as a job, interest, or
+  dividends. Each income source has one or more owners, the same as an account: a joint source,
+  such as the interest of a joint account, has two. A person can own any number of income sources.
+  Every kind of income source works the same way.
+- **Payment** — the gross amount of one payment from an income source, such as one paycheck, and
+  the list of deductions from it. A payment with no deductions, such as interest, is also valid.
+- **Net amount** — the gross amount of a payment minus all its deductions.
+- **Planned net income** — for one year-month, the net amount of each active income source times its
+  payments per month, plus every one-time income line in that year-month.
+- **Left to assign** — for one year-month, the planned net income minus the sum of all budget
+  targets. The goal is `$0`.
+- **Disposition** — the effect of a transaction on the budget: **Budget**, **Off-budget**, or
+  **Skip** (Spec 45).
+- **Spending account** — an account that pays for expenses, such as a checking account or a credit
+  card.
+- **Holding account** — an account that keeps money, such as a savings fund, a brokerage account, or
+  a 529 account.
 
 ## Budget Summary
 
@@ -144,11 +161,149 @@
     let me choose how many entries to get, and the default is the last 10. A hard delete of a
     category also appears in this log (Spec 16).
 
+## Income Plan
+
+31. I want to record each income source. An income source has one or more owners (people), a
+    label, and a pay frequency, such as every two weeks. A person can own any number of income
+    sources. I cannot delete a person who still owns an income source. The code
+    must not contain an employer name or any other real income data.
+32. For each income source, I want to record one payment: the gross amount, and a list of
+    deductions. Each deduction has a label, a kind, and an amount for one payment. The kinds are: tax, pre-tax
+    savings (such as a 401k or an HSA), pre-tax benefit (such as medical insurance or a DCFSA), and
+    post-tax savings (such as a Roth 401k). The app calculates the net amount.
+33. Each income source has a number of **payments per month** for the plan. The default for a pay
+    period of two weeks is 2. The app uses the same number in every month. It does not add the
+    third paycheck in a month that has three paychecks. I accept that the plan is then lower than
+    the real income.
+34. The income plan obeys the same month rules as a budget target. These are the grace period and
+    the lock (Spec 4), the editable year-months (Spec 12), the override, the carry-forward (Spec
+    17), and the pins (Specs 18 to 20). A change to a payment in one year-month carries forward to
+    later year-months. A locked year-month keeps the payment that it had (Spec 2).
+35. I want to add a **one-time income line** to an editable year-month. It has a label and a net
+    amount. It applies to that year-month only, and it never carries forward. I use it for a bonus,
+    an RSU payout, a DCFSA payout, a third paycheck, or any other extra money that I want to
+    budget. Extra money without a one-time income line is not part of the plan.
+36. The app does not model a change in the net amount during the year. Examples are a 401k deduction that
+    stops at the annual limit, or a Social Security tax that stops at the wage limit. I change the
+    payment myself when I want to.
+37. I can deactivate an income source. The rules are the same as for a category (Spec 15). It keeps
+    its history in the current, grace, and locked year-months. It drops its future pins when I
+    confirm.
+38. I want an **Income** page. It shows each income source, and the breakdown from the gross amount
+    to the net amount for a year-month that I choose. It also shows the one-time income lines of that
+    year-month. I make every change to the income plan on this page.
+39. The audit log records each change to a payment, a pin or an unpin of a payment, and each
+    change to a one-time income line. Each change needs an explanation, the same as a change to a
+    budget target.
+
+## Left to Assign
+
+40. I want to see the **left to assign** amount for a year-month. The budget editor, the Budget
+    Summary, and every other page that shows a top line must show it. These pages show the
+    planned net income and the left to assign amount only. They do not show the breakdown from
+    the gross amount to the net amount.
+41. A positive left to assign amount is money with no job. A negative amount means that the
+    targets are more than the planned net income. The app shows the amount, and it must make a
+    value other than `$0` easy to see. It does not block a save.
+42. A locked year-month shows the left to assign amount from its own income plan and its own
+    targets, as they were when the year-month locked (Spec 2).
+43. The app does not record actual income against the plan. A paycheck deposit does not change the
+    left to assign amount.
+
+## Accounts
+
+44. Each CSV upload belongs to one account. I choose the account when I upload. The app uses the
+    accounts of the net worth record. Each account that I use for an upload has a **budget role**:
+    spending or holding. Each transaction from an upload records its account.
+
+## Transaction Dispositions
+
+45. Each transaction has a disposition:
+    - **Budget** — a normal expense or refund. It needs a category. It counts in the actual
+      expenditure of its category. This is the default. Every transaction that exists today is a
+      Budget transaction.
+    - **Off-budget** — money that the budget must not count. Examples are work travel that my
+      employer pays back, and a payment with money that already had its job, such as money from a
+      savings fund or from the DCFSA. A category is optional. It does not count in the actual
+      expenditure of any category.
+    - **Skip** — money that is not an expense. Examples are a paycheck, a bonus, interest, a
+      transfer between my own accounts, a credit card payment, and the payback from my employer. It
+      has no category. It counts nowhere.
+46. The app saves every transaction with its disposition, including a Skip transaction.
+47. I can add an optional short note to any transaction, such as "work trip" or "vacation fund".
+48. I can change the disposition of a transaction on the CSV review screen, and later in the
+    ledger. The lock rules of Spec 8 apply to the change.
+49. The ledger shows the disposition and the note of each transaction. It hides Skip transactions
+    by default, and a filter shows them.
+50. On the Budget Summary, only Budget transactions count as expenditures. This also applies to
+    the category rules of Spec 5.
+51. The Budget Summary shows an **Off-budget** row below the TOTAL line. Its budgeted amount is
+    always `$0`. Its actual amount is the sum of the Off-budget transactions in the year-month. The
+    TOTAL line does not include it. A second line below it, **TOTAL + off-budget**, shows the TOTAL
+    actual plus the Off-budget actual.
+
+## CSV Import: Dispositions and Data Sent to the LLM
+
+52. The CSV import suggests a disposition for each row, from the direction of the money and the
+    budget roles of the accounts:
+
+    | From → to | Example | Suggested disposition |
+    |---|---|---|
+    | outside → spending | a paycheck, interest | Skip |
+    | outside → spending | a refund | Budget, in the category of the purchase |
+    | spending → outside | groceries, a hotel on a card | Budget |
+    | spending → spending | checking pays the credit card | Skip |
+    | spending → holding | checking to a vacation fund, a 529, a brokerage | Budget, in the savings category |
+    | holding → spending | a vacation fund to checking | Skip |
+    | holding → outside | the vacation fund pays a hotel | Off-budget |
+    | holding → holding | savings to a brokerage | Skip |
+    | outside → holding | an RSU sale, interest, dividends | Skip |
+
+    Thus a transfer between two of my accounts counts one time at most, on the side where the money
+    leaves a spending account.
+
+    When the import cannot find the direction of a row with confidence, it suggests Skip, and it
+    marks the row for my review. A missed savings transfer is easy to see on the summary. A double
+    count is not easy to see.
+53. A credit card payment must be Skip, in the checking CSV and in the card CSV. If not, the app
+    counts the purchases two times.
+54. The review screen shows Skip rows and Off-budget rows in a separate list. I can change the
+    disposition and the category of any row before I commit.
+55. The review screen marks a row that looks like the other side of a transfer. The other side has
+    the same amount, the opposite direction, a date within a few days, and a different account. It
+    can be in the same upload or in a transaction that I committed before. I confirm or reject each
+    match.
+56. The review screen marks a row that I committed before, such as from an earlier CSV with dates
+    that overlap. The app does not commit that row unless I select it. A retry of a commit must
+    not make a second copy of a row.
+57. The CSV import must send the minimum data to the LLM:
+    - To map the columns, it sends the header row and a type for each column, such as date,
+      number, or text. The code finds the types locally. It sends no real values.
+    - The column mapping also finds the category column of the bank, if the CSV has one. The app
+      uses that column locally as a hint for the disposition and the category.
+    - To give a category to each row, it sends each unique description one time only.
+
+## Deferred
+
+These items are out of scope now. The design must not block them.
+
+- **Import rules.** I make a rule, such as "a description that contains X gets disposition Y and
+  category Z". The import tests each row against my rules before the LLM step. A row that matches
+  never goes to the LLM. The rules live in DynamoDB, not in the code.
+- **Memory of past choices.** The import uses the category that I chose before for the same
+  description, and it does not ask the LLM.
+- **A stored column mapping for each account.** The LLM then sees each bank format one time only.
+- **A retirement-limit estimate.** A rough guess, from the payments, of whether we reach the
+  annual 401k limit.
+- **A paystub upload.** An LLM reads a paystub PDF and fills in the payment.
+- **A link from a savings deduction to an account** of the net worth record.
+- **Actual income against the plan.**
+
 ## Cross-cutting
 
 - **Audit scope.** The audit log records every change to a budget target. This includes a pin, an
   unpin, and a pin that the app drops during a deactivation. It also records a hard delete of a
-  category (Spec 16). It does not record an insert, an update, or a delete of a transaction, and
+  category (Spec 16), and every change to the income plan (Spec 39). It does not record an insert, an update, or a delete of a transaction, and
   this holds even through the override. The trade-off is that an override change to a transaction
   in a locked month leaves no direct trace. This is acceptable, because the budget rows keep the
   history at the level of the category.

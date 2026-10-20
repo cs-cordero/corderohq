@@ -15,9 +15,16 @@ import {
     parseDeletedGroup,
     parseDeletedPerson,
     parseDeletionPreview,
+    parseDeactivateIncomeSourceResult,
+    parseDeletedOneTimeLine,
     parseHardDeleteResult,
+    parseIncomeMonth,
+    parseIncomePinResult,
+    parseIncomeSource,
+    parseIncomeSourceArray,
     parseNetWorthHistory,
     parseNetWorthMonth,
+    parseOneTimeLine,
     parsePerson,
     parsePersonArray,
     parsePinResult,
@@ -26,7 +33,7 @@ import {
     parseTransactionArray,
     parseUploadResult,
 } from "./parsers";
-import type { AccountCreate, AccountUpdate, Transaction } from "./types";
+import type { AccountCreate, AccountUpdate, Disposition, Payment, Transaction } from "./types";
 
 const API_BASE = "/api";
 
@@ -149,7 +156,10 @@ export const createTransaction = (
         transactionDate: string;
         description: string;
         amount: number;
-        categoryId: string;
+        disposition: Disposition;
+        // Required for BUDGET, optional for OFF_BUDGET. The server drops it for SKIP.
+        categoryId?: string;
+        note?: string;
     },
     override = false,
 ) =>
@@ -160,7 +170,9 @@ export const createTransaction = (
 export const updateTransaction = (
     yearMonth: string,
     sortId: string,
-    updates: Partial<Pick<Transaction, "description" | "amount" | "categoryId">>,
+    // An empty string for `categoryId` or `note` removes the value. A change to SKIP removes the
+    // category on the server.
+    updates: Partial<Pick<Transaction, "description" | "amount" | "disposition" | "categoryId" | "note">>,
     override = false,
 ) =>
     request("/transactions/update", parseTransaction, {
@@ -172,18 +184,91 @@ export const deleteTransactions = (items: { yearMonth: string; sortId: string }[
         method: "POST",
         ...jsonBody({ items, ...(override ? { override: true } : {}) }),
     });
-export const uploadTransactions = (csvData: string) =>
+export const uploadTransactions = (csvData: string, accountId: string, flipSigns = false) =>
     request("/transactions/upload", parseUploadResult, {
         method: "POST",
-        ...jsonBody({ csvData }),
+        ...jsonBody({ csvData, accountId, ...(flipSigns ? { flipSigns: true } : {}) }),
     });
 export const commitTransactions = (
-    rows: { transactionDate: string; description: string; amount: number; categoryId: string }[],
+    rows: {
+        transactionDate: string;
+        description: string;
+        amount: number;
+        disposition: Disposition;
+        categoryId?: string;
+        accountId: string;
+        note?: string;
+        fingerprint: string;
+    }[],
     override = false,
 ) =>
     request("/transactions/commit", parseCommitResult, {
         method: "POST",
         ...jsonBody({ rows, ...(override ? { override: true } : {}) }),
+    });
+
+// Income sources and the income plan
+export const fetchAllIncomeSources = () => request("/income-sources?include_inactive=true", parseIncomeSourceArray);
+export const createIncomeSource = (data: {
+    owners: string[];
+    label: string;
+    frequency: string;
+    initialPayment: Payment;
+    explanation: string;
+}) => request("/income-sources", parseIncomeSource, { method: "POST", ...jsonBody(data) });
+export const updateIncomeSource = (id: string, updates: { label?: string; frequency?: string }) =>
+    request(`/income-sources/${id}`, parseIncomeSource, { method: "PUT", ...jsonBody(updates) });
+export const reorderIncomeSources = (order: string[]) =>
+    request("/income-sources/reorder", parseIncomeSourceArray, { method: "POST", ...jsonBody({ order }) });
+export const deactivateIncomeSource = (id: string, opts: { confirm?: boolean; explanation?: string } = {}) =>
+    request(`/income-sources/${id}/deactivate`, parseDeactivateIncomeSourceResult, {
+        method: "POST",
+        ...jsonBody(opts),
+    });
+export const reactivateIncomeSource = (id: string) =>
+    request(`/income-sources/${id}/reactivate`, parseIncomeSource, { method: "POST" });
+export const fetchIncomeMonth = (yearMonth: string) => request(`/income/${yearMonth}`, parseIncomeMonth);
+export const replaceIncome = (
+    yearMonth: string,
+    payments: { incomeSourceId: string; payment: Payment }[],
+    explanation: string,
+    override = false,
+) =>
+    request(`/income/${yearMonth}/replace`, parseIncomeMonth, {
+        method: "POST",
+        ...jsonBody({ payments, explanation, ...(override ? { override: true } : {}) }),
+    });
+export const pinIncome = (
+    yearMonth: string,
+    payments: { incomeSourceId: string; payment: Payment | null }[],
+    explanation: string,
+) =>
+    request(`/income/${yearMonth}/pin`, parseIncomePinResult, {
+        method: "POST",
+        ...jsonBody({ payments, explanation }),
+    });
+export const createOneTimeLine = (
+    yearMonth: string,
+    data: { label: string; amount: number; explanation: string },
+    override = false,
+) =>
+    request(`/income/${yearMonth}/one-time`, parseOneTimeLine, {
+        method: "POST",
+        ...jsonBody({ ...data, ...(override ? { override: true } : {}) }),
+    });
+export const updateOneTimeLine = (
+    yearMonth: string,
+    data: { lineId: string; label: string; amount: number; explanation: string },
+    override = false,
+) =>
+    request(`/income/${yearMonth}/one-time/update`, parseOneTimeLine, {
+        method: "POST",
+        ...jsonBody({ ...data, ...(override ? { override: true } : {}) }),
+    });
+export const deleteOneTimeLine = (yearMonth: string, data: { lineId: string; explanation: string }, override = false) =>
+    request(`/income/${yearMonth}/one-time/delete`, parseDeletedOneTimeLine, {
+        method: "POST",
+        ...jsonBody({ ...data, ...(override ? { override: true } : {}) }),
     });
 
 // Household profile (people)

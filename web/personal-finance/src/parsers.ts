@@ -15,8 +15,13 @@ import type {
     ColumnMapping,
     CommitResult,
     DeactivateResult,
+    Disposition,
     DeletionPreview,
     HardDeleteResult,
+    IncomeMonth,
+    IncomeMonthPayment,
+    IncomePinResult,
+    IncomeSource,
     LoanTerms,
     NetWorthHistory,
     NetWorthClassEntry,
@@ -24,16 +29,23 @@ import type {
     NetWorthPrefill,
     NetWorthRow,
     NetWorthTotals,
+    OneTimeLine,
+    Payment,
+    PairWith,
     ParsedTransaction,
     Person,
     PinResult,
+    ReviewReason,
     RowValidation,
     RowValidationIssue,
+    SignCheck,
+    SuggestedBy,
     Summary,
     SummaryCategory,
     Transaction,
     UploadResult,
 } from "./types";
+import { BUDGET_ROLES, DEDUCTION_KINDS, DISPOSITIONS } from "./types";
 import {
     arrayOf,
     isObject,
@@ -180,6 +192,17 @@ export function parsePinResult(raw: unknown): PinResult {
     };
 }
 
+function parseDisposition(obj: Record<string, unknown>, parentLabel: string): Disposition {
+    // An old row has no disposition. It is a BUDGET row.
+    const raw = optionalString(obj, "disposition", parentLabel);
+    if (raw === undefined) return "BUDGET";
+    const match = DISPOSITIONS.find((d) => d === raw);
+    if (match === undefined) {
+        throw new Error(`${parentLabel}.disposition: unexpected value '${raw}'`);
+    }
+    return match;
+}
+
 export function parseTransaction(raw: unknown): Transaction {
     const obj = requireObject(raw, "Transaction");
     return {
@@ -188,7 +211,10 @@ export function parseTransaction(raw: unknown): Transaction {
         transactionDate: requireString(obj, "transactionDate", "Transaction"),
         description: requireString(obj, "description", "Transaction"),
         amount: requireNumber(obj, "amount", "Transaction"),
-        categoryId: requireString(obj, "categoryId", "Transaction"),
+        disposition: parseDisposition(obj, "Transaction"),
+        categoryId: optionalString(obj, "categoryId", "Transaction"),
+        accountId: optionalString(obj, "accountId", "Transaction"),
+        note: optionalString(obj, "note", "Transaction"),
         createdAt: requireString(obj, "createdAt", "Transaction"),
     };
 }
@@ -227,6 +253,27 @@ function parseSummaryTotals(raw: unknown): { budgeted: number; actual: number; d
     };
 }
 
+function parseSummaryOffBudget(raw: unknown): { actual: number } {
+    const obj = requireObject(raw, "Summary.offBudget");
+    return { actual: requireNumber(obj, "actual", "Summary.offBudget") };
+}
+
+function parseSummaryTotalsWithOffBudget(raw: unknown): { budgeted: number; actual: number } {
+    const obj = requireObject(raw, "Summary.totalsWithOffBudget");
+    return {
+        budgeted: requireNumber(obj, "budgeted", "Summary.totalsWithOffBudget"),
+        actual: requireNumber(obj, "actual", "Summary.totalsWithOffBudget"),
+    };
+}
+
+function parseSummaryIncome(raw: unknown): { plannedNetIncome: number; leftToAssign: number } {
+    const obj = requireObject(raw, "Summary.income");
+    return {
+        plannedNetIncome: requireNumber(obj, "plannedNetIncome", "Summary.income"),
+        leftToAssign: requireNumber(obj, "leftToAssign", "Summary.income"),
+    };
+}
+
 export function parseSummary(raw: unknown): Summary {
     const obj = requireObject(raw, "Summary");
     const state = requireString(obj, "state", "Summary");
@@ -238,6 +285,9 @@ export function parseSummary(raw: unknown): Summary {
         state,
         categories: arrayOf(obj.categories, parseSummaryCategory, "Summary.categories"),
         totals: parseSummaryTotals(obj.totals),
+        offBudget: parseSummaryOffBudget(obj.offBudget),
+        totalsWithOffBudget: parseSummaryTotalsWithOffBudget(obj.totalsWithOffBudget),
+        income: parseSummaryIncome(obj.income),
     };
 }
 
@@ -274,7 +324,9 @@ export function parseAuditEntry(raw: unknown): AuditEntry {
         sortId: requireString(obj, "sortId", "AuditEntry"),
         changedAt: requireString(obj, "changedAt", "AuditEntry"),
         effectiveYearMonth: parseNullableYearMonth(obj.effectiveYearMonth),
-        categoryId: requireString(obj, "categoryId", "AuditEntry"),
+        categoryId: optionalString(obj, "categoryId", "AuditEntry"),
+        incomeSourceId: optionalString(obj, "incomeSourceId", "AuditEntry"),
+        incomeLineId: optionalString(obj, "incomeLineId", "AuditEntry"),
         action: requireString(obj, "action", "AuditEntry"),
         explanation: requireString(obj, "explanation", "AuditEntry"),
         user: parseAuditUser(obj.user),
@@ -297,22 +349,48 @@ function parseColumnMapping(raw: unknown): ColumnMapping {
     };
 }
 
+const _SUGGESTED_BY = new Set<string>(["PAIR", "LAST_FOUR", "BANK", "LLM", "DEFAULT"]);
+
+function parsePairWith(raw: unknown): PairWith {
+    if (raw === null || raw === undefined) return null;
+    const obj = requireObject(raw, "ParsedTransaction.pairWith");
+    if (typeof obj.uploadIndex === "number") return { uploadIndex: obj.uploadIndex };
+    return {
+        yearMonth: requireString(obj, "yearMonth", "ParsedTransaction.pairWith"),
+        sortId: requireString(obj, "sortId", "ParsedTransaction.pairWith"),
+    };
+}
+
 function parseParsedTransaction(raw: unknown): ParsedTransaction {
     const obj = requireObject(raw, "ParsedTransaction");
+    const suggestedBy = requireString(obj, "suggestedBy", "ParsedTransaction");
+    if (!_SUGGESTED_BY.has(suggestedBy)) {
+        throw new Error(`ParsedTransaction.suggestedBy: unexpected value '${suggestedBy}'`);
+    }
     return {
         transactionDate: requireString(obj, "transactionDate", "ParsedTransaction"),
         description: requireString(obj, "description", "ParsedTransaction"),
         amount: requireNumber(obj, "amount", "ParsedTransaction"),
-        categoryId: requireString(obj, "categoryId", "ParsedTransaction"),
-        categoryName: requireString(obj, "categoryName", "ParsedTransaction"),
+        categoryId: optionalString(obj, "categoryId", "ParsedTransaction") ?? "",
+        categoryName: optionalString(obj, "categoryName", "ParsedTransaction") ?? "",
+        accountId: requireString(obj, "accountId", "ParsedTransaction"),
+        disposition: parseDisposition(obj, "ParsedTransaction"),
+        suggestedBy: suggestedBy as SuggestedBy,
+        pairWith: parsePairWith(obj.pairWith),
+        fingerprint: requireString(obj, "fingerprint", "ParsedTransaction"),
+        duplicate: requireBoolean(obj, "duplicate", "ParsedTransaction"),
     };
 }
 
 const _ROW_VALIDATION_ISSUES = new Set<string>(["missing_category", "locked_month"]);
+const _REVIEW_REASONS = new Set<string>(["no_pair_found", "llm_guess", "many_pairs", "unknown_direction"]);
 
 function parseRowValidation(raw: unknown): RowValidation {
     const obj = requireObject(raw, "RowValidation");
     const issuesRaw = stringArray(obj.issues, "RowValidation.issues");
+    // The commit's 409 response has no `review` list. An unknown reason is dropped, because a
+    // reason only puts a row first on the review screen.
+    const reviewRaw = obj.review === undefined ? [] : stringArray(obj.review, "RowValidation.review");
     return {
         index: requireNumber(obj, "index", "RowValidation"),
         issues: issuesRaw.map((s) => {
@@ -321,12 +399,24 @@ function parseRowValidation(raw: unknown): RowValidation {
             }
             return s as RowValidationIssue;
         }),
+        review: reviewRaw.filter((s) => _REVIEW_REASONS.has(s)) as ReviewReason[],
+    };
+}
+
+function parseSignCheck(raw: unknown): SignCheck {
+    const obj = requireObject(raw, "UploadResult.signCheck");
+    return {
+        llmInverted: requireBoolean(obj, "llmInverted", "UploadResult.signCheck"),
+        locallyFlipped: requireBoolean(obj, "locallyFlipped", "UploadResult.signCheck"),
+        userFlipped: requireBoolean(obj, "userFlipped", "UploadResult.signCheck"),
     };
 }
 
 export function parseUploadResult(raw: unknown): UploadResult {
     const obj = requireObject(raw, "UploadResult");
     return {
+        accountId: requireString(obj, "accountId", "UploadResult"),
+        signCheck: parseSignCheck(obj.signCheck),
         columnMapping: parseColumnMapping(obj.columnMapping),
         transactions: arrayOf(obj.transactions, parseParsedTransaction, "UploadResult.transactions"),
         validations: arrayOf(obj.validations, parseRowValidation, "UploadResult.validations"),
@@ -338,6 +428,17 @@ export function parseCommitResult(raw: unknown): CommitResult {
     return {
         count: requireNumber(obj, "count", "CommitResult"),
         transactions: arrayOf(obj.transactions, parseTransaction, "CommitResult.transactions"),
+        skippedDuplicates:
+            obj.skippedDuplicates === undefined
+                ? []
+                : arrayOf(
+                      obj.skippedDuplicates,
+                      (item) => {
+                          if (typeof item !== "number") throw new Error("CommitResult.skippedDuplicates: not a number");
+                          return item;
+                      },
+                      "CommitResult.skippedDuplicates",
+                  ),
     };
 }
 
@@ -370,6 +471,125 @@ export function parseDeletedGroup(raw: unknown): { groupId: string } {
 }
 
 // --- The net worth record ---
+
+// --- The income plan ---
+
+export function parseIncomeSource(raw: unknown): IncomeSource {
+    const obj = requireObject(raw, "IncomeSource");
+    return {
+        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeSource"),
+        owners: stringArray(obj.owners, "IncomeSource.owners"),
+        label: requireString(obj, "label", "IncomeSource"),
+        frequency: requireString(obj, "frequency", "IncomeSource"),
+        active: requireBoolean(obj, "active", "IncomeSource"),
+        sortOrder: requireNumber(obj, "sortOrder", "IncomeSource"),
+    };
+}
+
+export function parseIncomeSourceArray(raw: unknown): IncomeSource[] {
+    return arrayOf(raw, parseIncomeSource, "IncomeSource[]");
+}
+
+export function parseDeactivateIncomeSourceResult(raw: unknown): {
+    incomeSource: IncomeSource;
+    affectedMonths: string[];
+} {
+    const obj = requireObject(raw, "DeactivateIncomeSourceResult");
+    return {
+        incomeSource: parseIncomeSource(obj.incomeSource),
+        affectedMonths: stringArray(obj.affectedMonths, "DeactivateIncomeSourceResult.affectedMonths"),
+    };
+}
+
+function parsePaymentFields(obj: Record<string, unknown>, label: string): Payment {
+    return {
+        paymentsPerMonth: requireNumber(obj, "paymentsPerMonth", label),
+        gross: requireNumber(obj, "gross", label),
+        deductions: arrayOf(
+            obj.deductions,
+            (item, index) => {
+                const d = requireObject(item, `${label}.deductions[${index}]`);
+                const kind = requireString(d, "kind", `${label}.deductions[${index}]`);
+                const match = DEDUCTION_KINDS.find((k) => k === kind);
+                if (match === undefined) throw new Error(`${label}.deductions[${index}].kind: unexpected '${kind}'`);
+                return {
+                    label: requireString(d, "label", `${label}.deductions[${index}]`),
+                    kind: match,
+                    amount: requireNumber(d, "amount", `${label}.deductions[${index}]`),
+                };
+            },
+            `${label}.deductions`,
+        ),
+    };
+}
+
+function parseIncomeMonthPayment(raw: unknown): IncomeMonthPayment {
+    const obj = requireObject(raw, "IncomeMonth.payments[]");
+    return {
+        ...parsePaymentFields(obj, "IncomeMonth.payments[]"),
+        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeMonth.payments[]"),
+        label: requireString(obj, "label", "IncomeMonth.payments[]"),
+        owners: stringArray(obj.owners, "IncomeMonth.payments[].owners"),
+        active: requireBoolean(obj, "active", "IncomeMonth.payments[]"),
+        net: requireNumber(obj, "net", "IncomeMonth.payments[]"),
+        monthlyNet: requireNumber(obj, "monthlyNet", "IncomeMonth.payments[]"),
+        pinned: optionalBoolean(obj, "pinned", "IncomeMonth.payments[]"),
+    };
+}
+
+export function parseOneTimeLine(raw: unknown): OneTimeLine {
+    const obj = requireObject(raw, "OneTimeLine");
+    return {
+        lineId: requireString(obj, "lineId", "OneTimeLine"),
+        label: requireString(obj, "label", "OneTimeLine"),
+        amount: requireNumber(obj, "amount", "OneTimeLine"),
+    };
+}
+
+export function parseIncomeMonth(raw: unknown): IncomeMonth {
+    const obj = requireObject(raw, "IncomeMonth");
+    const state = requireString(obj, "state", "IncomeMonth");
+    if (state !== "EDITABLE" && state !== "GRACE" && state !== "LOCKED") {
+        throw new Error(`IncomeMonth.state: unexpected value '${state}'`);
+    }
+    return {
+        yearMonth: requireString(obj, "yearMonth", "IncomeMonth"),
+        state,
+        payments: arrayOf(obj.payments, parseIncomeMonthPayment, "IncomeMonth.payments"),
+        oneTime: arrayOf(obj.oneTime, parseOneTimeLine, "IncomeMonth.oneTime"),
+        plannedNetIncome: requireNumber(obj, "plannedNetIncome", "IncomeMonth"),
+    };
+}
+
+export function parseIncomePinResult(raw: unknown): IncomePinResult {
+    const obj = requireObject(raw, "IncomePinResult");
+    const warnings = requireObject(obj.warnings, "IncomePinResult.warnings");
+    return {
+        income: parseIncomeMonth(obj.income),
+        warnings: {
+            downstreamPins: arrayOf(
+                warnings.downstreamPins,
+                (item) => {
+                    const pin = requireObject(item, "IncomePinResult.warnings.downstreamPins[]");
+                    return {
+                        incomeSourceId: requireString(pin, "incomeSourceId", "downstreamPins[]"),
+                        yearMonth: requireString(pin, "yearMonth", "downstreamPins[]"),
+                    };
+                },
+                "IncomePinResult.warnings.downstreamPins",
+            ),
+            pinMatchesCarriedValue: stringArray(
+                warnings.pinMatchesCarriedValue,
+                "IncomePinResult.warnings.pinMatchesCarriedValue",
+            ),
+        },
+    };
+}
+
+export function parseDeletedOneTimeLine(raw: unknown): { deleted: string } {
+    const obj = requireObject(raw, "{deleted}");
+    return { deleted: requireString(obj, "deleted", "{deleted}") };
+}
 
 export function parsePerson(raw: unknown): Person {
     const obj = requireObject(raw, "Person");
@@ -424,6 +644,10 @@ export function parseAccount(raw: unknown): Account {
     // what was actually asserted), so tolerate their absence here.
     const notes = optionalString(obj, "notes", "Account");
     if (notes !== undefined) account.notes = notes;
+    const budgetRole = optionalString(obj, "budgetRole", "Account");
+    const role = BUDGET_ROLES.find((r) => r === budgetRole);
+    if (role !== undefined) account.budgetRole = role;
+    if (obj.lastFour !== undefined) account.lastFour = stringArray(obj.lastFour, "Account.lastFour");
     if (typeof obj.targetYear === "number") account.targetYear = obj.targetYear;
     if (obj.loanTerms !== undefined) account.loanTerms = parseLoanTerms(obj.loanTerms);
     return account;

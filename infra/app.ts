@@ -86,6 +86,8 @@ function createPersonalFinanceStacks(stage: Stage): void {
         budgetTable: data.budgetTable,
         budgetAuditLogTable: data.budgetAuditLogTable,
         transactionsTable: data.transactionsTable,
+        incomeSourceTable: data.incomeSourceTable,
+        incomePlanTable: data.incomePlanTable,
         profileTable: data.profileTable,
         accountTable: data.accountTable,
         netWorthSnapshotTable: data.netWorthSnapshotTable,

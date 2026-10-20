@@ -2,8 +2,14 @@
 
 from unittest.mock import MagicMock
 
-from corderohq.aws.dynamodb import BudgetTable, CategoryTable
-from corderohq.budget.densify import densify, resolve_future_targets
+from corderohq.aws.dynamodb import BudgetCarryStore, BudgetTable, CategoryTable, active_category_ids
+from corderohq.budget.densify import (
+    ResolvedValue,
+    densify,
+    resolve_future,
+    resolve_future_targets,
+    value_at_or_before,
+)
 
 
 def _make_budget_table(rows: list[dict[str, object]]) -> tuple[BudgetTable, MagicMock]:
@@ -22,6 +28,16 @@ def _make_category_table(categories: list[dict[str, object]]) -> tuple[CategoryT
     return ct, mock
 
 
+def _densify(budget: BudgetTable, cats: CategoryTable, current_ym: str) -> int:
+    """Call `densify` the same way as the handler and the scheduled Lambda."""
+    return densify(BudgetCarryStore(budget), active_category_ids(cats.list_all()), current_ym, cold_start_value=0)
+
+
+def _resolve(budget: BudgetTable, cats: CategoryTable, year_month: str) -> list[dict[str, object]]:
+    """Call `resolve_future_targets` the same way as the handler."""
+    return resolve_future_targets(BudgetCarryStore(budget), active_category_ids(cats.list_all()), year_month)
+
+
 def _cat(category_id: str, active: bool = True) -> dict[str, object]:
     return {"categoryId": category_id, "name": f"Cat {category_id}", "active": active}
 
@@ -35,7 +51,7 @@ class TestDensifyColdStart:
         budget, _ = _make_budget_table([])
         cats, _ = _make_category_table([_cat("a"), _cat("b"), _cat("c", active=False)])
 
-        written = densify(budget, cats, "2026-06")
+        written = _densify(budget, cats, "2026-06")
 
         # 2 active categories → 2 writes at $0.
         assert written == 2
@@ -43,21 +59,21 @@ class TestDensifyColdStart:
     def test_noop_when_no_categories_exist_either(self) -> None:
         budget, _ = _make_budget_table([])
         cats, _ = _make_category_table([])
-        assert densify(budget, cats, "2026-06") == 0
+        assert _densify(budget, cats, "2026-06") == 0
 
 
 class TestDensifyWalkForward:
     def test_idempotent_when_table_already_current(self) -> None:
         budget, _ = _make_budget_table([_row("2026-06", "a", 500)])
         cats, _ = _make_category_table([_cat("a")])
-        assert densify(budget, cats, "2026-06") == 0
+        assert _densify(budget, cats, "2026-06") == 0
 
     def test_fills_gap_between_m_last_and_current(self) -> None:
         # M_last = 2026-03, current = 2026-06. Need to fill 04, 05, 06.
         budget, mock_b = _make_budget_table([_row("2026-03", "a", 500), _row("2026-03", "b", 300)])
         cats, _ = _make_category_table([_cat("a"), _cat("b")])
 
-        written = densify(budget, cats, "2026-06")
+        written = _densify(budget, cats, "2026-06")
 
         # 3 months x 2 categories = 6 rows.
         assert written == 6
@@ -68,7 +84,7 @@ class TestDensifyWalkForward:
         budget, mock_b = _make_budget_table([_row("2026-03", "a", 500)])
         cats, _ = _make_category_table([_cat("a")])
 
-        densify(budget, cats, "2026-05")
+        _densify(budget, cats, "2026-05")
 
         written_amounts = [call.kwargs["Item"]["amount"] for call in mock_b.put_item.call_args_list]
         assert written_amounts == [500, 500]
@@ -82,7 +98,7 @@ class TestDensifyWalkForward:
         budget, mock_b = _make_budget_table(rows)
         cats, _ = _make_category_table([_cat("a")])
 
-        densify(budget, cats, "2026-06")
+        _densify(budget, cats, "2026-06")
 
         written_keys = [
             (call.kwargs["Item"]["yearMonth"], call.kwargs["Item"]["amount"]) for call in mock_b.put_item.call_args_list
@@ -96,7 +112,7 @@ class TestDensifyWalkForward:
         budget, mock_b = _make_budget_table(rows)
         cats, _ = _make_category_table([_cat("a"), _cat("b", active=False)])
 
-        densify(budget, cats, "2026-05")
+        _densify(budget, cats, "2026-05")
 
         written_cats = {call.kwargs["Item"]["categoryId"] for call in mock_b.put_item.call_args_list}
         assert written_cats == {"a"}
@@ -107,7 +123,7 @@ class TestResolveFutureTargets:
         budget, _ = _make_budget_table([_row("2026-06", "a", 500), _row("2026-09", "a", 1234)])
         cats, _ = _make_category_table([_cat("a")])
 
-        result = resolve_future_targets(budget, cats, "2026-09")
+        result = _resolve(budget, cats, "2026-09")
 
         assert len(result) == 1
         assert result[0]["amount"] == 1234
@@ -117,7 +133,7 @@ class TestResolveFutureTargets:
         budget, _ = _make_budget_table([_row("2026-06", "a", 500)])
         cats, _ = _make_category_table([_cat("a")])
 
-        result = resolve_future_targets(budget, cats, "2026-09")
+        result = _resolve(budget, cats, "2026-09")
 
         assert result[0]["amount"] == 500
         assert result[0]["pinned"] is False
@@ -128,7 +144,7 @@ class TestResolveFutureTargets:
         budget, _ = _make_budget_table(rows)
         cats, _ = _make_category_table([_cat("a")])
 
-        result = resolve_future_targets(budget, cats, "2026-09")
+        result = _resolve(budget, cats, "2026-09")
 
         assert result[0]["amount"] == 777
         assert result[0]["pinned"] is False
@@ -137,7 +153,7 @@ class TestResolveFutureTargets:
         budget, _ = _make_budget_table([])
         cats, _ = _make_category_table([_cat("a")])
 
-        result = resolve_future_targets(budget, cats, "2026-09")
+        result = _resolve(budget, cats, "2026-09")
 
         assert result == []
 
@@ -145,7 +161,54 @@ class TestResolveFutureTargets:
         budget, _ = _make_budget_table([_row("2026-06", "a", 500), _row("2026-06", "b", 300)])
         cats, _ = _make_category_table([_cat("a"), _cat("b", active=False)])
 
-        result = resolve_future_targets(budget, cats, "2026-09")
+        result = _resolve(budget, cats, "2026-09")
 
         cat_ids = {r["categoryId"] for r in result}
         assert cat_ids == {"a"}
+
+
+class _MemoryStore:
+    """A `DenseSparseStore` in memory. The densify code must not depend on the Budget table."""
+
+    def __init__(self, rows: list[tuple[str, str, object]]) -> None:
+        self.rows = list(rows)
+
+    def scan_carry_rows(self) -> list[tuple[str, str, object]]:
+        return list(self.rows)
+
+    def put_carry_row(self, year_month: str, key: str, value: object) -> None:
+        self.rows.append((year_month, key, value))
+
+
+class TestGenericStore:
+    def test_cold_start_writes_the_given_value(self) -> None:
+        store = _MemoryStore([])
+        assert densify(store, ["x"], "2026-06", cold_start_value="start") == 1
+        assert store.rows == [("2026-06", "x", "start")]
+
+    def test_walk_forward_copies_any_value_type(self) -> None:
+        payment = {"gross": 100, "deductions": []}
+        store = _MemoryStore([("2026-04", "x", payment)])
+        densify(store, ["x"], "2026-06", cold_start_value=None)
+        assert store.rows[1:] == [("2026-05", "x", payment), ("2026-06", "x", payment)]
+
+    def test_resolve_future_gives_pinned_and_carried_values(self) -> None:
+        store = _MemoryStore([("2026-06", "x", 1), ("2026-06", "y", 2), ("2026-09", "y", 3)])
+        result = resolve_future(store, ["x", "y"], "2026-09")
+        assert result == [
+            ResolvedValue(key="x", value=1, pinned=False),
+            ResolvedValue(key="y", value=3, pinned=True),
+        ]
+
+
+class TestValueAtOrBefore:
+    def test_uses_the_row_in_the_month_first(self) -> None:
+        by_key = {("2026-06", "x"): 1, ("2026-09", "x"): 2}
+        assert value_at_or_before(by_key, "2026-09", "x") == 2
+
+    def test_walks_back_when_the_month_has_no_row(self) -> None:
+        by_key = {("2026-06", "x"): 1}
+        assert value_at_or_before(by_key, "2026-09", "x") == 1
+
+    def test_returns_none_with_no_history(self) -> None:
+        assert value_at_or_before({}, "2026-09", "x") is None

@@ -287,3 +287,85 @@ class TestHistoricalNameResolution:
         # The rename is BEFORE the EDT-aware month-end (2024-04-01T03:59:59.999999Z),
         # so the current name was in effect during 2024-03.
         assert result["categories"][0]["historicalName"] is None
+
+
+class TestCurrentMonthInEasternTime:
+    def test_last_evening_of_a_month_is_still_that_month(self) -> None:
+        # 2026-06-30 at 22:00 ET is 2026-07-01 at 02:00 UTC. The current month is still June,
+        # so July is a future month and its summary walks back to the June row.
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.scan.return_value = {"Items": [{"yearMonth": "2026-06", "categoryId": "cat1", "amount": 500}]}
+        budget_mock.query.return_value = {"Items": []}
+        txn_mock.query.return_value = {"Items": []}
+        cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
+        late_june = datetime(2026, 7, 1, 2, 0, 0, tzinfo=UTC)
+
+        result = compute_summary(budget, transactions, category_table, "2026-07", late_june)
+
+        assert result["totals"]["budgeted"] == 500
+
+
+class TestDispositions:
+    """Only BUDGET rows are actuals. OFF_BUDGET rows have their own total."""
+
+    def test_off_budget_and_skip_rows_do_not_change_a_category(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 1_000_000}]}
+        txn_mock.query.return_value = {
+            "Items": [
+                {"categoryId": "cat1", "amount": 300_000},
+                {"categoryId": "cat1", "amount": 400_000, "disposition": "BUDGET"},
+                {"categoryId": "cat1", "amount": 5_000_000, "disposition": "OFF_BUDGET"},
+                {"amount": 2_000_000, "disposition": "OFF_BUDGET"},
+                {"amount": -9_000_000, "disposition": "SKIP"},
+            ]
+        }
+        cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-06", _NOW)
+
+        assert result["categories"][0]["actual"] == 700_000
+        assert result["totals"] == {"budgeted": 1_000_000, "actual": 700_000, "delta": 300_000}
+        assert result["offBudget"] == {"actual": 7_000_000}
+        assert result["totalsWithOffBudget"] == {"budgeted": 1_000_000, "actual": 7_700_000}
+
+    def test_no_off_budget_rows_gives_zero(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 1_000_000}]}
+        txn_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 300_000}]}
+        cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-06", _NOW)
+
+        assert result["offBudget"] == {"actual": 0}
+        assert result["totalsWithOffBudget"] == {"budgeted": 1_000_000, "actual": 300_000}
+
+    def test_editable_month_ignores_off_budget_row_of_inactive_category(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": []}
+        txn_mock.query.return_value = {
+            "Items": [{"categoryId": "dead_cat", "amount": 5_000_000, "disposition": "OFF_BUDGET"}]
+        }
+        cat_mock.scan.return_value = {"Items": [_cat("dead_cat", active=False)]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-06", _NOW)
+
+        assert result["categories"] == []
+        assert result["offBudget"] == {"actual": 5_000_000}
+
+    def test_locked_month_ignores_off_budget_and_skip_rows_for_membership(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": []}
+        txn_mock.query.return_value = {
+            "Items": [
+                {"categoryId": "cat1", "amount": 1_000_000, "disposition": "OFF_BUDGET"},
+                {"amount": 1_000_000, "disposition": "SKIP"},
+                {"categoryId": "cat2", "amount": 0},
+            ]
+        }
+        cat_mock.scan.return_value = {"Items": [_cat("cat1"), _cat("cat2")]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-01", _NOW)
+
+        assert result["state"] == "LOCKED"
+        assert [c["categoryId"] for c in result["categories"]] == ["cat2"]

@@ -6,10 +6,15 @@ Pure functions only. No DynamoDB, no env vars.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-EditabilityState = Literal["EDITABLE", "GRACE", "LOCKED"]
+class EditabilityState(StrEnum):
+    """Whether a year-month can change. GRACE is the previous month in its grace period."""
+
+    EDITABLE = "EDITABLE"
+    GRACE = "GRACE"
+    LOCKED = "LOCKED"
 
 _N_FUTURE_MONTHS = 12
 _GRACE_PERIOD_DAYS = 7
@@ -61,7 +66,7 @@ def editability(year_month: str, now_utc: datetime) -> EditabilityState:
     diff = target_ord - current_ord
 
     if diff == 0 or 1 <= diff <= _N_FUTURE_MONTHS:
-        return "EDITABLE"
+        return EditabilityState.EDITABLE
 
     if diff == -1:
         grace_cutoff_et = datetime(
@@ -74,6 +79,6 @@ def editability(year_month: str, now_utc: datetime) -> EditabilityState:
             tzinfo=tz,
         )
         if now_et < grace_cutoff_et:
-            return "GRACE"
+            return EditabilityState.GRACE
 
-    return "LOCKED"
+    return EditabilityState.LOCKED

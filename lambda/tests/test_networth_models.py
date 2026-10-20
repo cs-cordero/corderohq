@@ -6,12 +6,15 @@ from corderohq.networth.models import (
     AccountType,
     AssetClass,
     account_type_meta,
+    budget_role_of,
     resolve_account_type_fields,
     resolve_target_year,
     validate_account_type,
     validate_asset_class,
     validate_asset_classes,
     validate_birth_year_month,
+    validate_budget_role,
+    validate_last_four,
     validate_loan_terms,
     validate_owners,
     validate_target_year,
@@ -37,6 +40,7 @@ class TestEnumValues:
             "vehicle",
             "other_asset",
             "other_liability",
+            "credit_card",
         }
 
     def test_asset_class_covers_design_values(self) -> None:
@@ -51,6 +55,7 @@ class TestEnumValues:
             "real_estate",
             "target_date",
             "other",
+            "debt",
         }
 
     def test_numeric_valued_members_are_addressable(self) -> None:
@@ -137,8 +142,25 @@ class TestResolveAccountTypeFields:
         )
         assert account_type == "mortgage"
         assert liability is True
-        assert asset_classes == ["other"]
+        assert asset_classes == ["debt"]
         assert loan_terms is None
+
+    def test_credit_card_is_a_debt_liability_with_no_loan_terms(self) -> None:
+        _, liability, asset_classes, _ = resolve_account_type_fields("credit_card", None, None)
+        assert liability is True
+        assert asset_classes == ["debt"]
+        terms = {"interestRate": 0.2, "monthlyPayment": 1, "payoffYearMonth": "2030-01"}
+        with pytest.raises(ValueError, match="only allowed on amortizing"):
+            resolve_account_type_fields("credit_card", None, terms)
+
+    def test_every_liability_type_has_the_debt_class(self) -> None:
+        for account_type in AccountType:
+            meta = account_type_meta(account_type.value)
+            assert meta.liability == (meta.fixed_asset_class == AssetClass.DEBT), account_type
+
+    def test_asset_account_cannot_choose_debt(self) -> None:
+        with pytest.raises(ValueError, match="cannot include 'debt'"):
+            resolve_account_type_fields("brokerage", ["cash", "debt"], None)
 
     def test_cash_type_ignores_client_asset_classes(self) -> None:
         _, liability, asset_classes, _ = resolve_account_type_fields("checking", ["us_equity_large_cap"], None)
@@ -254,3 +276,43 @@ class TestValidateLoanTerms:
         terms = self._valid()
         terms["interestRate"] = 0
         assert validate_loan_terms(terms, amortizing=True) is not None
+
+
+class TestBudgetRole:
+    @pytest.mark.parametrize(
+        ("account_type", "expected"),
+        [
+            ("checking", "SPENDING"),
+            ("credit_card", "SPENDING"),
+            ("savings", "HOLDING"),
+            ("brokerage", "HOLDING"),
+            ("529", "HOLDING"),
+            ("530a", "HOLDING"),
+            ("401k", None),
+            ("mortgage", None),
+            ("other_liability", None),
+        ],
+    )
+    def test_default_for_each_type(self, account_type: str, expected: str | None) -> None:
+        assert budget_role_of({"accountType": account_type}) == expected
+
+    def test_explicit_role_wins(self) -> None:
+        assert budget_role_of({"accountType": "other_liability", "budgetRole": "SPENDING"}) == "SPENDING"
+        assert budget_role_of({"accountType": "savings", "budgetRole": "SPENDING"}) == "SPENDING"
+
+    def test_validate_budget_role(self) -> None:
+        assert validate_budget_role("HOLDING") == "HOLDING"
+        assert validate_budget_role(None) is None
+        with pytest.raises(ValueError, match="budgetRole must be one of"):
+            validate_budget_role("spending")
+
+
+class TestLastFour:
+    def test_accepts_and_dedupes(self) -> None:
+        assert validate_last_four(["1234", "5678", "1234"]) == ["1234", "5678"]
+        assert validate_last_four([]) == []
+
+    @pytest.mark.parametrize("bad", ["1234", ["123"], ["12345"], ["12a4"], [1234]])
+    def test_rejects_bad_values(self, bad: object) -> None:
+        with pytest.raises(ValueError, match="lastFour"):
+            validate_last_four(bad)

@@ -1,6 +1,7 @@
 """Tests for ProfileTable, AccountTable, and NetWorthSnapshotTable."""
 
 from decimal import Decimal
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -262,6 +263,18 @@ class TestAccountTableUpdate:
         assert "excludedFromNetWorth = :exc" in kwargs["UpdateExpression"]
         assert kwargs["ExpressionAttributeValues"][":exc"] is True
 
+    def test_sets_and_removes_the_budget_fields(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {"Item": {"accountId": "a1", "name": "A", "accountType": "other_liability"}}
+        mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
+        accounts.update("a1", {"budgetRole": "SPENDING", "lastFour": ["1234"]})
+        kwargs = mock.update_item.call_args.kwargs
+        assert "budgetRole = :br" in kwargs["UpdateExpression"]
+        assert kwargs["ExpressionAttributeValues"][":lf"] == ["1234"]
+
+        accounts.update("a1", {"budgetRole": None, "lastFour": []})
+        expression = mock.update_item.call_args.kwargs["UpdateExpression"]
+        assert "REMOVE budgetRole, lastFour" in expression
+
     def test_rejects_non_bool_excluded_flag(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {"Item": {"accountId": "a1", "name": "A", "accountType": "brokerage"}}
         with pytest.raises(ValueError, match="excludedFromNetWorth must be a boolean"):
@@ -365,7 +378,7 @@ class TestNetWorthSnapshotTable:
     def test_upsert_month_merges_classes_and_deletes_when_empty(
         self, snapshots: NetWorthSnapshotTable, mock: MagicMock
     ) -> None:
-        def get_item(**kwargs: object) -> dict[str, object]:
+        def get_item(**kwargs: Any) -> dict[str, object]:
             key = kwargs["Key"]
             assert isinstance(key, dict)
             if key["accountId"] == "a1":
