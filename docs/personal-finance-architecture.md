@@ -198,7 +198,8 @@ it.
 |                        |                    |            | incomeSourceId (an income   |
 |                        |                    |            | entry), action (CREATE/     |
 |                        |                    |            | UPDATE/PIN/UNPIN/CATEGORY_  |
-|                        |                    |            | HARD_DELETE), explanation,  |
+|                        |                    |            | HARD_DELETE, and the income |
+|                        |                    |            | actions), explanation,      |
 |                        |                    |            | user ({sub, email,          |
 |                        |                    |            | username}; see **Audit user |
 |                        |                    |            | identity**), override       |
@@ -426,11 +427,34 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 +--------+------------------------------------------+------------------------------------+
 ```
 
-The income plan has its own routes, which copy the budget routes: `/api/income-sources` (list,
-create, `/reorder`, `/{id}` rename, `/{id}/deactivate`, `/{id}/reactivate`) and
-`/api/income/{YYYY-MM}` (GET, `/replace`, `/pin`, `/one-time`). One `/one-time` route creates a
-line (no `lineId`), changes it (a `lineId`), or deletes it (a `lineId` and `delete: true`). See
-**Income Plan and Left to Assign**.
+The income plan has its own routes, which copy the budget routes. See **Income Plan and Left to
+Assign** for the bodies and the responses.
+
+```
++--------+--------------------------------------------+----------------------------------------+
+| Method | Path                                       | Purpose                                |
++--------+--------------------------------------------+----------------------------------------+
+| GET    | /api/income-sources?include_inactive=true  | List the income sources.               |
+| POST   | /api/income-sources                        | Create a source with its first         |
+|        |                                            | payment in the current month. One      |
+|        |                                            | INCOME_CREATE audit entry.             |
+| POST   | /api/income-sources/reorder                | Write the full order.                  |
+| PUT    | /api/income-sources/{id}                   | Change the label, the frequency, or    |
+|        |                                            | the owners. No editability check. No   |
+|        |                                            | audit entry.                           |
+| POST   | /api/income-sources/{id}/deactivate        | The same flow as a category.           |
+| POST   | /api/income-sources/{id}/reactivate        | The same as a category.                |
+| GET    | /api/income/{YYYY-MM}                      | The income plan of one month.          |
+| POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the payments.     |
+| POST   | /api/income/{YYYY-MM}/pin                  | Future-month write of the payments.    |
+| POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time line (no `lineId`),  |
+|        |                                            | change it (a `lineId`), or delete it   |
+|        |                                            | (a `lineId` and `delete: true`).       |
++--------+--------------------------------------------+----------------------------------------+
+```
+
+API Gateway lists each route explicitly. A route that is not in that list gets a `404` from API
+Gateway, and the Lambda never sees the request.
 
 The net worth record has its own routes: `/api/profile`, `/api/profile/people/...`,
 `/api/accounts/...`, and `/api/net-worth/...`. See `handler()` in `personal_finance_handler.py`.
@@ -444,8 +468,8 @@ Every response carries strict security headers: `HSTS`, `X-Content-Type-Options`
 These endpoints have an **editability gate**: `POST /api/budget/{YYYY-MM}/replace`,
 `POST /api/budget/{YYYY-MM}/pin`, `POST /api/transactions`, `POST /api/transactions/update`,
 `POST /api/transactions/delete`, `POST /api/transactions/commit`, and the income plan writes
-(`/api/income/{YYYY-MM}/replace`, `/pin`, and the three `/one-time` routes). The income `/pin`
-copies the budget `/pin`: it takes no override. Each one accepts an optional
+(`/api/income/{YYYY-MM}/replace`, `/pin`, and `/one-time`). The income `/pin` copies the budget
+`/pin`: the override does not unlock a month that is not in the future. Each one accepts an optional
 `override: true` flag in the body. The handler obeys that flag only if the JWT shows that the user
 is in the admin group — see **Editability and the Admin Override**. If it does not, the handler
 returns `403`. The flag does nothing on a `GET` endpoint, because any signed-in user may read
@@ -506,9 +530,12 @@ offset. The grace period ends at **midnight ET on day 8** of the new month.
 | `POST /api/budget/{YYYY-MM}/replace` | `{YYYY-MM}` must be the current month, GRACE, or — via override — LOCKED |
 | `POST /api/budget/{YYYY-MM}/pin` | `{YYYY-MM}` must be strictly in the future — i.e., EDITABLE and `yearMonth > current_ym` (one of the next 12 months). Pinning the current month, the grace month, or any locked month is rejected with `409`; those months are dense and `/replace` is the right endpoint. Override does not unlock `/pin` for non-future months — it has no use here |
 | `POST /api/transactions` | `transactionDate`'s year-month must be EDITABLE or GRACE |
-| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. An update cannot change `transactionDate`; it changes only `description`, `amount`, and `categoryId` |
+| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. An update cannot change `transactionDate` |
 | `POST /api/transactions/delete` | Each item's `yearMonth` must be EDITABLE or GRACE |
 | `POST /api/transactions/commit` | Every row's `transactionDate` year-month must be EDITABLE or GRACE; see **CSV commit semantics** |
+| `POST /api/income/{YYYY-MM}/replace` | The same as the budget `/replace` |
+| `POST /api/income/{YYYY-MM}/pin` | The same as the budget `/pin` |
+| `POST /api/income/{YYYY-MM}/one-time` | `{YYYY-MM}` must be EDITABLE (a future month too) or GRACE, or LOCKED via override |
 
 On a failure the response is `409 Conflict`. The body lists every year-month and every row at
 fault. A change to one item reports that one item. A change to a batch reports every item that
@@ -928,43 +955,104 @@ active keys:
 
 ## Income Plan and Left to Assign
 
+### Income sources and payments
+
 An **income source** is one stream of income that the plan counts, such as a job, interest, or
 dividends (`IncomeSource-{stage}`). It has one or more owners, the same as an account, so a joint
 source has two. A person can own any number of them, and the app does not delete a person who still
-owns one. Every kind works the same way: for a source with no deductions, the gross amount equals the
-net amount. Each dense month holds one **payment row** for each active income source, in
-`IncomePlan-{stage}`, with the same month rules as a Budget row: dense past and current months,
-sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
-entry with an explanation for each change.
+owns one. Every kind works the same way: for a source with no deductions, the gross amount equals
+the net amount. The label of a source is real data, so it lives only in DynamoDB, and never in the
+code.
 
-A payment is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount
-for one payment. The kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`;
-they are for display only. `budget/income.py` checks a payment (`validate_payment()`), and
-calculates `net = gross − sum(deductions)` and `monthlyNet = net × paymentsPerMonth`. The app never
-stores the net amount. The pay frequency sets the default `paymentsPerMonth` (weekly 4, every two
-weeks 2, twice a month 2, monthly 1; see `DEFAULT_PAYMENTS_PER_MONTH` in `types.ts`). The count is
-stored on each month's payment, so a change of frequency does not alter a locked month. The plan
-uses the same `paymentsPerMonth` in every month, so a
-third paycheck is not in the plan.
+Each dense month holds one **payment row** for each active income source, in `IncomePlan-{stage}`,
+with the same month rules as a Budget row: dense past and current months, sparse future pins,
+carry-forward, the grace period, the lock, the admin override, and an audit entry with an
+explanation for each change.
+
+A payment is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount for
+one payment. The order of the deductions is the display order.
+
+- The deduction kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`. They are
+  for display only. No calculation uses them.
+- `net = gross − sum(deductions)` and `monthlyNet = net × paymentsPerMonth`. The app calculates the
+  net amount on each read, and never stores it.
+- The rules: `gross >= 0`, each deduction amount `>= 0`, `net >= 0`, `paymentsPerMonth` is an
+  integer from 1 to 5, and no label is empty.
+- Two payments are equal when `paymentsPerMonth`, `gross`, and the full list of deductions are
+  equal. A write of an equal payment does nothing, and makes no audit entry.
+- The whole payment is one value. A change to one deduction writes the whole row again, so the
+  walk back copies one value, the same as for a Budget row.
+
+The pay frequency sets the default `paymentsPerMonth`: weekly 4, every two weeks 2, twice a month
+2, and monthly 1. The count is stored on the payment of each month, so a change of frequency does
+not alter a locked month. The plan uses the same count in every month, so a third paycheck is not
+in the plan.
 
 A **one-time income line** (`ONE#{ULID}`) is a net amount in one month only, such as a bonus, an
-RSU payout, a DCFSA payout, or a third paycheck. It never carries forward.
+RSU payout, a DCFSA payout, or a third paycheck. The amount must be more than 0. It never carries
+forward, and the densify step never copies it.
 
-`compute_income()` returns one month: the payments, the one-time lines, and
+**Why a separate table, and not more rows in `Budget-{stage}`?** The SK of the Budget table is a
+`categoryId`. The `/replace` body rule, the summary, the hard delete, and the densify step all read
+each row of a month as a category row. A separate table keeps each of them as it is.
+
+### The month of an income plan
+
+`GET /api/income/{YYYY-MM}` returns one month:
+
+```
+{
+  "yearMonth": "2026-11",
+  "state": "EDITABLE" | "GRACE" | "LOCKED",
+  "payments": [
+    {
+      "incomeSourceId", "label", "owners", "active",
+      "paymentsPerMonth", "gross", "deductions": [...],
+      "net",              // one payment
+      "monthlyNet",       // net × paymentsPerMonth
+      "carriedPayment",   // the value that carries forward, or null
+      "onlyThisMonth",    // true if the month shows a this-month-only payment
+      "pinned"            // future months only
+    }, ...
+  ],
+  "oneTime": [{ "lineId", "label", "amount" }, ...],
+  "plannedNetIncome": number
+}
+```
+
 `plannedNetIncome = sum(monthlyNet) + sum(one-time amounts)`. Membership copies the summary:
 
 - **A future month** — each active income source, with a pin or a value from the walk back.
 - **The current month and the grace month** — each active income source with a payment row.
-- **A locked month** — each income source with a payment row, active or not.
+- **A locked month** — each income source with a payment row, active or not. A locked month uses
+  its own dense rows only, so its value never changes after the lock.
 
-**Left to assign** = `plannedNetIncome − totals.budgeted`. `GET /api/summary` returns it in
-`income`. The budget page fetches `GET /api/income/{YYYY-MM}` and calculates it live from the form,
-for the active categories. It never blocks a save, and no transaction changes it.
+### Writes
 
-`/replace` needs every income source with a row in that month, and it does not take a `null`
-payment: to stop a source, deactivate it. `/pin` takes `null` to remove a pin, and returns the
-month and the same two warnings as the budget `/pin`. A deactivation drops the future pins after a
-confirmation, the same as for a category. There is no hard delete for an income source.
+`/replace` and `/pin` copy the budget endpoints. The body key is `payments`, a list of
+`{incomeSourceId, payment}`, in place of `targets`. Each income source in the body must exist. Each
+body has an `explanation`, and an optional `override`.
+
+- `/replace` needs every income source with a row in that month. It does not take a `null`
+  payment: to stop a source, deactivate it. The response is the month.
+- `/pin` takes `null` to remove a pin. It returns
+  `{income: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`, the same two
+  warnings as the budget `/pin`.
+- The `/one-time` route needs an `explanation`. A `lineId` must start with `ONE#`.
+- A deactivation drops the future pins after a confirmation, the same as for a category. There is
+  no hard delete for an income source. A mistake is fixed by a deactivation.
+
+### Left to assign
+
+```
+leftToAssign(M) = plannedNetIncome(M) − totals.budgeted(M)
+```
+
+`totals.budgeted` comes from the summary, so the two numbers use the same category membership.
+`GET /api/summary` returns `income: {plannedNetIncome, leftToAssign}`. `GET /api/budget/{YYYY-MM}`
+does not return it. The budget page fetches `GET /api/income/{YYYY-MM}`, and calculates the value
+live from the form while the user types. The value never blocks a save, and no transaction changes
+it. The frontend shows it in a different colour when it is not `$0`.
 
 ## Transaction Dispositions
 
@@ -976,13 +1064,36 @@ Each transaction has a disposition (`budget/dispositions.py`):
 | `OFF_BUDGET` | work travel that an employer pays back; a payment with money from a fund | in the Off-budget total only | optional |
 | `SKIP` | paychecks, bonuses, interest, transfers, card payments | nowhere | none |
 
-- `compute_summary()` counts only BUDGET rows, in each category and in the membership rules. The
-  OFF_BUDGET rows add up to `offBudget.actual`, which is not in `totals`. `totalsWithOffBudget`
-  adds the two. The `/replace` body rule reads BUDGET rows only.
-- `resolve_disposition_fields()` checks the rules for a create, an update, and a commit. A change
-  to SKIP removes the category. An empty note removes the note.
-- The ledger hides SKIP rows by default. The summary page shows the Off-budget row and the
-  "Total + off-budget" row below the Total row.
+The rules for the fields of a transaction, on a create, an update, and a commit:
+
+- `disposition = BUDGET` needs a `categoryId`. `disposition = SKIP` has no `categoryId`: the server
+  removes one that the client sends.
+- `accountId`, if present, must be an account in the Account table.
+- `note`, if present, is at most 200 characters after a trim. An empty note is removed.
+- A change of the disposition, the category, or the note obeys the usual editability rules.
+
+The summary counts only BUDGET rows, in each category and in the membership rules. An OFF_BUDGET
+row with a category does not put that category on the summary. The `/replace` body rule reads
+BUDGET rows only. The summary response holds these totals:
+
+```
+"totals":              { "budgeted", "actual", "delta" },   // BUDGET rows only
+"offBudget":           { "actual" },                        // the OFF_BUDGET rows
+"totalsWithOffBudget": { "budgeted", "actual" },            // budgeted = totals.budgeted
+"income":              { "plannedNetIncome", "leftToAssign" }
+```
+
+The Off-budget total is below the TOTAL, and not in it. If it were in the TOTAL, the total delta
+would always show an overspend that is not real. The summary page shows the Off-budget row and the
+"Total + off-budget" row below the Total row. The ledger hides SKIP rows by default.
+
+**No migration was necessary.** An absent `disposition` reads as BUDGET, and every older row has a
+`categoryId`, so every older row stays valid. An older paycheck in an "Income" category stays a
+BUDGET row until the user changes it to SKIP. A locked month stays as it is, unless an admin uses
+the override.
+
+The hard delete of a category deletes every transaction with that `categoryId`, an OFF_BUDGET row
+too. A SKIP row has no category, so the hard delete never touches it.
 
 ## Hard delete semantics
 
@@ -1176,12 +1287,36 @@ The frontend builds the same group name from a stage value. The deploy puts that
 `config.json`. The admin toggle and the `/admin` route therefore appear only when the user holds
 the claim for that stage.
 
+## Accounts for the Budget
+
+The CSV import uses two optional fields of an account, which the user sets on the Accounts page:
+
+- `budgetRole`: `SPENDING` or `HOLDING`. Absent means the default for the account type.
+- `lastFour`: a list of 4-digit strings. The import uses them to find the other side of a
+  transfer.
+
+| Account type | Default budget role |
+|---|---|
+| `checking`, `credit_card` | SPENDING |
+| `savings`, `brokerage`, `529`, `530a` | HOLDING |
+| All other types | none. The account cannot take a CSV upload until the user sets a role. |
+
+**The `credit_card` type and the `debt` class.** A credit card is a liability with the fixed asset
+class `debt`, and it has no loan terms. `debt` is the fixed class of every liability: `mortgage`,
+`other_liability`, and `credit_card`. An asset account can never choose it. The user can set
+`excludedFromNetWorth` on a credit card, to keep its balance out of the net worth.
+
+Before the `debt` class, a liability had the fixed class `other`. The one-time script
+`lambda/scripts/migrate_liabilities_to_debt.py` moves the older data. It does a dry run by default,
+writes only with `--apply`, and is safe to run again. It changes `assetClasses` and the snapshot
+values of each mortgage and other liability from `other` to `debt`. With `--to-credit-card
+<accountId>`, it also changes that account to the `credit_card` type, and removes its loan terms.
+
 ## LLM-Driven CSV Import (`budget/csv_import/`)
 
 Each upload belongs to one **account**, which the user chooses. The account needs a budget role:
-SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, a 529). The role comes
-from `Account.budgetRole`, or else from the default for the account type (`budget_role_of()` in
-`networth/models.py`).
+SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, a 529). See **Accounts
+for the Budget**.
 
 The upload sends as little data as possible to the Anthropic API. Each call reads the API key from
 SSM:
@@ -1197,19 +1332,68 @@ SSM:
 3. **Give a kind and a category.** `categorize_transactions()` sends each unique description one
    time, with the active category names. It returns a `kind` (expense, refund, income,
    card_payment, own_transfer) and a category for each one, and maps them back to every row.
-4. **Suggest a disposition.** `budget/csv_import/directions.py` finds the other side of each row: a saved
-   transaction in another account with the opposite amount within 4 days (PAIR), a 4-digit group
-   in the description that is in the `lastFour` of one other account (LAST_FOUR), the bank's
-   category (BANK, from a generic word list), or the kind (LLM). The direction table then gives
-   the disposition. A transfer between two own accounts counts one time at most, on the side where
-   the money leaves a spending account. When the app is not sure, it suggests SKIP and marks the
-   row. See `docs/budget-specs.md` Spec 52 for the table.
-5. **Mark duplicates.** Each row gets a fingerprint: a SHA-256 of the account, the date, the
-   amount, the normalized description, and its count among equal rows in the file. A row whose
-   fingerprint is in the table already is a duplicate.
+4. **Suggest a disposition.** The import finds the other side of each row (see below). The
+   direction table then gives the disposition. A transfer between two own accounts counts one time
+   at most, on the side where the money leaves a spending account.
+5. **Mark duplicates.** Each row gets a fingerprint (see below). A row whose fingerprint is in the
+   table already is a duplicate.
 
 The upload loads the saved transactions of each upload month, and of the month before and after
-it, for the duplicates and the pair match.
+it, for the duplicates and the pair match. The bank category and the amounts never go to the LLM.
+
+### The other side of a row
+
+After the sign step, an amount is positive for money out and negative for money in, from the point
+of view of the upload account. The other side is the outside world, or one of the user's own
+accounts. These checks run in order, and the first one with an answer wins. Each row records the
+check in `suggestedBy`:
+
+1. **PAIR.** A saved transaction in a different account, with the opposite sign, the same absolute
+   amount, and a date at most 4 days away. With one candidate, the other side is that account. With
+   more than one, the row is marked, and the import does not choose. The same upload cannot hold
+   the other side, because all its rows belong to one account.
+2. **LAST_FOUR.** A 4-digit group in the description that is in the `lastFour` of exactly one other
+   account.
+3. **BANK.** The bank category of the row, from a short list of generic bank words, such as
+   "payroll", "transfer", or "card payment".
+4. **LLM.** The kind that the categorization gave the description.
+5. **DEFAULT.** No check gave an answer.
+
+An account with no budget role, such as a mortgage, counts as the outside world.
+
+### The direction table
+
+| Upload role | Money | Other side | Suggested disposition | Mark for review? |
+|---|---|---|---|---|
+| SPENDING | out | outside | BUDGET, LLM category | only if no category |
+| SPENDING | out | SPENDING account (pair, last four) | SKIP | no |
+| SPENDING | out | HOLDING account (pair, last four) | BUDGET, LLM category | yes, if the LLM gave no category |
+| SPENDING | out | own account, role unknown, LLM says `card_payment` | SKIP | no |
+| SPENDING | out | own account, role unknown, LLM says `own_transfer` with a category | BUDGET, that category | **yes** |
+| SPENDING | out | own account, role unknown, no category | SKIP | **yes** |
+| SPENDING | in | outside, LLM says `refund` | BUDGET, LLM category | only if no category |
+| SPENDING | in | outside, income | SKIP | no |
+| SPENDING | in | any own account | SKIP | no |
+| HOLDING | out | outside | OFF_BUDGET | no |
+| HOLDING | out | any own account | SKIP | no |
+| HOLDING | in | anything | SKIP | no |
+| any | any | unknown | SKIP, reason `unknown_direction` | **yes** |
+
+When the import is not sure, it suggests SKIP and marks the row. A missed savings transfer shows as
+a `$0` actual in a savings category, and the user sees it. A double count is hard to see.
+
+### Fingerprints
+
+```
+fingerprint = sha256(accountId | transactionDate | amount | normalizedDescription | n)
+```
+
+- `normalizedDescription` is the description in upper case, with each run of white space replaced
+  by one space.
+- `n` is the count of earlier rows in the same file with the same first four values. Two real
+  coffees on the same day, for the same amount, then get different fingerprints.
+- A row from before fingerprints has none, so it never matches. The first upload of a date range
+  that overlaps an older upload can therefore make a copy. The user must look for this one time.
 
 ### Upload response shape
 
@@ -1243,7 +1427,8 @@ list of the review screen.
 A CSV row with too few columns, or an amount that is not a number, is **dropped with no error**.
 If no row is left, the upload returns `400`. If the LLM cannot find the three columns, the upload
 also returns `400`. The upload stores the date text of the bank as it is, and the year-month is
-its first 7 characters.
+its first 7 characters. A bank date format such as `03/15/2026` therefore gives a wrong year-month.
+This is a known limit.
 
 The review screen shows three lists: the rows to look at first, the BUDGET rows, and the
 OFF_BUDGET and SKIP rows. A duplicate row starts unselected. The user can change the disposition,
@@ -1306,7 +1491,8 @@ the path for a CSV commit.
 ```
 
 The scheduled densify Lambda gets `CATEGORY_TABLE_NAME`, `BUDGET_TABLE_NAME`,
-`INCOME_SOURCE_TABLE_NAME`, `INCOME_PLAN_TABLE_NAME`, and `STAGE`.
+`INCOME_SOURCE_TABLE_NAME`, `INCOME_PLAN_TABLE_NAME`, and `STAGE`. It can read the Category and
+IncomeSource tables, and it can read and write the Budget and IncomePlan tables.
 
 Every environment variable goes through `get_env_var()`. That function raises an error if the value
 is absent or blank.
@@ -1376,9 +1562,25 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
   and JSON and boto3 write its value. A set that never leaves the process is a plain `Enum`, such
   as `BankHint` and `SideKind`.
 
-- **A plan-based budget** — Left to assign = planned net income − targets. The plan counts the
-  same number of payments every month, so extra money (a third paycheck, a bonus) is not in the
-  plan unless the user adds a one-time line. The app does not track actual income.
+- **A plan-based budget** — Left to assign = planned net income − targets. The user wants a stable
+  monthly plan. A cash-based plan needs work on each payday. The plan counts the same number of
+  payments every month, so extra money (a third paycheck, a bonus, an RSU or DCFSA payout) is not in
+  the plan unless the user adds a one-time line. The app shows no surplus for it, and gives no
+  warning. The app does not track actual income, so a paycheck deposit is SKIP, and there is no
+  "income" disposition.
+- **Gross amount and each deduction are recorded** — The user can then see why the net amount is
+  the number that it is. The app does not model a change of the net amount during the year, such as
+  the 401k limit or the Social Security wage limit. The user changes the payment by hand.
+- **A DCFSA is only a pre-tax deduction** — It has no link to a category, because the user can
+  spend DCFSA money on any qualified expense.
+- **No category balances** — No envelopes and no carryover. Money counts one time, when it goes into
+  a fund. Money that leaves a fund is Off-budget.
+- **The app saves every row of a CSV import, SKIP rows too** — The fingerprints and the pair match
+  need them, and the user can change a row later.
+- **No real data in the code** — The repository is public. Employer names, labels, and amounts live
+  only in DynamoDB.
+- **Import rules, remembered choices, and a stored column mapping are deferred** — They can fit in
+  later as one more step before the LLM step.
 - **The income plan obeys the budget's month rules** — A locked month shows the same left to
   assign amount for ever. One generic densify step serves both tables.
 - **One disposition for "the budget must not count this"** — Off-budget covers work travel and
@@ -1429,9 +1631,8 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
   Cognito groups. An admin in dev is therefore not an admin in prod, even for the same person. This
   friction is deliberate, and someone must add the user to each group.
 - **The CSV commit checks the whole batch first** — The endpoint checks every row before it writes
-  any row, so no row for a locked month gets in. But a failure part way through leaves the ledger
-  with some rows written, and a retry by the client can write a second copy of a row. We chose this
-  over the work to build a batch ID that makes a retry safe.
+  any row, so no row for a locked month gets in. A failure part way through can leave some rows
+  written, but a retry is safe: the fingerprints drop each row that the first try wrote.
 - **The audit log holds budget targets only** — The app does not audit a change to a transaction.
   The schema stays simple, and it matches how the user reviews the data. What matters is that
   *budget against actual* is correct for a past month, and not a record of who edited which
