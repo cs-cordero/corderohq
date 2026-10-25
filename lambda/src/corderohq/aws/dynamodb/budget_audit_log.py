@@ -26,12 +26,7 @@ class AuditAction(StrEnum):
 
 
 class BudgetAuditLogTable:
-    """Budget audit log writes and reads.
-
-    Single-partition design: PK is always the literal string "AUDIT", SK is a ULID
-    that sorts chronologically. Recent-N reads are one Query with
-    ScanIndexForward=false; no month-walking required.
-    """
+    """The audit log of the budget, with one entry for each change."""
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -46,12 +41,10 @@ class BudgetAuditLogTable:
         changes: dict[str, Any],
         override: bool = False,
     ) -> dict[str, Any]:
-        """Write a single audit log entry. Returns the created item.
+        """Write one audit log entry, and return it.
 
-        `user` is the JWT-claims snapshot {sub, email, username} captured at request time
-        per the architecture doc's "Audit user identity" section.
-        `effective_year_month` may be None for actions not scoped to a single month
-        (e.g. CATEGORY_HARD_DELETE).
+        `user` holds the `sub`, `email`, and `username` claims of the request. `effective_year_month` is None for an
+        action that applies to no single month, such as CATEGORY_HARD_DELETE.
         """
 
         now = datetime.now(tz=UTC)
@@ -81,11 +74,7 @@ class BudgetAuditLogTable:
         return item
 
     def read_recent_entries(self, limit: int = 50) -> list[dict[str, Any]]:
-        """Read the last N audit log entries, newest first.
-
-        Single Query against the AUDIT partition with ScanIndexForward=False so
-        DynamoDB walks the sort key in descending ULID order.
-        """
+        """Return the most recent `limit` entries, newest first."""
 
         response = self._table.query(
             KeyConditionExpression="entityType = :pk",

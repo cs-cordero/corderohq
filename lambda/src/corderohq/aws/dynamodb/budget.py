@@ -47,13 +47,7 @@ class BudgetTable:
         return items
 
     def scan_all(self) -> list[dict[str, Any]]:
-        """Return every row in the table.
-
-        Used by densification to load the full state into memory before walking
-        forward through missed months. The table is bounded in size (categories
-        x months tracked) so a Scan is cheaper than the equivalent fan-out of
-        per-month Queries.
-        """
+        """Return every row in the table."""
 
         items: list[dict[str, Any]] = []
         params: dict[str, Any] = {}
@@ -101,11 +95,7 @@ class BudgetTable:
         return count
 
     def find_past_months_with_category(self, category_id: str, before_month: str) -> list[str]:
-        """Return the sorted yearMonth values earlier than before_month that hold this categoryId.
-
-        Used by the hard-delete preview to highlight historical data the delete would erase.
-        The caller filters by editability state if it needs only locked vs grace.
-        """
+        """Return the sorted yearMonth values before `before_month` that hold this categoryId."""
 
         months: set[str] = set()
         params: dict[str, Any] = {
@@ -119,11 +109,7 @@ class BudgetTable:
         return sorted(months)
 
     def delete_all_for_category(self, category_id: str) -> int:
-        """Delete every Budget row that names this categoryId. Return the count.
-
-        Used by hard-delete only — soft-delete (/deactivate) drops just the future pin
-        rows. See docs/personal-finance-architecture.md "Hard delete semantics".
-        """
+        """Delete every Budget row that names this categoryId. Return the number of deleted rows."""
 
         keys: list[dict[str, str]] = []
         params: dict[str, Any] = {
@@ -147,12 +133,7 @@ class BudgetTable:
 
 
 class BudgetCarryStore:
-    """The Budget table as a `DenseSparseStore` for `budget/densify.py`.
-
-    The key of a row is its `categoryId`, and the value is its amount. This is a separate class,
-    and not methods on `BudgetTable`, so that a test that replaces `BudgetTable` with a mock still
-    drives the densify step through `scan_all()` and `put_single()`.
-    """
+    """The Budget table as a `DenseSparseStore`. The key of a row is its `categoryId`, and the value is its amount."""
 
     def __init__(self, budget_table: BudgetTable) -> None:
         self._budget_table = budget_table

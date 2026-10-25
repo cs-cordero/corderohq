@@ -14,13 +14,7 @@ from corderohq.budget.editability import EditabilityState, editability
 
 
 def _month_end_utc(year_month: str) -> datetime:
-    """Return the last instant of `year_month` in BUDGET_TZ, converted to UTC.
-
-    Per the architecture's "Display names on locked months" section: the cutoff
-    must use the DST offset in effect on the last day of the year-month, not a
-    fixed one. ZoneInfo handles that automatically — we just construct the local
-    end-of-month datetime and call .astimezone(UTC).
-    """
+    """Return the last instant of `year_month` in BUDGET_TZ, as a UTC datetime."""
 
     year, month = int(year_month[:4]), int(year_month[5:7])
     last_day = calendar.monthrange(year, month)[1]
@@ -29,12 +23,9 @@ def _month_end_utc(year_month: str) -> datetime:
 
 
 def _resolve_historical_name(category: dict[str, Any], month_end_utc: datetime) -> str | None:
-    """Return the category's `previousName` in effect during `month_end_utc`, or None.
+    """Return the name that the category had at `month_end_utc`.
 
-    Walks `nameHistory` for the earliest entry whose `replacedAt` is strictly
-    greater than `month_end_utc`. If found, the category was renamed AFTER the
-    month being summarized — its previousName is the name at the time. Otherwise
-    the current name was already in effect and we return None.
+    Return None if the category has the same name now.
     """
 
     history = category.get("nameHistory") or []
@@ -56,22 +47,15 @@ def compute_summary(
     year_month: str,
     now: datetime,
 ) -> dict[str, Any]:
-    """Compute budget vs actuals for a given month per Spec 5.
+    """Return the budget and the actual amount of each category in one month.
 
-    Membership rules (architecture: "Summary view membership rules"):
-    - **Editable months** — currently active categories, plus any category
-      (active or inactive) with at least one transaction with amount != 0 in this month.
-    - **Locked months** — every category referenced by a budget row (any amount,
-      including $0) OR at least one transaction, regardless of current `active` flag.
+    An editable month shows the active categories, plus each category with a transaction that is not zero. A locked
+    month shows each category that has a budget row or a transaction.
 
-    Each row carries `name` (current) and `historicalName` (set only for locked
-    months when the category was renamed AFTER this year-month — see
-    "Display names on locked months"). The frontend renders the pair as
-    `historicalName (renamed to: name)`.
+    In a locked month, `historicalName` holds the name that the category had then, if the name changed later.
 
-    Amounts are signed (positive=expense, negative=income/return). Aggregation is
-    a straight sum — no `abs()`, no sign flips. A refund or income row reduces the
-    category's actual, which makes delta (= budgeted - actual) larger.
+    Amounts are signed: positive is an expense, and negative is income or a refund. A refund makes the actual amount of
+    its category smaller.
     """
 
     txns = transactions.list_for_month(year_month)

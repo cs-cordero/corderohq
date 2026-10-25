@@ -13,28 +13,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ProfileTable:
-    """The household's people.
-
-    Item-collection design: PK is the literal "HOUSEHOLD", one item per person
-    keyed by a ULID sort key. `list_people` is a single Query on the partition —
-    the only read pattern anything needs. `Account.owner` references a personId
-    from here, so age-based rules resolve owner -> person -> birthYearMonth from
-    data rather than any hardcoded string.
-
-    The key constants HOUSEHOLD_PK and PROFILE_SETTINGS_SK come from networth.models. `list_people`
-    skips the reserved SETTINGS item, so that a future household settings item never looks like a
-    person.
-    """
+    """The people of the household. `Account.owners` refers to a personId from here."""
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
     def list_people(self) -> list[dict[str, Any]]:
-        """Return every person in the household, sorted by name (case-insensitive).
-
-        The reserved SETTINGS sentinel SK (if it ever exists) is excluded — it is
-        not a person.
-        """
+        """Return every person in the household, sorted by name. Case does not count."""
 
         response = self._table.query(
             KeyConditionExpression="householdId = :pk",
@@ -103,13 +88,9 @@ class ProfileTable:
         return response["Attributes"]
 
     def delete_person(self, person_id: str) -> None:
-        """Hard-delete a person by key.
+        """Delete a person for ever.
 
-        The no-referencing-accounts invariant is enforced server-side by the sole
-        caller, the `_delete_person` handler (a 409 when `accounts_with_owner` is
-        non-empty). It lives there rather than here because the check spans the
-        Account table, which this Profile-scoped wrapper has no handle on; the
-        handler is the single API entry point, so the invariant always holds.
+        The caller makes sure that no account names the person as an owner.
         """
 
         self._table.delete_item(Key={"householdId": HOUSEHOLD_PK, "personId": person_id})

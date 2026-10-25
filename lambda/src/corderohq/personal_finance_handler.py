@@ -59,34 +59,17 @@ _BUDGET_TZ = ZoneInfo("America/New_York")
 
 
 def _year_month_of(now: datetime) -> str:
-    """Return the year-month string, in BUDGET_TZ (America/New_York).
-
-    The budget rolls over at midnight ET on the 1st, per the architecture spec.
-    Using the UTC year/month would put the rollover a few hours early for the
-    east-of-UTC perspective (e.g. midnight UTC on Aug 1 is still July 31 8pm ET).
-    Convert to ET first so the answer matches editability's clock.
-    """
+    """Return the year-month of `now` in ET, because the budget month changes at midnight ET."""
 
     et = now.astimezone(_BUDGET_TZ)
     return f"{et.year:04d}-{et.month:02d}"
 
 
 def _resolve_now(event: dict[str, Any]) -> datetime:
-    """Return the "now" that this one request must use.
+    """Return the "now" of this request.
 
-    Honors `X-Simulated-Date` in non-prod stages so dev users can simulate
-    viewing the app at a different date (rollover, lock, future-pin testing).
-    Prod stages ignore the header entirely.
-
-    Simulated dates in the **past** are rejected: densification cold-starts at
-    the simulated year-month and would write spurious `$0` rows that linger as
-    historical data once the sim is cleared. Future-only keeps the data model
-    consistent with the "time only moves forward" invariant.
-
-    Accepts ISO-8601 date (`2026-12-15`) or datetime (`2026-12-15T10:00:00Z`).
-    Date-only values are anchored at noon UTC. Invalid or past values are
-    logged and ignored — we fall back to real time rather than erroring the
-    request.
+    Outside prod, the `X-Simulated-Date` header can set a future date, as an ISO-8601 date or datetime. A date gets the
+    time noon UTC. A past or invalid value is ignored, because a past date would write wrong rows.
     """
 
     if _STAGE != "prod":
@@ -124,12 +107,9 @@ def _resolve_now(event: dict[str, Any]) -> datetime:
 
 
 def _ensure_hydrated(now: datetime) -> None:
-    """Densify each month, up to and including the year-month of `now`.
+    """Make each month dense, up to and including the year-month of `now`.
 
-    Idempotent and cheap when the table is already current — densify scans and
-    returns 0 writes. Called at the top of every handler whose correctness
-    depends on dense rows for past/current months (reads, /replace, /pin,
-    category create). See docs/personal-finance-architecture.md "Densification".
+    Call this before any work that needs the dense rows of past and current months.
     """
 
     densify(
@@ -322,10 +302,7 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
 def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
     """Rename a category, move it to a different group, or do both.
 
-    Body: `{name?: string, groupId?: string}`. At least one must be present.
-    `name` triggers the nameHistory append behavior (see CategoryTable.update);
-    `groupId` moves the category to the new group, placing it at the end of
-    that group's order.
+    The body is `{name?, groupId?}`, with at least one key. A moved category goes to the end of its new group.
     """
 
     body = _parse_json_body(event)
@@ -365,15 +342,10 @@ def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
 def _deactivate_category(
     event: dict[str, Any], category_id: str, user: dict[str, str], now: datetime
 ) -> dict[str, Any]:
-    """Set a category to inactive. On a confirmation, delete its future pin rows.
+    """Set a category to inactive.
 
-    Two-phase: without `confirm: true` in the body, returns the list of future months
-    that have pin rows for this category (so the UI can prompt the user). With
-    `confirm: true`, deletes those pin rows and writes one UNPIN audit entry per drop.
-
-    The architecture treats "deactivation itself" as not audited (no DEACTIVATE event)
-    but the UNPIN entries on dropped pins ARE recorded so the budget-target log stays
-    complete. See docs/personal-finance-architecture.md "Audit scope".
+    Without `confirm: true`, return the future months that have pins for the category, and change nothing. With
+    `confirm: true`, deactivate it, delete those pins, and write one UNPIN audit entry for each pin.
     """
 
     body = _parse_json_body(event) or {}
@@ -432,12 +404,9 @@ def _reactivate_category(category_id: str) -> dict[str, Any]:
 
 
 def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dict[str, Any]:
-    """Answer GET /api/categories/{id}. Today only ?deletion_preview=true uses it.
+    """Answer GET /api/categories/{id}?deletion_preview=true, for admins only.
 
-    Admin-only impact summary for the hard-delete flow: counts of Budget rows,
-    Transactions, and locked months affected. The locked-month count is what
-    surfaces "this delete will erase data the user can't otherwise rewrite,"
-    so it shows up prominently in the AdminToolsPage confirmation.
+    Return the number of Budget rows, transactions, and locked months that a hard delete would erase.
     """
 
     query = event.get("queryStringParameters") or {}
@@ -478,19 +447,10 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
 
 
 def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[str, str]) -> dict[str, Any]:
-    """Delete a category, and every row that names it, for ever.
+    """Delete a category, and every row that names it, for ever. Admins only.
 
-    Admin-only via JWT group claim (no `override` flag — this is intrinsically
-    admin per architecture: "CATEGORY_HARD_DELETE is the only intrinsically
-    admin-only audit action"). Body requires `confirm: true`, `confirmName`
-    matching the current name, and `explanation`.
-
-    Cascade order (matters for crash recovery — if we die mid-cascade we want
-    the audit entry to still be writable):
-      1. Delete all Budget rows for this categoryId.
-      2. Delete all Transactions for this categoryId.
-      3. Delete the Category row itself.
-      4. Write one CATEGORY_HARD_DELETE audit entry with counts + previous name.
+    The body needs `confirm: true`, a `confirmName` that matches the name, and an `explanation`. Write one
+    CATEGORY_HARD_DELETE audit entry.
     """
 
     if not is_budget_admin(event, _STAGE):
@@ -584,15 +544,10 @@ def _put_category_group(event: dict[str, Any], group_id: str) -> dict[str, Any]:
 
 
 def _delete_category_group(group_id: str) -> dict[str, Any]:
-    """Hard-delete a group.
+    """Delete a group for ever.
 
-    Two rules:
-    - System groups (Unassigned) cannot be deleted.
-    - Active categories block the delete with a 409 — the user must move them
-      to another group first.
-
-    Deactivated categories in the group are auto-moved to the Unassigned
-    sentinel group on delete so they don't leave a dangling groupId reference.
+    A system group cannot be deleted. An active category in the group blocks the delete with a 409. Each inactive
+    category in the group moves to the Unassigned group.
     """
 
     existing = _CATEGORY_GROUP_TABLE.get(group_id)
@@ -641,12 +596,9 @@ def _post_category_groups_reorder(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _post_categories_reorder(event: dict[str, Any]) -> dict[str, Any]:
-    """Apply a new ordering for categories within a group.
+    """Set the order of the categories in a group.
 
-    Body: `{groupId, order: [categoryId, ...]}`. Each category in `order` is set
-    to `(groupId, orderInGroup=index)`. Effectively also supports cross-group
-    moves: pass a category currently in group X with target groupId Y and it
-    migrates as part of the reorder.
+    The body is `{groupId, order: [categoryId, ...]}`. A category from a different group moves to `groupId`.
     """
 
     body = _parse_json_body(event)
@@ -689,15 +641,11 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
 
 
 def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Replace-all write for a dense month (current, grace, or locked-via-override).
+    """Replace all budget targets of a dense month.
 
-    Architecture invariants enforced here:
-    - Body must include every category that has an existing row OR a non-zero transaction
-      in this month. Missing categories return a single 409 listing all of them.
-    - Future months are rejected — they're sparse and go through /pin instead.
-    - Audit emits CREATE (new row) or UPDATE (changed amount) per category. /replace never
-      produces DELETE entries; row deletions happen via /pin (null), deactivation drop, or
-      hard delete.
+    A dense month is the current month, the grace month, or a locked month with an override. A future month is rejected;
+    use /pin for it. The body must hold each category that has a row, or a transaction that is not zero, in the month.
+    Else a 409 lists the missing categories. Each new or changed target writes one CREATE or UPDATE audit entry.
     """
 
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -790,20 +738,14 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
 
 
 def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Pin / unpin future-month rows.
+    """Set or clear the pins of a future month.
 
-    Editability: `year_month` must be EDITABLE AND strictly in the future.
-    Current / grace / locked months reject — those are dense and /replace is the
-    right endpoint. Override has no effect here (architecture: "Override does not
-    unlock /pin for non-future months").
+    The body is `{targets: [{categoryId, amount: number | null}], explanation}`. A category that is not in `targets`
+    does not change. A number sets the pin and writes a PIN audit entry. Null deletes the pin and writes an UNPIN audit
+    entry. A pin with the same value does nothing. Only a future month is accepted, also with an override.
 
-    Body: `{targets: [{categoryId, amount: number | null}], explanation}`. Upsert
-    semantics — categories omitted from `targets` are untouched. `amount: null`
-    deletes the pin row (UNPIN audit entry); a number creates or updates the pin
-    row (PIN audit entry). Same-value pins are no-ops with no audit.
-
-    Returns `{targets: <walk-back-resolved rows for year_month>, warnings:
-    {downstreamPins, pinMatchesCarriedValue}}`.
+    Return `{targets, warnings: {downstreamPins, pinMatchesCarriedValue}}`, where `targets` holds the resolved values of
+    the month.
     """
 
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -973,14 +915,10 @@ def _validate_commit_rows(
     override_active: bool,
     now: datetime,
 ) -> list[dict[str, Any]]:
-    """Per-row validation for /transactions/commit and /transactions/upload.
+    """Return the issues of each row for /transactions/commit and /transactions/upload.
 
-    Returns one validation block per input row:
-        {"index": i, "issues": ["missing_category"?, "locked_month"?]}
-
-    Issues use a closed enum so the frontend can render specific UI per issue.
-    `locked_month` is suppressed when `override_active=True` since admin override
-    intentionally bypasses the editability gate.
+    Each result is `{index, issues}`. The issues are `missing_category` and `locked_month`. An override suppresses
+    `locked_month`.
     """
 
     results: list[dict[str, Any]] = []
@@ -1000,18 +938,11 @@ def _validate_commit_rows(
 
 
 def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str, Any]:
-    """Atomic, all-or-nothing CSV commit.
+    """Save all rows of a CSV import, or none of them.
 
-    Body: `{rows: [{transactionDate, description, amount, categoryId}, ...], override?}`.
-    Pre-flight validates every row (categoryId present and known; transactionDate
-    year-month is editable or admin-overridden). If any row has issues, returns 409
-    with the full validation list so the UI can render every offender in one pass —
-    no partial commits.
-
-    On success, batch-writes all rows. The handler is intentionally NOT idempotent:
-    re-running on the same body will create duplicate transactions because each
-    DynamoDB item gets a fresh ULID-suffixed sort key. Callers should treat a 200
-    as final and a non-200 as "nothing happened" — never a "retry safely" signal.
+    The body is `{rows: [{transactionDate, description, amount, categoryId}, ...], override?}`. If any row has an issue,
+    return a 409 with the issues of all rows, and save nothing. A second call with the same body saves the rows again,
+    as duplicates.
     """
 
     body = _parse_json_body(event)
@@ -1299,11 +1230,9 @@ def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
 
 
 def _delete_person(person_id: str) -> dict[str, Any]:
-    """Hard-delete a person, blocked if any account still names them as owner.
+    """Delete a person for ever.
 
-    People are rarely removed — this endpoint exists to undo a fat-fingered create,
-    so a 409 listing the referencing accounts (rather than cascading) keeps owner
-    references from silently dangling.
+    If an account still names the person as an owner, return a 409 that lists those accounts.
     """
 
     if _PROFILE_TABLE.get_person(person_id) is None:
@@ -1330,13 +1259,9 @@ def _delete_person(person_id: str) -> dict[str, Any]:
 
 
 def _validate_owners(owners: Any) -> tuple[list[str] | None, dict[str, Any] | None]:
-    """Validate an account's `owners` list, returning (normalized_owners, error).
+    """Check an `owners` list. Return `(owners, None)`, or `(None, error_response)`.
 
-    An account is owned by one or more household people. Valid input is a non-empty
-    list of personId strings that each exist in the household. On success returns
-    (deduped list, None); on failure (None, 400 response). The foreign-key existence
-    check is the part the table wrapper deliberately leaves to the handler (it needs
-    a Profile lookup).
+    The list must not be empty, and each personId must exist in the household. Duplicates are removed.
     """
 
     if not isinstance(owners, list) or not owners:
@@ -1356,7 +1281,10 @@ def _validate_owners(owners: Any) -> tuple[list[str] | None, dict[str, Any] | No
 
 def _get_accounts(event: dict[str, Any]) -> dict[str, Any]:
     include_inactive = (event.get("queryStringParameters") or {}).get("include_inactive", "")
-    accounts = _ACCOUNT_TABLE.list_all() if include_inactive.lower() == "true" else _ACCOUNT_TABLE.list_active()
+    if include_inactive.lower() == "true":
+        accounts = _ACCOUNT_TABLE.get_all_accounts()
+    else:
+        accounts = _ACCOUNT_TABLE.get_active_accounts()
     return _json_response(200, json.dumps(accounts, default=_json_default))
 
 
@@ -1380,7 +1308,7 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
         return _response(400, "owners is required")
 
     try:
-        item = _ACCOUNT_TABLE.create(
+        item = _ACCOUNT_TABLE.create_account(
             name=body["name"],
             account_type=body["accountType"],
             asset_classes=body.get("assetClasses"),
@@ -1396,15 +1324,10 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
-    """Edit an account's mutable fields.
+    """Change the given fields of an account.
 
-    Body may carry any of name/assetClasses/owners/excludedFromNetWorth/targetYear/
-    loanTerms/notes/sortOrder. A field present with value null removes the optional
-    attribute (loanTerms/notes). `owners` and `assetClasses`, when present, are
-    non-empty lists that replace the current values. `targetYear` is reconciled
-    against the effective asset-class set. `accountType` and `liability` are immutable
-    (the type drives liability, the asset-class rules, and loan-term eligibility) and
-    are ignored here.
+    See `AccountTable.update` for the editable fields. The handler ignores `accountType` and `liability`, because they
+    cannot change.
     """
 
     body = _parse_json_body(event)
@@ -1462,19 +1385,14 @@ def _post_accounts_reorder(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(order, list) or not all(isinstance(a, str) for a in order):
         return _response(400, "'order' must be a list of accountId strings")
     _ACCOUNT_TABLE.reorder(order)
-    return _json_response(200, json.dumps(_ACCOUNT_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_ACCOUNT_TABLE.get_all_accounts(), default=_json_default))
 
 
 # --- Net worth snapshots ---
 
 
 def _reject_future_or_malformed_month(year_month: str, now: datetime) -> dict[str, Any] | None:
-    """Return a 400 response if `year_month` is malformed or in the future, else None.
-
-    Recording a future balance is meaningless (that's the simulator's job someday),
-    so the effective-now check reuses the same clock as the budget feature, keeping
-    the dev X-Simulated-Date header working.
-    """
+    """Return a 400 response if `year_month` is malformed or in the future, else None."""
 
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
@@ -1490,7 +1408,7 @@ def _get_networth_month(year_month: str, now: datetime) -> dict[str, Any]:
     if err:
         return err
 
-    accounts = _ACCOUNT_TABLE.list_all()
+    accounts = _ACCOUNT_TABLE.get_all_accounts()
     month_rows = _NETWORTH_SNAPSHOT_TABLE.get_month(year_month)
     prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan_all(), year_month)
     rows = build_month_view(accounts, month_rows, prefill)
@@ -1498,15 +1416,10 @@ def _get_networth_month(year_month: str, now: datetime) -> dict[str, Any]:
 
 
 def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) -> dict[str, Any]:
-    """Upsert a month's snapshot rows, per asset class.
+    """Merge the balance rows of one month.
 
-    Body: {rows: [{accountId, note?: string | null,
-                   classes: [{assetClass, value: number | null}, ...]}]}. Per class, a
-    non-negative integer (millionths) writes that class's value; null clears just that
-    class; classes omitted from the list are left untouched (per-class merge). A `note`
-    key replaces/clears the account-month note; omitting it preserves the note.
-    Accounts omitted from `rows` are untouched. Unknown accountIds and asset-class
-    values are rejected.
+    The body is `{rows: [{accountId, note?, classes: [{assetClass, value: number | null}, ...]}]}`. See
+    `NetWorthSnapshotTable.upsert_month` for the merge rules. An unknown accountId or asset class is rejected.
     """
 
     err = _reject_future_or_malformed_month(year_month, now)
@@ -1520,7 +1433,7 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
     if not isinstance(rows, list):
         return _response(400, "rows array is required")
 
-    accounts_by_id = {a["accountId"]: a for a in _ACCOUNT_TABLE.list_all()}
+    accounts_by_id = {a["accountId"]: a for a in _ACCOUNT_TABLE.get_all_accounts()}
     unknown: list[str] = []
     upsert_rows: list[dict[str, Any]] = []
     for row in rows:
@@ -1580,7 +1493,7 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
 def _get_networth_history() -> dict[str, Any]:
     """Return the full Excel-style history: accounts, months, values, monthly totals."""
 
-    accounts = _ACCOUNT_TABLE.list_all()
+    accounts = _ACCOUNT_TABLE.get_all_accounts()
     all_rows = _NETWORTH_SNAPSHOT_TABLE.scan_all()
     return _json_response(200, json.dumps(build_history(accounts, all_rows), default=_json_default))
 
@@ -1600,13 +1513,9 @@ def _parse_json_body(event: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_user(event: dict[str, Any]) -> dict[str, str]:
-    """Snapshot the JWT-claims user identity for the audit log.
+    """Return the `sub`, `email`, and `username` claims of the request, for the audit log.
 
-    Reads `sub`, `email`, `cognito:username` from the API Gateway JWT-authorizer claims.
-    Per the architecture doc's "Audit user identity" section, these are written verbatim
-    into audit entries as a point-in-time snapshot; subsequent profile edits don't rewrite
-    history. Missing claims fall back to empty strings rather than raising — handlers that
-    don't end up writing audit entries shouldn't fail on a malformed token here.
+    A missing claim becomes an empty string.
     """
 
     claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims", {})
@@ -1618,11 +1527,10 @@ def _extract_user(event: dict[str, Any]) -> dict[str, str]:
 
 
 def _resolve_override(event: dict[str, Any], body: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
-    """Parse `override` flag from body and verify the JWT carries admin claim.
+    """Read the `override` flag of the body. Return `(override_active, error_response)`.
 
-    Returns (override_active, error_response).
-    - override_active is True only if override was requested AND the JWT carries the admin group claim.
-    - error_response is non-None when override was requested but the JWT lacks the admin group claim (403).
+    `override_active` is True only when the body asks for an override and the user is an admin. A request for an
+    override from a user who is not an admin gets a 403 response.
     """
 
     requested = bool(body.get("override", False))
@@ -1634,10 +1542,7 @@ def _resolve_override(event: dict[str, Any], body: dict[str, Any]) -> tuple[bool
 
 
 def _check_year_month_editable(year_month: str, override_active: bool, now: datetime) -> dict[str, Any] | None:
-    """Return a 409 response dict if the year-month is locked, else None.
-
-    `override_active` skips the check entirely.
-    """
+    """Return a 409 response if the year-month is locked and there is no override, else None."""
 
     if override_active:
         return None

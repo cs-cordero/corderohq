@@ -16,16 +16,9 @@ CarryRow = tuple[str, str, Any]
 class DenseSparseStore(Protocol):
     """A table whose rows obey the dense-past, sparse-future rules.
 
-    The storage model (see docs/personal-finance-architecture.md "Carry-Forward"):
-
-    - Past months, the current month, and the grace month are **dense**: one row per
-      key that was active when the month became dense, plus any later explicit edits.
-    - Future months are **sparse**: only explicit pin rows.
-    - Effective values for future months are resolved at read time by walking back
-      key-by-key through the rows that do exist, with explicit pins taking precedence.
-
-    The densify code does not know which table it works on. Each row is `(yearMonth, key, value)`.
-    For the Budget table, the key is a `categoryId` and the value is the amount.
+    Each row is `(yearMonth, key, value)`. Past months, the current month, and the grace month are dense: they have a
+    row for each active key. Future months are sparse: they have only the rows that the user pinned. A future month
+    without a pin gets its value from the nearest row before it.
     """
 
     def scan_carry_rows(self) -> list[CarryRow]:
@@ -78,22 +71,10 @@ def densify(
     current_ym: str,
     cold_start_value: Any,
 ) -> int:
-    """Move the table forward. Every month up to `current_ym` then becomes dense.
+    """Make every month up to `current_ym` dense. Return the number of rows written.
 
-    Walks forward from `M_last + 1` through `current_ym` chronologically, writing
-    a row per active key for each month. The value copies from the most recent
-    prior row (per key), or is `None` if no prior row exists. Pin rows in the gap
-    are preserved — densification fills missing cells only.
-
-    Cold-start (table is empty): writes `cold_start_value` per active key at
-    `current_ym` only. No prior months get materialized because there's no
-    history to walk back to.
-
-    Returns the number of rows written. Idempotent — re-runs after the table is
-    current return 0 with no writes.
-
-    Every handler that needs a dense current month calls this before it serves a request. It is
-    cheap when the table is already current.
+    Each missing row gets the value of the nearest row before it, or None. An existing row does not change. When the
+    table is empty, each active key gets `cold_start_value` in `current_ym` only. A second call writes nothing.
     """
 
     rows = store.scan_carry_rows()
@@ -128,13 +109,9 @@ def densify(
 def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: str) -> list[ResolvedValue]:
     """Return the effective value of each active key in a future month.
 
-    For each active key:
-    - If an explicit pin exists at `(year_month, key)`, use it with `pinned=True`.
-    - Otherwise walk back month-by-month; the first row found is the effective
-      value with `pinned=False`.
-    - If no row is ever found, or the row found holds `None`, the key is omitted.
-
-    Callers must ensure `year_month > current_ym` before calling.
+    A pin at `year_month` wins, with `pinned=True`. Else the value comes from the nearest row before it, with
+    `pinned=False`. A key with no value, or with a None value, is left out. `year_month` must be after the current
+    month.
     """
 
     by_key = carry_map(store.scan_carry_rows())
@@ -156,7 +133,7 @@ def resolve_future_targets(
 ) -> list[dict[str, Any]]:
     """Return the budget targets of a future month, in the shape that the API sends.
 
-    Each target is `{yearMonth, categoryId, amount, pinned}`. See `resolve_future`.
+    Each target is `{yearMonth, categoryId, amount, pinned}`.
     """
 
     return [
@@ -166,11 +143,9 @@ def resolve_future_targets(
 
 
 def walk_back_for(by_key: dict[tuple[str, str], Any], target: str, key: str) -> Any:
-    """Walk back from the month before `target`, and find the most recent row for `key`.
+    """Return the value of the nearest row for `key` before `target`, or None.
 
-    The `by_key` dict must hold the full in-memory state to walk through (see
-    `carry_map`). Returns the value of the nearest prior row, or `None` if no row
-    exists within the safety bound.
+    `by_key` is the full state, from `carry_map`.
     """
 
     cursor = prev_year_month(target)

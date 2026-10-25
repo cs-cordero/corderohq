@@ -130,10 +130,9 @@ class TransactionsTable:
         return True
 
     def batch_delete(self, items: list[dict[str, str]]) -> int:
-        """Delete multiple transactions. Returns the number of items deleted.
+        """Delete multiple transactions. Return the number of deleted items.
 
-        Each item must have 'yearMonth' and 'sortId' keys. Uses DynamoDB
-        batch_writer which handles chunking into 25-item batches automatically.
+        Each item must have the keys `yearMonth` and `sortId`.
         """
 
         count = 0
@@ -158,11 +157,7 @@ class TransactionsTable:
         return count
 
     def delete_all_for_category(self, category_id: str) -> int:
-        """Delete every Transactions row that names this categoryId. Return the count.
-
-        Hard-delete only — there's no soft-delete equivalent for transactions.
-        See docs/personal-finance-architecture.md "Hard delete semantics".
-        """
+        """Delete every transaction that names this categoryId. Return the number of deleted items."""
 
         keys: list[dict[str, str]] = []
         params: dict[str, Any] = {

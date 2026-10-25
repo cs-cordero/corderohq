@@ -86,7 +86,7 @@ class TestProfileTable:
 class TestAccountTableCreate:
     def test_creates_asset_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = accounts.create(
+        result = accounts.create_account(
             name="Chase Checking",
             account_type="checking",
             asset_classes=["cash"],
@@ -106,7 +106,7 @@ class TestAccountTableCreate:
 
     def test_creates_excluded_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = accounts.create(
+        result = accounts.create_account(
             name="Kid's 529",
             account_type="529",
             asset_classes=["us_equity_large_cap"],
@@ -119,7 +119,7 @@ class TestAccountTableCreate:
         # Client claims equities; the type forces liability=True and assetClasses=[other].
         mock.scan.return_value = {"Items": [{"accountId": "a0", "name": "Other", "sortOrder": 4}]}
         loan_terms = {"interestRate": 0.045, "monthlyPayment": 2_500_000_000, "payoffYearMonth": "2045-06"}
-        result = accounts.create(
+        result = accounts.create_account(
             name="Mortgage",
             account_type="mortgage",
             asset_classes=["us_equity_large_cap"],
@@ -139,7 +139,7 @@ class TestAccountTableCreate:
 
     def test_creates_target_date_with_year(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = accounts.create(
+        result = accounts.create_account(
             name="TDF",
             account_type="401k",
             asset_classes=["target_date", "cash"],
@@ -152,27 +152,29 @@ class TestAccountTableCreate:
     def test_target_date_requires_year(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="targetYear is required"):
-            accounts.create(name="TDF", account_type="401k", asset_classes=["target_date"], owners=["p1"])
+            accounts.create_account(name="TDF", account_type="401k", asset_classes=["target_date"], owners=["p1"])
 
     def test_year_rejected_without_target_date(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="only allowed when target_date"):
-            accounts.create(name="B", account_type="brokerage", asset_classes=["cash"], owners=["p1"], target_year=2055)
+            accounts.create_account(
+                name="B", account_type="brokerage", asset_classes=["cash"], owners=["p1"], target_year=2055
+            )
 
     def test_rejects_empty_owners(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="owners must be a non-empty list"):
-            accounts.create(name="X", account_type="checking", asset_classes=["cash"], owners=[])
+            accounts.create_account(name="X", account_type="checking", asset_classes=["cash"], owners=[])
 
     def test_rejects_invalid_account_type(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="Invalid accountType"):
-            accounts.create(name="X", account_type="chequing", asset_classes=["cash"], owners=["p1"])
+            accounts.create_account(name="X", account_type="chequing", asset_classes=["cash"], owners=["p1"])
 
     def test_rejects_loan_terms_on_non_amortizing_type(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="only allowed on amortizing"):
-            accounts.create(
+            accounts.create_account(
                 name="Brokerage",
                 account_type="brokerage",
                 asset_classes=["us_equity_large_cap"],
@@ -183,7 +185,9 @@ class TestAccountTableCreate:
     def test_rejects_duplicate_name_case_insensitive(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": [{"accountId": "a1", "name": "Chase Checking", "sortOrder": 0}]}
         with pytest.raises(ValueError, match="already exists"):
-            accounts.create(name="chase checking", account_type="checking", asset_classes=["cash"], owners=["p1"])
+            accounts.create_account(
+                name="chase checking", account_type="checking", asset_classes=["cash"], owners=["p1"]
+            )
 
 
 class TestAccountTableUpdate:
@@ -297,14 +301,14 @@ class TestAccountTableUpdate:
 
 
 class TestAccountTableMisc:
-    def test_list_active_sorts_by_sort_order_then_name(self, accounts: AccountTable, mock: MagicMock) -> None:
+    def test_get_active_accounts_sorts_by_sort_order_then_name(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {
             "Items": [
                 {"accountId": "a2", "name": "Bravo", "sortOrder": 1, "active": True},
                 {"accountId": "a1", "name": "Alpha", "sortOrder": 0, "active": True},
             ]
         }
-        result = accounts.list_active()
+        result = accounts.get_active_accounts()
         assert [a["name"] for a in result] == ["Alpha", "Bravo"]
         kwargs = mock.scan.call_args.kwargs
         assert kwargs["FilterExpression"] == "active = :val"

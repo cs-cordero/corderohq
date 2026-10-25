@@ -81,9 +81,9 @@ def _call_claude(api_key: str, system: str, user_text: str) -> str:
 
 
 def map_columns(headers: list[str], sample_rows: list[list[str]]) -> dict[str, Any]:
-    """Use Claude to identify which CSV columns are date, description, and amount.
+    """Ask Claude which CSV columns hold the date, the description, and the amount.
 
-    Returns a dict with keys: date, description, amount, and optionally amount_invert.
+    Return a dict with the keys `date`, `description`, and `amount`, and optionally `amount_invert`.
     """
 
     api_key = _get_api_key()
@@ -103,13 +103,9 @@ def categorize_transactions(
     descriptions: list[str],
     categories: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Use Claude to assign categories to transaction descriptions.
+    """Ask Claude for the best category of each transaction description.
 
-    Args:
-        descriptions: list of transaction description strings
-        categories: list of category dicts with categoryId and name
-
-    Returns a list of dicts with index, categoryId, categoryName.
+    Return one dict for each description, in order, with `index`, `categoryId`, and `categoryName`.
     """
 
     api_key = _get_api_key()

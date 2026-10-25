@@ -40,31 +40,6 @@ class CategoryTable:
         response = self._table.get_item(Key={"categoryId": category_id})
         return response.get("Item")
 
-    def _name_exists(self, name: str, exclude_id: str | None = None) -> bool:
-        """Return True if a category uses this name already. Case does not count.
-
-        This applies to an active category and to an inactive one.
-
-        Race condition: this is a Scan-then-write pattern with no DynamoDB-level
-        unique constraint on `name`. Two simultaneous category creates with the same
-        name can both pass this check and both write. Accepted because (a) this is a
-        single-household app, so concurrent writers are vanishingly rare; (b) adding
-        a name-keyed GSI or sentinel item to enforce uniqueness would add complexity
-        out of proportion to the risk. If a duplicate ever slips through, rename or
-        merge manually. See docs/personal-finance-architecture.md "Category name uniqueness".
-        """
-
-        lower_name = name.lower()
-        return any(cat["name"].lower() == lower_name and cat["categoryId"] != exclude_id for cat in self.list_all())
-
-    def _next_order_in_group(self, group_id: str) -> int:
-        """Next available orderInGroup, placing new categories at the end of the group."""
-
-        cats_in_group = [c for c in self.list_all() if c.get("groupId") == group_id]
-        if not cats_in_group:
-            return 0
-        return max(int(c.get("orderInGroup", 0)) for c in cats_in_group) + 1
-
     def create(self, name: str, group_id: str) -> dict[str, Any]:
         """Create a new category in `group_id`. Returns the created item."""
 
@@ -93,9 +68,9 @@ class CategoryTable:
         return item
 
     def update(self, category_id: str, name: str) -> dict[str, Any] | None:
-        """Update a category's name. Appends to nameHistory if the name actually changed.
+        """Rename a category. Return the updated item, or None if it does not exist.
 
-        Returns the updated item, or None if not found.
+        A changed name adds the old name to `nameHistory`.
         """
 
         name = name.strip()
@@ -163,11 +138,9 @@ class CategoryTable:
         return response["Attributes"]
 
     def reorder_in_group(self, group_id: str, category_ids_in_order: list[str]) -> None:
-        """Apply a new total ordering for categories within `group_id`.
+        """Put the given categories in `group_id`, in the given order.
 
-        Each id in `category_ids_in_order` is updated with its `orderInGroup`
-        set to its index, and its `groupId` set to `group_id` (so this also
-        functions as a bulk move when called with categories from other groups).
+        A category from a different group moves to `group_id`.
         """
 
         now = datetime.now(tz=UTC).isoformat()
@@ -195,10 +168,7 @@ class CategoryTable:
         return response["Attributes"]
 
     def delete(self, category_id: str) -> None:
-        """Delete the Category row for ever. This has no soft-delete step.
-
-        Only the admin hard delete calls this.
-        """
+        """Delete the Category row for ever."""
 
         self._table.delete_item(Key={"categoryId": category_id})
 
@@ -217,6 +187,24 @@ class CategoryTable:
         )
         _LOGGER.info("Reactivated category %s", category_id)
         return response["Attributes"]
+
+    def _name_exists(self, name: str, exclude_id: str | None = None) -> bool:
+        """Checks whether a name already exists across all active and inactive categories.
+
+        This check does a full Scan across the table and iteratively checks for name collisions. This therefore does not
+        handle concurrent write race conditions.
+        """
+
+        lower_name = name.lower()
+        return any(cat["name"].lower() == lower_name and cat["categoryId"] != exclude_id for cat in self.list_all())
+
+    def _next_order_in_group(self, group_id: str) -> int:
+        """Next available orderInGroup, placing new categories at the end of the group."""
+
+        cats_in_group = [c for c in self.list_all() if c.get("groupId") == group_id]
+        if not cats_in_group:
+            return 0
+        return max(int(c.get("orderInGroup", 0)) for c in cats_in_group) + 1
 
 
 def active_category_ids(categories: list[dict[str, Any]]) -> list[str]:

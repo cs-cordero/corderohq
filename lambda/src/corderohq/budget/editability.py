@@ -39,19 +39,16 @@ def _parse_year_month(year_month: str) -> tuple[int, int]:
 
 
 def editability(year_month: str, now_utc: datetime) -> EditabilityState:
-    """Return the editability state of the given year-month at the given instant.
+    """Return the editability state of `year_month` at the instant `now_utc`.
 
-    `now_utc` must be a timezone-aware datetime in UTC.
+    `now_utc` must be a timezone-aware datetime.
 
-    Rules:
-    - The current year-month (in BUDGET_TZ) is EDITABLE.
-    - Any of the next N_FUTURE_MONTHS year-months after current is EDITABLE.
-    - The previous year-month is GRACE if `now_et` is strictly before midnight ET
-      on day (1 + GRACE_PERIOD_DAYS) of the current year-month. Otherwise LOCKED.
-    - Everything else is LOCKED.
+    - The current month (in ET) and the next _N_FUTURE_MONTHS months are EDITABLE.
+    - The previous month is GRACE until midnight ET at the start of day 1 + _GRACE_PERIOD_DAYS of the current month.
+      After that, it is LOCKED.
+    - All other months are LOCKED.
 
-    GRACE is treated identically to EDITABLE for mutation checks; the distinction
-    exists so the frontend can surface a "grace expires in X days" banner.
+    The user can change a GRACE month, the same as an EDITABLE month.
     """
 
     if now_utc.tzinfo is None:

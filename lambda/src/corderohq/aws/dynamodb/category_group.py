@@ -12,12 +12,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CategoryGroupTable:
-    """CRUD operations for category groups.
-
-    Groups own an `order` int — lower numbers display first. Reordering is
-    coarse-grained (write the full new order via `reorder`) since the table is
-    bounded in size (typically <20 groups).
-    """
+    """Named groups of budget categories. A group with a lower `order` displays first."""
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -35,33 +30,10 @@ class CategoryGroupTable:
         response = self._table.get_item(Key={"groupId": group_id})
         return response.get("Item")
 
-    def _name_exists(self, name: str, exclude_id: str | None = None) -> bool:
-        """Return True if a group uses this name already. Case does not count.
-
-        This check has the same race as CategoryTable.
-        """
-
-        lower_name = name.lower()
-        return any(g["name"].lower() == lower_name and g["groupId"] != exclude_id for g in self.list_all())
-
-    def _next_order(self) -> int:
-        """Return the next free order value for a new group that is not a system group.
-
-        System groups (Unassigned) are excluded from the max computation — they
-        sort last by `list_all`'s ordering, so their numeric `order` shouldn't
-        push regular groups past them.
-        """
-
-        regular = [g for g in self.list_all() if not g.get("system")]
-        if not regular:
-            return 0
-        return max(int(g.get("order", 0)) for g in regular) + 1
-
     def create(self, name: str, system: bool = False) -> dict[str, Any]:
-        """Create a new group.
+        """Create a group, and return it.
 
-        `system=True` marks the row as immutable (no rename, no delete). The "Unassigned" sentinel
-        uses it.
+        A `system` group cannot be renamed or deleted. Raise ValueError for an empty or duplicate name.
         """
 
         name = name.strip()
@@ -84,11 +56,9 @@ class CategoryGroupTable:
         return item
 
     def get_or_create_unassigned(self) -> dict[str, Any]:
-        """Return the (single) `system=True` group, creating it if absent.
+        """Return the system group "Unassigned", and create it if it does not exist.
 
-        The Unassigned group is a sentinel destination for orphaned categories
-        (e.g. deactivated cats whose original group was deleted). It is hidden
-        from rename and delete and renders without action buttons in the UI.
+        It holds the inactive categories whose group was deleted.
         """
 
         for g in self.list_all():
@@ -115,24 +85,18 @@ class CategoryGroupTable:
         return response["Attributes"]
 
     def delete(self, group_id: str) -> None:
-        """Hard-delete a group by key.
+        """Delete a group for ever.
 
-        The empty-group invariant (no active categories still point at it) is
-        enforced server-side by the sole caller, the `_delete_category_group`
-        handler (a 409 listing blocking categories). It lives there rather than
-        here because the check spans the Category table, which this group-scoped
-        wrapper has no handle on; the handler is the single API entry point.
+        The caller makes sure that no active category is in the group.
         """
 
         self._table.delete_item(Key={"groupId": group_id})
         _LOGGER.info("Deleted group: %s", group_id)
 
     def reorder(self, group_ids_in_order: list[str]) -> None:
-        """Apply a new total ordering across all groups.
+        """Set the order of each group to its position in the list.
 
-        The caller passes the full ordered list; we write `order = index` on each.
-        Groups not present in the list are left untouched (and will display after
-        the reordered ones since their order is presumably lower / unchanged).
+        A group that is not in the list keeps its order.
         """
 
         now = datetime.now(tz=UTC).isoformat()
@@ -143,3 +107,21 @@ class CategoryGroupTable:
                 ExpressionAttributeNames={"#o": "order"},
                 ExpressionAttributeValues={":o": index, ":now": now},
             )
+
+    def _name_exists(self, name: str, exclude_id: str | None = None) -> bool:
+        """Checks whether a name already exists across all groups.
+
+        This check does a full Scan across the table and iteratively checks for name collisions. This therefore does not
+        handle concurrent write race conditions.
+        """
+
+        lower_name = name.lower()
+        return any(g["name"].lower() == lower_name and g["groupId"] != exclude_id for g in self.list_all())
+
+    def _next_order(self) -> int:
+        """Return the next order value for a group that is not a system group."""
+
+        regular = [g for g in self.list_all() if not g.get("system")]
+        if not regular:
+            return 0
+        return max(int(g.get("order", 0)) for g in regular) + 1

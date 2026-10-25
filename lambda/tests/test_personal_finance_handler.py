@@ -1647,18 +1647,18 @@ class TestDeletePerson:
 class TestGetAccounts:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_returns_active_by_default(self, mock_at: MagicMock) -> None:
-        mock_at.list_active.return_value = [{"accountId": "a1", "name": "Chase Checking"}]
+        mock_at.get_active_accounts.return_value = [{"accountId": "a1", "name": "Chase Checking"}]
         result = handler(_make_event("GET", "/api/accounts"), None)
         assert result["statusCode"] == 200
-        mock_at.list_active.assert_called_once()
-        mock_at.list_all.assert_not_called()
+        mock_at.get_active_accounts.assert_called_once()
+        mock_at.get_all_accounts.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_include_inactive_lists_all(self, mock_at: MagicMock) -> None:
-        mock_at.list_all.return_value = []
+        mock_at.get_all_accounts.return_value = []
         result = handler(_make_event("GET", "/api/accounts", query={"include_inactive": "true"}), None)
         assert result["statusCode"] == 200
-        mock_at.list_all.assert_called_once()
+        mock_at.get_all_accounts.assert_called_once()
 
 
 class TestPostAccount:
@@ -1666,7 +1666,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_creates_asset_account(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
         mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
-        mock_at.create.return_value = {"accountId": "a1", "name": "Chase Checking"}
+        mock_at.create_account.return_value = {"accountId": "a1", "name": "Chase Checking"}
         result = handler(
             _make_event(
                 "POST",
@@ -1681,7 +1681,7 @@ class TestPostAccount:
             None,
         )
         assert result["statusCode"] == 201
-        _, kwargs = mock_at.create.call_args
+        _, kwargs = mock_at.create_account.call_args
         assert kwargs["name"] == "Chase Checking"
         assert kwargs["account_type"] == "checking"
         assert kwargs["asset_classes"] == ["cash"]
@@ -1695,7 +1695,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_creates_excluded_account(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
         mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
-        mock_at.create.return_value = {"accountId": "a1", "name": "529"}
+        mock_at.create_account.return_value = {"accountId": "a1", "name": "529"}
         result = handler(
             _make_event(
                 "POST",
@@ -1711,7 +1711,7 @@ class TestPostAccount:
             None,
         )
         assert result["statusCode"] == 201
-        _, kwargs = mock_at.create.call_args
+        _, kwargs = mock_at.create_account.call_args
         assert kwargs["excluded_from_net_worth"] is True
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
@@ -1719,7 +1719,7 @@ class TestPostAccount:
     def test_creates_with_multiple_owners(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
         # Every personId resolves; a jointly-held account is just two owners.
         mock_pt.get_person.return_value = {"personId": "x", "name": "Someone"}
-        mock_at.create.return_value = {"accountId": "a1", "name": "Joint Checking"}
+        mock_at.create_account.return_value = {"accountId": "a1", "name": "Joint Checking"}
         result = handler(
             _make_event(
                 "POST",
@@ -1734,7 +1734,7 @@ class TestPostAccount:
             None,
         )
         assert result["statusCode"] == 201
-        _, kwargs = mock_at.create.call_args
+        _, kwargs = mock_at.create_account.call_args
         assert kwargs["owners"] == ["p1", "p2"]
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
@@ -1786,7 +1786,7 @@ class TestPostAccount:
         # A "choose"-type account (brokerage) with a bad asset class: create raises,
         # the handler surfaces it as a 400.
         mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
-        mock_at.create.side_effect = ValueError("Invalid assetClass 'stocks'")
+        mock_at.create_account.side_effect = ValueError("Invalid assetClass 'stocks'")
         result = handler(
             _make_event(
                 "POST",
@@ -1887,7 +1887,7 @@ class TestAccountLifecycle:
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_reorder(self, mock_at: MagicMock) -> None:
-        mock_at.list_all.return_value = []
+        mock_at.get_all_accounts.return_value = []
         result = handler(_make_event("POST", "/api/accounts/reorder", body={"order": ["a2", "a1"]}), None)
         assert result["statusCode"] == 200
         mock_at.reorder.assert_called_once_with(["a2", "a1"])
@@ -1911,7 +1911,7 @@ class TestGetNetWorthMonth:
     @patch("corderohq.personal_finance_handler._NETWORTH_SNAPSHOT_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_returns_per_class_rows_with_prefill(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["cash"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
         mock_st.get_month.return_value = []
         mock_st.scan_all.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 100}}]
         result = handler(_make_event("GET", "/api/net-worth/2026-06"), None)
@@ -1936,7 +1936,7 @@ class TestPostNetWorthMonth:
     @patch("corderohq.personal_finance_handler._NETWORTH_SNAPSHOT_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_upserts_per_class_merge_rows(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["us_equity_large_cap", "cash"]), _acct("a2", ["bonds"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["us_equity_large_cap", "cash"]), _acct("a2", ["bonds"])]
         mock_st.get_month.return_value = []
         mock_st.scan_all.return_value = []
         rows = [
@@ -1961,7 +1961,7 @@ class TestPostNetWorthMonth:
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_unknown_account_rejected(self, mock_at: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["cash"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
         result = handler(
             _make_event(
                 "POST",
@@ -1976,7 +1976,7 @@ class TestPostNetWorthMonth:
     @patch("corderohq.personal_finance_handler._NETWORTH_SNAPSHOT_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_note_passed_through(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["cash"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
         mock_st.get_month.return_value = []
         mock_st.scan_all.return_value = []
         rows = [{"accountId": "a1", "note": "quarterly bonus", "classes": [{"assetClass": "cash", "value": 500}]}]
@@ -1988,7 +1988,7 @@ class TestPostNetWorthMonth:
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_invalid_asset_class_rejected(self, mock_at: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["cash"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
         result = handler(
             _make_event(
                 "POST",
@@ -2001,7 +2001,7 @@ class TestPostNetWorthMonth:
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_negative_value_rejected(self, mock_at: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["cash"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
         result = handler(
             _make_event(
                 "POST",
@@ -2014,7 +2014,7 @@ class TestPostNetWorthMonth:
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_non_integer_value_rejected(self, mock_at: MagicMock) -> None:
-        mock_at.list_all.return_value = [_acct("a1", ["cash"])]
+        mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
         result = handler(
             _make_event(
                 "POST",
@@ -2038,7 +2038,7 @@ class TestGetNetWorthHistory:
     @patch("corderohq.personal_finance_handler._NETWORTH_SNAPSHOT_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_returns_history_shape(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
-        mock_at.list_all.return_value = [
+        mock_at.get_all_accounts.return_value = [
             {"accountId": "a1", "name": "Checking", "active": True, "liability": False, "sortOrder": 0},
         ]
         mock_st.scan_all.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 1000}}]

@@ -10,11 +10,9 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class NetWorthSnapshotTable:
-    """Monthly per-account balance snapshots.
+    """The balance of each account in each month.
 
-    Mirrors the BudgetTable pattern: PK yearMonth, SK accountId. Sparse by design —
-    a missing row means "no value recorded", never zero. One month = a single
-    Query; the whole history = a Scan (trivial at ~20 accounts x 12 months/year).
+    A missing row means that no value was recorded. It does not mean zero.
     """
 
     def __init__(self, table_name: str) -> None:
@@ -44,17 +42,14 @@ class NetWorthSnapshotTable:
         self._table.delete_item(Key={"yearMonth": year_month, "accountId": account_id})
 
     def upsert_month(self, year_month: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Per-class merge upsert of a month's rows; returns the month's stored state.
+        """Merge rows into one month, and return the stored state of that month.
 
-        Each row is {accountId, classes: {class: millionths | None}, note?}. Semantics
-        (read-modify-write per account, so partial payloads never clobber history):
-        - a class mapped to a number is set; mapped to None is removed; classes NOT in
-          the map are left untouched.
-        - if the account's resulting per-class map is empty, the row is deleted.
-        - `note` (account-level, month-specific): a present non-empty string replaces
-          it, present-but-empty/None clears it, and an absent `note` key leaves any
-          existing note untouched.
-        Accounts not present in `rows` are untouched. Returns get_month(year_month).
+        Each row is `{accountId, classes: {assetClass: millionths | None}, note?}`.
+
+        - A class with a number is set. A class with None is removed. A class that is not in the map does not change.
+        - An account with no classes left loses its row.
+        - A non-empty `note` replaces the note. An empty or None `note` removes it. An absent `note` does not change it.
+        - An account that is not in `rows` does not change.
         """
 
         now = datetime.now(tz=UTC).isoformat()
