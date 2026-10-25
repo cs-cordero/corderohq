@@ -1,18 +1,18 @@
-"""Tests for AuditLogTable."""
+"""Tests for BudgetAuditLogTable."""
 
 from unittest.mock import MagicMock
 
-from corderohq.aws.dynamodb import AuditLogTable
+from corderohq.aws.dynamodb import AuditAction, BudgetAuditLogTable
 
 
-def _make_table() -> tuple[AuditLogTable, MagicMock]:
-    """Build an AuditLogTable backed by a MagicMock DynamoDB resource.
+def _make_table() -> tuple[BudgetAuditLogTable, MagicMock]:
+    """Build a BudgetAuditLogTable backed by a MagicMock DynamoDB resource.
 
     Returns (table, mock) so tests can assert on the mock directly instead of
     going through `mock.*` — which ty rejects because the class
     annotates `_table` with the real boto3 Table type.
     """
-    at = AuditLogTable.__new__(AuditLogTable)
+    at = BudgetAuditLogTable.__new__(BudgetAuditLogTable)
     mock = MagicMock()
     at._table = mock
     return at, mock
@@ -28,7 +28,7 @@ class TestWriteEntry:
         result = table.write_entry(
             effective_year_month="2026-03",
             category_id="cat1",
-            action="UPDATE",
+            action=AuditAction.UPDATE,
             explanation="Adjusted grocery budget",
             user=_user(),
             changes={"amount": {"before": 500, "after": 600}},
@@ -51,7 +51,7 @@ class TestWriteEntry:
         result = table.write_entry(
             effective_year_month="2026-03",
             category_id="cat1",
-            action="UPDATE",
+            action=AuditAction.UPDATE,
             explanation="Backdated correction",
             user=_user("admin@example.com"),
             changes={"amount": {"before": 500, "after": 600}},
@@ -65,7 +65,7 @@ class TestWriteEntry:
         result = table.write_entry(
             effective_year_month=None,
             category_id="cat1",
-            action="CATEGORY_HARD_DELETE",
+            action=AuditAction.CATEGORY_HARD_DELETE,
             explanation="Spelling error in category name",
             user=_user("admin@example.com"),
             changes={"budgetRowsDeleted": 0, "transactionsDeleted": 0, "name": "Old"},

@@ -11,19 +11,22 @@ from zoneinfo import ZoneInfo
 
 from corderohq.aws.dynamodb import (
     AccountTable,
-    AuditLogTable,
+    AuditAction,
+    BudgetAuditLogTable,
+    BudgetCarryStore,
     BudgetTable,
     CategoryGroupTable,
     CategoryTable,
     NetWorthSnapshotTable,
     ProfileTable,
     TransactionsTable,
+    active_category_ids,
     compute_summary,
 )
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
-from corderohq.budget.editability import editability
+from corderohq.budget.editability import EditabilityState, editability
 from corderohq.networth.models import validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
@@ -34,7 +37,7 @@ _CATEGORY_GROUP_TABLE = CategoryGroupTable(get_env_var("CATEGORY_GROUP_TABLE_NAM
 _CATEGORY_TABLE = CategoryTable(get_env_var("CATEGORY_TABLE_NAME"))
 _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
 _TRANSACTIONS_TABLE = TransactionsTable(get_env_var("TRANSACTIONS_TABLE_NAME"))
-_AUDIT_LOG_TABLE = AuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
+_AUDIT_LOG_TABLE = BudgetAuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
 _PROFILE_TABLE = ProfileTable(get_env_var("PROFILE_TABLE_NAME"))
 _ACCOUNT_TABLE = AccountTable(get_env_var("ACCOUNT_TABLE_NAME"))
 _NETWORTH_SNAPSHOT_TABLE = NetWorthSnapshotTable(get_env_var("NETWORTH_SNAPSHOT_TABLE_NAME"))
@@ -127,7 +130,12 @@ def _ensure_hydrated(now: datetime) -> None:
     depends on dense rows for past/current months (reads, /replace, /pin,
     category create). See docs/personal-finance-architecture.md "Densification".
     """
-    densify(_BUDGET_TABLE, _CATEGORY_TABLE, _year_month_of(now))
+    densify(
+        BudgetCarryStore(_BUDGET_TABLE),
+        active_category_ids(_CATEGORY_TABLE.list_all()),
+        _year_month_of(now),
+        cold_start_value=0,
+    )
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -398,7 +406,7 @@ def _deactivate_category(
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
             category_id=category_id,
-            action="UNPIN",
+            action=AuditAction.UNPIN,
             explanation=explanation,
             user=user,
             changes={"amount": {"before": old_amount, "after": None}},
@@ -445,7 +453,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
     # open to change, so we count it as not locked. This matches the editability function.
     current_ym = _year_month_of(now)
     past_months = _BUDGET_TABLE.find_past_months_with_category(category_id, current_ym)
-    locked_months = [ym for ym in past_months if editability(ym, now) == "LOCKED"]
+    locked_months = [ym for ym in past_months if editability(ym, now) == EditabilityState.LOCKED]
 
     return _json_response(
         200,
@@ -504,7 +512,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=None,
         category_id=category_id,
-        action="CATEGORY_HARD_DELETE",
+        action=AuditAction.CATEGORY_HARD_DELETE,
         explanation=explanation,
         user=user,
         changes={
@@ -665,7 +673,9 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     # Future month: resolve effective values via per-category walk-back,
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
     # carried values.
-    targets = resolve_future_targets(_BUDGET_TABLE, _CATEGORY_TABLE, year_month)
+    targets = resolve_future_targets(
+        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.list_all()), year_month
+    )
     return _json_response(200, json.dumps(targets, default=_json_default))
 
 
@@ -750,10 +760,10 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             continue
 
         if old_amount is None:
-            action = "CREATE"
+            action = AuditAction.CREATE
             changes: dict[str, Any] = {"amount": {"before": None, "after": new_amount}}
         else:
-            action = "UPDATE"
+            action = AuditAction.UPDATE
             changes = {"amount": {"before": old_amount, "after": new_amount}}
 
         _AUDIT_LOG_TABLE.write_entry(
@@ -817,7 +827,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             ),
         )
     state = editability(year_month, now)
-    if state != "EDITABLE":
+    if state != EditabilityState.EDITABLE:
         return _json_response(
             409,
             json.dumps(
@@ -850,7 +860,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
-                action="UNPIN",
+                action=AuditAction.UNPIN,
                 explanation=explanation,
                 user=user,
                 changes={"amount": {"before": old_amount, "after": None}},
@@ -866,7 +876,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
-                action="PIN",
+                action=AuditAction.PIN,
                 explanation=explanation,
                 user=user,
                 changes={"amount": {"before": old_amount, "after": new_amount}},
@@ -884,7 +894,9 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         key=lambda p: (p["yearMonth"], p["categoryId"]),
     )
 
-    resolved = resolve_future_targets(_BUDGET_TABLE, _CATEGORY_TABLE, year_month)
+    resolved = resolve_future_targets(
+        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.list_all()), year_month
+    )
 
     return _json_response(
         200,
@@ -969,7 +981,7 @@ def _validate_commit_rows(
         ym = txn_date[:7] if len(txn_date) >= 7 else ""
         if ym and YEAR_MONTH_PATTERN.match(ym):
             state = editability(ym, now)
-            if state == "LOCKED" and not override_active:
+            if state == EditabilityState.LOCKED and not override_active:
                 issues.append("locked_month")
         results.append({"index": i, "issues": issues})
     return results
@@ -1602,14 +1614,14 @@ def _check_year_month_editable(year_month: str, override_active: bool, now: date
     if override_active:
         return None
     state = editability(year_month, now)
-    if state == "LOCKED":
+    if state == EditabilityState.LOCKED:
         return _json_response(
             409,
             json.dumps(
                 {
                     "error": "year-month is locked; admin override required to mutate",
                     "yearMonth": year_month,
-                    "state": "LOCKED",
+                    "state": EditabilityState.LOCKED,
                 }
             ),
         )
@@ -1630,7 +1642,7 @@ def _check_year_months_editable(
         ym = item.get(year_month_key)
         if not isinstance(ym, str) or not YEAR_MONTH_PATTERN.match(ym):
             continue
-        if editability(ym, now) == "LOCKED":
+        if editability(ym, now) == EditabilityState.LOCKED:
             offending.append({"index": index, "yearMonth": ym})
     if offending:
         return _json_response(

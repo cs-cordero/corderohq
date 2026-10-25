@@ -1,6 +1,7 @@
 """Tests for ProfileTable, AccountTable, and NetWorthSnapshotTable."""
 
 from decimal import Decimal
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -365,7 +366,7 @@ class TestNetWorthSnapshotTable:
     def test_upsert_month_merges_classes_and_deletes_when_empty(
         self, snapshots: NetWorthSnapshotTable, mock: MagicMock
     ) -> None:
-        def get_item(**kwargs: object) -> dict[str, object]:
+        def get_item(**kwargs: Any) -> dict[str, object]:
             key = kwargs["Key"]
             assert isinstance(key, dict)
             if key["accountId"] == "a1":

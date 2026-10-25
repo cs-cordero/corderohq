@@ -12,7 +12,13 @@ import json
 import logging
 from typing import Any
 
-from corderohq.aws.dynamodb import BudgetTable, CategoryTable, current_year_month
+from corderohq.aws.dynamodb import (
+    BudgetCarryStore,
+    BudgetTable,
+    CategoryTable,
+    active_category_ids,
+    current_year_month,
+)
 from corderohq.budget.densify import densify
 from corderohq.util import get_env_var
 
@@ -36,7 +42,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     current_ym = current_year_month()
     LOGGER.info(json.dumps({"event": "scheduled_densify_start", "currentYearMonth": current_ym}))
     try:
-        rows_written = densify(_BUDGET_TABLE, _CATEGORY_TABLE, current_ym)
+        rows_written = densify(
+            BudgetCarryStore(_BUDGET_TABLE),
+            active_category_ids(_CATEGORY_TABLE.list_all()),
+            current_ym,
+            cold_start_value=0,
+        )
     except Exception:
         LOGGER.exception(json.dumps({"event": "scheduled_densify_failed", "currentYearMonth": current_ym}))
         raise
