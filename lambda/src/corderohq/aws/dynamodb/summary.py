@@ -1,5 +1,3 @@
-"""The Budget Summary: budget against actual for one month."""
-
 from __future__ import annotations
 
 import calendar
@@ -23,6 +21,7 @@ def _month_end_utc(year_month: str) -> datetime:
     fixed one. ZoneInfo handles that automatically — we just construct the local
     end-of-month datetime and call .astimezone(UTC).
     """
+
     year, month = int(year_month[:4]), int(year_month[5:7])
     last_day = calendar.monthrange(year, month)[1]
     local_end = datetime(year, month, last_day, 23, 59, 59, 999999, tzinfo=BUDGET_TZ)
@@ -37,6 +36,7 @@ def _resolve_historical_name(category: dict[str, Any], month_end_utc: datetime) 
     month being summarized — its previousName is the name at the time. Otherwise
     the current name was already in effect and we return None.
     """
+
     history = category.get("nameHistory") or []
     if not history:
         return None
@@ -73,6 +73,7 @@ def compute_summary(
     a straight sum — no `abs()`, no sign flips. A refund or income row reduces the
     category's actual, which makes delta (= budgeted - actual) larger.
     """
+
     txns = transactions.list_for_month(year_month)
     categories_all = category_table.list_all()
     category_by_id = {c["categoryId"]: c for c in categories_all}
@@ -166,4 +167,3 @@ def compute_summary(
             "delta": int(total_budgeted - total_actual),
         },
     }
-

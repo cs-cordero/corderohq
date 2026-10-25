@@ -1,5 +1,3 @@
-"""Tests for BudgetAuditLogTable."""
-
 from unittest.mock import MagicMock
 
 from corderohq.aws.dynamodb import AuditAction, BudgetAuditLogTable
@@ -12,6 +10,7 @@ def _make_table() -> tuple[BudgetAuditLogTable, MagicMock]:
     going through `mock.*` — which ty rejects because the class
     annotates `_table` with the real boto3 Table type.
     """
+
     at = BudgetAuditLogTable.__new__(BudgetAuditLogTable)
     mock = MagicMock()
     at._table = mock

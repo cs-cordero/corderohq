@@ -1,5 +1,3 @@
-"""The CategoryGroup table: named groups of budget categories."""
-
 from __future__ import annotations
 
 import logging
@@ -26,6 +24,7 @@ class CategoryGroupTable:
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all groups (active + inactive), sorted by order then name."""
+
         response = self._table.scan()
         items: list[dict[str, Any]] = response["Items"]
         # A system group, such as Unassigned, always sorts last, whatever its number. It
@@ -41,6 +40,7 @@ class CategoryGroupTable:
 
         This check has the same race as CategoryTable.
         """
+
         lower_name = name.lower()
         return any(g["name"].lower() == lower_name and g["groupId"] != exclude_id for g in self.list_all())
 
@@ -51,15 +51,19 @@ class CategoryGroupTable:
         sort last by `list_all`'s ordering, so their numeric `order` shouldn't
         push regular groups past them.
         """
+
         regular = [g for g in self.list_all() if not g.get("system")]
         if not regular:
             return 0
         return max(int(g.get("order", 0)) for g in regular) + 1
 
     def create(self, name: str, system: bool = False) -> dict[str, Any]:
-        """Create a new group. `system=True` marks the row as immutable
-        (no rename, no delete) — used by the "Unassigned" sentinel.
+        """Create a new group.
+
+        `system=True` marks the row as immutable (no rename, no delete). The "Unassigned" sentinel
+        uses it.
         """
+
         name = name.strip()
         if not name:
             raise ValueError("Group name must not be empty")
@@ -86,6 +90,7 @@ class CategoryGroupTable:
         (e.g. deactivated cats whose original group was deleted). It is hidden
         from rename and delete and renders without action buttons in the UI.
         """
+
         for g in self.list_all():
             if g.get("system"):
                 return g
@@ -118,6 +123,7 @@ class CategoryGroupTable:
         here because the check spans the Category table, which this group-scoped
         wrapper has no handle on; the handler is the single API entry point.
         """
+
         self._table.delete_item(Key={"groupId": group_id})
         _LOGGER.info("Deleted group: %s", group_id)
 
@@ -128,6 +134,7 @@ class CategoryGroupTable:
         Groups not present in the list are left untouched (and will display after
         the reordered ones since their order is presumably lower / unchanged).
         """
+
         now = datetime.now(tz=UTC).isoformat()
         for index, gid in enumerate(group_ids_in_order):
             self._table.update_item(

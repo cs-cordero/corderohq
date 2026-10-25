@@ -1,5 +1,3 @@
-"""API Gateway Lambda handler for the personal finance app."""
-
 import base64
 import csv
 import io
@@ -53,6 +51,7 @@ _SECURITY_HEADERS = {
 
 def _now_utc() -> datetime:
     """Return the real UTC time. This sits in its own function so a test can replace it."""
+
     return datetime.now(tz=UTC)
 
 
@@ -67,6 +66,7 @@ def _year_month_of(now: datetime) -> str:
     east-of-UTC perspective (e.g. midnight UTC on Aug 1 is still July 31 8pm ET).
     Convert to ET first so the answer matches editability's clock.
     """
+
     et = now.astimezone(_BUDGET_TZ)
     return f"{et.year:04d}-{et.month:02d}"
 
@@ -88,6 +88,7 @@ def _resolve_now(event: dict[str, Any]) -> datetime:
     logged and ignored — we fall back to real time rather than erroring the
     request.
     """
+
     if _STAGE != "prod":
         headers = event.get("headers") or {}
         raw = headers.get("x-simulated-date") or headers.get("X-Simulated-Date")
@@ -130,6 +131,7 @@ def _ensure_hydrated(now: datetime) -> None:
     depends on dense rows for past/current months (reads, /replace, /pin,
     category create). See docs/personal-finance-architecture.md "Densification".
     """
+
     densify(
         BudgetCarryStore(_BUDGET_TABLE),
         active_category_ids(_CATEGORY_TABLE.list_all()),
@@ -140,6 +142,7 @@ def _ensure_hydrated(now: datetime) -> None:
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Route API Gateway HTTP API requests."""
+
     try:
         # Work out the effective "now" one time here, and pass it to every handler that
         # needs it. In dev it obeys the X-Simulated-Date header. In prod it always uses the
@@ -324,6 +327,7 @@ def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
     `groupId` moves the category to the new group, placing it at the end of
     that group's order.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -371,6 +375,7 @@ def _deactivate_category(
     but the UNPIN entries on dropped pins ARE recorded so the budget-target log stays
     complete. See docs/personal-finance-architecture.md "Audit scope".
     """
+
     body = _parse_json_body(event) or {}
     confirm = bool(body.get("confirm", False))
     explanation = (body.get("explanation") or "").strip()
@@ -434,6 +439,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
     surfaces "this delete will erase data the user can't otherwise rewrite,"
     so it shows up prominently in the AdminToolsPage confirmation.
     """
+
     query = event.get("queryStringParameters") or {}
     if query.get("deletion_preview", "").lower() != "true":
         return _response(400, "GET /api/categories/{id} requires ?deletion_preview=true")
@@ -486,6 +492,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
       3. Delete the Category row itself.
       4. Write one CATEGORY_HARD_DELETE audit entry with counts + previous name.
     """
+
     if not is_budget_admin(event, _STAGE):
         return _response(403, "Admin-only endpoint")
 
@@ -587,6 +594,7 @@ def _delete_category_group(group_id: str) -> dict[str, Any]:
     Deactivated categories in the group are auto-moved to the Unassigned
     sentinel group on delete so they don't leave a dangling groupId reference.
     """
+
     existing = _CATEGORY_GROUP_TABLE.get(group_id)
     if existing is None:
         return _response(404, "Group not found")
@@ -640,6 +648,7 @@ def _post_categories_reorder(event: dict[str, Any]) -> dict[str, Any]:
     moves: pass a category currently in group X with target groupId Y and it
     migrates as part of the reorder.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -690,6 +699,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
       produces DELETE entries; row deletions happen via /pin (null), deactivation drop, or
       hard delete.
     """
+
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
 
@@ -795,6 +805,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     Returns `{targets: <walk-back-resolved rows for year_month>, warnings:
     {downstreamPins, pinMatchesCarriedValue}}`.
     """
+
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
 
@@ -971,6 +982,7 @@ def _validate_commit_rows(
     `locked_month` is suppressed when `override_active=True` since admin override
     intentionally bypasses the editability gate.
     """
+
     results: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
         issues: list[str] = []
@@ -1001,6 +1013,7 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
     DynamoDB item gets a fresh ULID-suffixed sort key. Callers should treat a 200
     as final and a non-200 as "nothing happened" — never a "retry safely" signal.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1292,6 +1305,7 @@ def _delete_person(person_id: str) -> dict[str, Any]:
     so a 409 listing the referencing accounts (rather than cascading) keeps owner
     references from silently dangling.
     """
+
     if _PROFILE_TABLE.get_person(person_id) is None:
         return _response(404, "Person not found")
 
@@ -1324,6 +1338,7 @@ def _validate_owners(owners: Any) -> tuple[list[str] | None, dict[str, Any] | No
     check is the part the table wrapper deliberately leaves to the handler (it needs
     a Profile lookup).
     """
+
     if not isinstance(owners, list) or not owners:
         return None, _response(400, "owners must be a non-empty list of personIds")
     normalized: list[str] = []
@@ -1359,6 +1374,10 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     owners, err = _validate_owners(body.get("owners"))
     if err:
         return err
+    if owners is None:
+        # _validate_owners returns a list whenever it returns no error. This check tells the type
+        # checker so.
+        return _response(400, "owners is required")
 
     try:
         item = _ACCOUNT_TABLE.create(
@@ -1387,6 +1406,7 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
     (the type drives liability, the asset-class rules, and loan-term eligibility) and
     are ignored here.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1455,6 +1475,7 @@ def _reject_future_or_malformed_month(year_month: str, now: datetime) -> dict[st
     so the effective-now check reuses the same clock as the budget feature, keeping
     the dev X-Simulated-Date header working.
     """
+
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
     if year_month > _year_month_of(now):
@@ -1464,6 +1485,7 @@ def _reject_future_or_malformed_month(year_month: str, now: datetime) -> dict[st
 
 def _get_networth_month(year_month: str, now: datetime) -> dict[str, Any]:
     """Return a month's snapshot rows with per-account prefill from the last prior value."""
+
     err = _reject_future_or_malformed_month(year_month, now)
     if err:
         return err
@@ -1486,6 +1508,7 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
     Accounts omitted from `rows` are untouched. Unknown accountIds and asset-class
     values are rejected.
     """
+
     err = _reject_future_or_malformed_month(year_month, now)
     if err:
         return err
@@ -1556,6 +1579,7 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
 
 def _get_networth_history() -> dict[str, Any]:
     """Return the full Excel-style history: accounts, months, values, monthly totals."""
+
     accounts = _ACCOUNT_TABLE.list_all()
     all_rows = _NETWORTH_SNAPSHOT_TABLE.scan_all()
     return _json_response(200, json.dumps(build_history(accounts, all_rows), default=_json_default))
@@ -1566,6 +1590,7 @@ def _get_networth_history() -> dict[str, Any]:
 
 def _parse_json_body(event: dict[str, Any]) -> dict[str, Any] | None:
     """Parse the JSON body of an API Gateway event. It decodes base64 when the body needs it."""
+
     raw_body = event.get("body", "")
     if event.get("isBase64Encoded") and raw_body:
         raw_body = base64.b64decode(raw_body).decode("utf-8")
@@ -1583,6 +1608,7 @@ def _extract_user(event: dict[str, Any]) -> dict[str, str]:
     history. Missing claims fall back to empty strings rather than raising — handlers that
     don't end up writing audit entries shouldn't fail on a malformed token here.
     """
+
     claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims", {})
     return {
         "sub": claims.get("sub", ""),
@@ -1598,6 +1624,7 @@ def _resolve_override(event: dict[str, Any], body: dict[str, Any]) -> tuple[bool
     - override_active is True only if override was requested AND the JWT carries the admin group claim.
     - error_response is non-None when override was requested but the JWT lacks the admin group claim (403).
     """
+
     requested = bool(body.get("override", False))
     if not requested:
         return (False, None)
@@ -1611,6 +1638,7 @@ def _check_year_month_editable(year_month: str, override_active: bool, now: date
 
     `override_active` skips the check entirely.
     """
+
     if override_active:
         return None
     state = editability(year_month, now)
@@ -1635,6 +1663,7 @@ def _check_year_months_editable(
     now: datetime,
 ) -> dict[str, Any] | None:
     """Batch variant. Returns 409 listing every offending item if any is in a LOCKED month."""
+
     if override_active:
         return None
     offending: list[dict[str, Any]] = []
@@ -1659,6 +1688,7 @@ def _check_year_months_editable(
 
 def _json_default(obj: object) -> Any:
     """JSON serializer for types not serializable by default."""
+
     from decimal import Decimal
 
     if isinstance(obj, Decimal):

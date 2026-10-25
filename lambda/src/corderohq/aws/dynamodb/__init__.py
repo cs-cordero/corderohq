@@ -1,5 +1,3 @@
-"""The DynamoDB table classes of the personal finance app. Each table has its own file."""
-
 from corderohq.aws.dynamodb.account import AccountTable
 from corderohq.aws.dynamodb.budget import BudgetCarryStore, BudgetTable
 from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable

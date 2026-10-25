@@ -1,5 +1,3 @@
-"""The BudgetAuditLog table: one entry for each change to a budget target or to the income plan."""
-
 from __future__ import annotations
 
 import logging
@@ -55,6 +53,7 @@ class BudgetAuditLogTable:
         `effective_year_month` may be None for actions not scoped to a single month
         (e.g. CATEGORY_HARD_DELETE).
         """
+
         now = datetime.now(tz=UTC)
 
         item: dict[str, Any] = {
@@ -87,6 +86,7 @@ class BudgetAuditLogTable:
         Single Query against the AUDIT partition with ScanIndexForward=False so
         DynamoDB walks the sort key in descending ULID order.
         """
+
         response = self._table.query(
             KeyConditionExpression="entityType = :pk",
             ExpressionAttributeValues={":pk": _AUDIT_PARTITION},

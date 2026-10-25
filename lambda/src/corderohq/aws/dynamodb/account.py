@@ -1,5 +1,3 @@
-"""The Account table: the financial accounts of the net worth record."""
-
 from __future__ import annotations
 
 import logging
@@ -33,6 +31,7 @@ def _loan_terms_for_storage(loan_terms: dict[str, Any]) -> dict[str, Any]:
     an int (millionths). The handler's JSON encoder turns the Decimal back into a
     float on read, so the API contract is unchanged.
     """
+
     stored = dict(loan_terms)
     stored["interestRate"] = Decimal(str(stored["interestRate"]))
     return stored
@@ -51,6 +50,7 @@ class AccountTable:
 
     def list_active(self) -> list[dict[str, Any]]:
         """Return active accounts, sorted by sortOrder then name."""
+
         response = self._table.scan(
             FilterExpression="active = :val",
             ExpressionAttributeValues={":val": True},
@@ -59,6 +59,7 @@ class AccountTable:
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all accounts (active and inactive), sorted by sortOrder then name."""
+
         response = self._table.scan()
         return self._sorted(response["Items"])
 
@@ -80,6 +81,7 @@ class AccountTable:
         name-keyed GSI would be complexity out of proportion to the risk. Rename or
         merge manually if a duplicate ever slips through.
         """
+
         lower_name = name.lower()
         return any(a["name"].lower() == lower_name and a["accountId"] != exclude_id for a in self.list_all())
 
@@ -119,6 +121,7 @@ class AccountTable:
         Liabilities / Net Worth sums — e.g. a 529 or custodial account you follow
         but that isn't part of the household's own net worth.
         """
+
         name = name.strip()
         if not name:
             raise ValueError("Account name must not be empty")
@@ -175,6 +178,7 @@ class AccountTable:
 
         Returns the updated item, or None if the account does not exist.
         """
+
         existing = self.get(account_id)
         if existing is None:
             return None
@@ -266,10 +270,12 @@ class AccountTable:
 
     def deactivate(self, account_id: str) -> dict[str, Any] | None:
         """Soft-close an account. History rows are untouched. Returns the item, or None."""
+
         return self._set_active(account_id, False)
 
     def reactivate(self, account_id: str) -> dict[str, Any] | None:
         """Reopen a soft-closed account. Returns the item, or None if absent."""
+
         return self._set_active(account_id, True)
 
     def _set_active(self, account_id: str, active: bool) -> dict[str, Any] | None:
@@ -287,6 +293,7 @@ class AccountTable:
 
     def reorder(self, account_ids_in_order: list[str]) -> None:
         """Apply a new total ordering: write sortOrder = index for each id in the list."""
+
         now = datetime.now(tz=UTC).isoformat()
         for index, account_id in enumerate(account_ids_in_order):
             self._table.update_item(
@@ -301,6 +308,7 @@ class AccountTable:
         Used by the handler to block deleting a person still referenced as an
         account owner (409).
         """
+
         return [
             {"accountId": a["accountId"], "name": a["name"]}
             for a in self.list_all()

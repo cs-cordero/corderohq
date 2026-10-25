@@ -1,22 +1,3 @@
-"""Make months dense, and resolve a value by a walk back.
-
-Storage model (see docs/personal-finance-architecture.md "Carry-Forward"):
-
-- Past months, the current month, and the grace month are **dense**: one row per
-  key that was active when the month became dense, plus any later explicit edits.
-- Future months are **sparse**: only explicit pin rows.
-- Effective values for future months are resolved at read time by walking back
-  key-by-key through the rows that do exist, with explicit pins taking precedence.
-
-The code here does not know which table it works on. A table takes part through the
-`DenseSparseStore` protocol, where each row is `(yearMonth, key, value)`. For the Budget
-table the key is a `categoryId` and the value is the amount.
-
-`densify` is the entry point invoked by every handler that needs a dense
-current month before serving a request. It is idempotent and cheap when the
-table is already current.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -33,14 +14,28 @@ CarryRow = tuple[str, str, Any]
 
 
 class DenseSparseStore(Protocol):
-    """A table whose rows obey the dense-past, sparse-future rules."""
+    """A table whose rows obey the dense-past, sparse-future rules.
+
+    The storage model (see docs/personal-finance-architecture.md "Carry-Forward"):
+
+    - Past months, the current month, and the grace month are **dense**: one row per
+      key that was active when the month became dense, plus any later explicit edits.
+    - Future months are **sparse**: only explicit pin rows.
+    - Effective values for future months are resolved at read time by walking back
+      key-by-key through the rows that do exist, with explicit pins taking precedence.
+
+    The densify code does not know which table it works on. Each row is `(yearMonth, key, value)`.
+    For the Budget table, the key is a `categoryId` and the value is the amount.
+    """
 
     def scan_carry_rows(self) -> list[CarryRow]:
         """Return every stored row as `(yearMonth, key, value)`."""
+
         ...
 
     def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
         """Write one row. The densify step calls this to fill a cell that is absent."""
+
         ...
 
 
@@ -55,6 +50,7 @@ class ResolvedValue:
 
 def prev_year_month(year_month: str) -> str:
     """Return the YYYY-MM string for the month immediately before `year_month`."""
+
     year, month = int(year_month[:4]), int(year_month[5:7])
     if month == 1:
         return f"{year - 1}-12"
@@ -63,6 +59,7 @@ def prev_year_month(year_month: str) -> str:
 
 def next_year_month(year_month: str) -> str:
     """Return the YYYY-MM string for the month immediately after `year_month`."""
+
     year, month = int(year_month[:4]), int(year_month[5:7])
     if month == 12:
         return f"{year + 1}-01"
@@ -71,6 +68,7 @@ def next_year_month(year_month: str) -> str:
 
 def carry_map(rows: list[CarryRow]) -> dict[tuple[str, str], Any]:
     """Return the rows as a dict from `(yearMonth, key)` to the value."""
+
     return {(year_month, key): value for year_month, key, value in rows}
 
 
@@ -93,7 +91,11 @@ def densify(
 
     Returns the number of rows written. Idempotent — re-runs after the table is
     current return 0 with no writes.
+
+    Every handler that needs a dense current month calls this before it serves a request. It is
+    cheap when the table is already current.
     """
+
     rows = store.scan_carry_rows()
     by_key = carry_map(rows)
 
@@ -134,6 +136,7 @@ def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: 
 
     Callers must ensure `year_month > current_ym` before calling.
     """
+
     by_key = carry_map(store.scan_carry_rows())
     result: list[ResolvedValue] = []
     for key in active_keys:
@@ -155,6 +158,7 @@ def resolve_future_targets(
 
     Each target is `{yearMonth, categoryId, amount, pinned}`. See `resolve_future`.
     """
+
     return [
         {"yearMonth": year_month, "categoryId": resolved.key, "amount": resolved.value, "pinned": resolved.pinned}
         for resolved in resolve_future(budget_store, active_category_ids, year_month)
@@ -168,6 +172,7 @@ def walk_back_for(by_key: dict[tuple[str, str], Any], target: str, key: str) -> 
     `carry_map`). Returns the value of the nearest prior row, or `None` if no row
     exists within the safety bound.
     """
+
     cursor = prev_year_month(target)
     for _ in range(_MAX_WALKBACK_MONTHS):
         if (cursor, key) in by_key:
@@ -178,6 +183,7 @@ def walk_back_for(by_key: dict[tuple[str, str], Any], target: str, key: str) -> 
 
 def value_at_or_before(by_key: dict[tuple[str, str], Any], year_month: str, key: str) -> Any:
     """Return the value at `(year_month, key)` if a row exists there. Else walk back from it."""
+
     if (year_month, key) in by_key:
         return by_key[(year_month, key)]
     return walk_back_for(by_key, year_month, key)
@@ -185,6 +191,7 @@ def value_at_or_before(by_key: dict[tuple[str, str], Any], year_month: str, key:
 
 def _months_between_exclusive(start_ym: str, end_ym: str) -> list[str]:
     """Return the months after `start_ym`, up to and including `end_ym`."""
+
     result: list[str] = []
     cursor = next_year_month(start_ym)
     while cursor <= end_ym:

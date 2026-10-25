@@ -1,5 +1,3 @@
-"""The Transactions table: the ledger of each month."""
-
 from __future__ import annotations
 
 import logging
@@ -21,6 +19,7 @@ class TransactionsTable:
 
     def list_for_month(self, year_month: str) -> list[dict[str, Any]]:
         """Return every transaction for one month (YYYY-MM), sorted by sortId."""
+
         response = self._table.query(
             KeyConditionExpression="yearMonth = :ym",
             ExpressionAttributeValues={":ym": year_month},
@@ -36,6 +35,7 @@ class TransactionsTable:
         category_id: str,
     ) -> dict[str, Any]:
         """Create a single transaction. Returns the created item."""
+
         description = description.strip()
         if not description:
             raise ValueError("Transaction description must not be empty")
@@ -58,8 +58,11 @@ class TransactionsTable:
         return item
 
     def batch_create(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Create multiple transactions in a batch. Each dict must have yearMonth,
-        transactionDate, description, amount, categoryId. Returns created items."""
+        """Create multiple transactions in a batch. Returns the created items.
+
+        Each dict must have yearMonth, transactionDate, description, amount, and categoryId.
+        """
+
         now = datetime.now(tz=UTC).isoformat()
         items: list[dict[str, Any]] = []
 
@@ -82,8 +85,11 @@ class TransactionsTable:
         return items
 
     def update(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Update a transaction's mutable fields (description, amount, categoryId).
-        Returns the updated item, or None if not found."""
+        """Update the mutable fields of a transaction. Returns the updated item, or None if not found.
+
+        The mutable fields are description, amount, and categoryId.
+        """
+
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
         if "Item" not in response:
             return None
@@ -114,6 +120,7 @@ class TransactionsTable:
 
     def delete(self, year_month: str, sort_id: str) -> bool:
         """Delete a transaction. Returns True if deleted, False if not found."""
+
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
         if "Item" not in response:
             return False
@@ -128,6 +135,7 @@ class TransactionsTable:
         Each item must have 'yearMonth' and 'sortId' keys. Uses DynamoDB
         batch_writer which handles chunking into 25-item batches automatically.
         """
+
         count = 0
         with self._table.batch_writer() as batch:
             for item in items:
@@ -138,6 +146,7 @@ class TransactionsTable:
 
     def count_rows_for_category(self, category_id: str) -> int:
         """Count each Transactions row that names this categoryId. The hard-delete preview calls this."""
+
         count = 0
         params: dict[str, Any] = {
             "FilterExpression": "categoryId = :cid",
@@ -154,6 +163,7 @@ class TransactionsTable:
         Hard-delete only — there's no soft-delete equivalent for transactions.
         See docs/personal-finance-architecture.md "Hard delete semantics".
         """
+
         keys: list[dict[str, str]] = []
         params: dict[str, Any] = {
             "FilterExpression": "categoryId = :cid",

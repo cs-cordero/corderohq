@@ -1,5 +1,3 @@
-"""The Category table: the budget categories."""
-
 from __future__ import annotations
 
 import logging
@@ -21,6 +19,7 @@ class CategoryTable:
 
     def list_active(self) -> list[dict[str, Any]]:
         """Return all active categories, sorted by name."""
+
         response = self._table.scan(
             FilterExpression="active = :val",
             ExpressionAttributeValues={":val": True},
@@ -30,12 +29,14 @@ class CategoryTable:
 
     def list_all(self) -> list[dict[str, Any]]:
         """Return all categories (active and inactive), sorted by name."""
+
         response = self._table.scan()
         items: list[dict[str, Any]] = response["Items"]
         return sorted(items, key=lambda c: c["name"])
 
     def get(self, category_id: str) -> dict[str, Any] | None:
         """Return a single category by ID, or None if not found."""
+
         response = self._table.get_item(Key={"categoryId": category_id})
         return response.get("Item")
 
@@ -52,11 +53,13 @@ class CategoryTable:
         out of proportion to the risk. If a duplicate ever slips through, rename or
         merge manually. See docs/personal-finance-architecture.md "Category name uniqueness".
         """
+
         lower_name = name.lower()
         return any(cat["name"].lower() == lower_name and cat["categoryId"] != exclude_id for cat in self.list_all())
 
     def _next_order_in_group(self, group_id: str) -> int:
         """Next available orderInGroup, placing new categories at the end of the group."""
+
         cats_in_group = [c for c in self.list_all() if c.get("groupId") == group_id]
         if not cats_in_group:
             return 0
@@ -64,6 +67,7 @@ class CategoryTable:
 
     def create(self, name: str, group_id: str) -> dict[str, Any]:
         """Create a new category in `group_id`. Returns the created item."""
+
         name = name.strip()
         if not name:
             raise ValueError("Category name must not be empty")
@@ -93,6 +97,7 @@ class CategoryTable:
 
         Returns the updated item, or None if not found.
         """
+
         name = name.strip()
         if not name:
             raise ValueError("Category name must not be empty")
@@ -138,6 +143,7 @@ class CategoryTable:
 
     def move_to_group(self, category_id: str, new_group_id: str) -> dict[str, Any] | None:
         """Move a category to a new group, appending it to the end of that group's order."""
+
         existing = self.get(category_id)
         if existing is None:
             return None
@@ -163,6 +169,7 @@ class CategoryTable:
         set to its index, and its `groupId` set to `group_id` (so this also
         functions as a bulk move when called with categories from other groups).
         """
+
         now = datetime.now(tz=UTC).isoformat()
         for index, cid in enumerate(category_ids_in_order):
             self._table.update_item(
@@ -173,6 +180,7 @@ class CategoryTable:
 
     def deactivate(self, category_id: str) -> dict[str, Any] | None:
         """Set active=False on a category. Return the changed item, or None if it does not exist."""
+
         if self.get(category_id) is None:
             return None
 
@@ -191,10 +199,12 @@ class CategoryTable:
 
         Only the admin hard delete calls this.
         """
+
         self._table.delete_item(Key={"categoryId": category_id})
 
     def reactivate(self, category_id: str) -> dict[str, Any] | None:
         """Re-activate a deactivated category. Returns the updated item, or None if not found."""
+
         if self.get(category_id) is None:
             return None
 
@@ -211,4 +221,5 @@ class CategoryTable:
 
 def active_category_ids(categories: list[dict[str, Any]]) -> list[str]:
     """Return the IDs of the active categories, in the order given. The densify step uses them."""
+
     return [c["categoryId"] for c in categories if c["active"]]

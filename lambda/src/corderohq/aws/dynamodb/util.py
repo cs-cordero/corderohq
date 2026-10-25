@@ -1,5 +1,3 @@
-"""Shared parts of the DynamoDB table classes: the boto3 resource, the budget time zone, and paging."""
-
 from __future__ import annotations
 
 from collections.abc import Iterator
@@ -15,16 +13,17 @@ BUDGET_TZ = ZoneInfo("America/New_York")
 
 def current_year_month() -> str:
     """Return the current YYYY-MM string."""
+
     now = datetime.now(tz=UTC)
     return f"{now.year}-{now.month:02d}"
 
 
 def scan_pages(table: Any, **params: Any) -> Iterator[dict[str, Any]]:
     """Yield each page of a Scan. The next page starts at the `LastEvaluatedKey` of the page before."""
+
     while True:
         response = table.scan(**params)
         yield response
         if "LastEvaluatedKey" not in response:
             return
         params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
-

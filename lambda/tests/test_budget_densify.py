@@ -1,5 +1,3 @@
-"""Tests for the densification + future-walkback engine."""
-
 from unittest.mock import MagicMock
 
 from corderohq.aws.dynamodb import BudgetCarryStore, BudgetTable, CategoryTable, active_category_ids
@@ -30,11 +28,13 @@ def _make_category_table(categories: list[dict[str, object]]) -> tuple[CategoryT
 
 def _densify(budget: BudgetTable, cats: CategoryTable, current_ym: str) -> int:
     """Call `densify` the same way as the handler and the scheduled Lambda."""
+
     return densify(BudgetCarryStore(budget), active_category_ids(cats.list_all()), current_ym, cold_start_value=0)
 
 
 def _resolve(budget: BudgetTable, cats: CategoryTable, year_month: str) -> list[dict[str, object]]:
     """Call `resolve_future_targets` the same way as the handler."""
+
     return resolve_future_targets(BudgetCarryStore(budget), active_category_ids(cats.list_all()), year_month)
 
 

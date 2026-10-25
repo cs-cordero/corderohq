@@ -1,5 +1,3 @@
-"""Tests for ProfileTable, AccountTable, and NetWorthSnapshotTable."""
-
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock

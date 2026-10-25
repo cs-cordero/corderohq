@@ -1,5 +1,3 @@
-"""The Budget table: the target of each category in each month."""
-
 from __future__ import annotations
 
 import logging
@@ -19,6 +17,7 @@ class BudgetTable:
 
     def get_targets(self, year_month: str) -> list[dict[str, Any]]:
         """Get all budget targets for a given month (YYYY-MM)."""
+
         response = self._table.query(
             KeyConditionExpression="yearMonth = :ym",
             ExpressionAttributeValues={":ym": year_month},
@@ -27,6 +26,7 @@ class BudgetTable:
 
     def put_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Set the budget targets for one month. This writes over every target in that month."""
+
         existing = self.get_targets(year_month)
         with self._table.batch_writer() as batch:
             for item in existing:
@@ -54,6 +54,7 @@ class BudgetTable:
         x months tracked) so a Scan is cheaper than the equivalent fan-out of
         per-month Queries.
         """
+
         items: list[dict[str, Any]] = []
         params: dict[str, Any] = {}
         for response in scan_pages(self._table, **params):
@@ -62,16 +63,19 @@ class BudgetTable:
 
     def put_single(self, year_month: str, category_id: str, amount: Any) -> None:
         """Write one budget row."""
+
         self._table.put_item(
             Item={"yearMonth": year_month, "categoryId": category_id, "amount": amount},
         )
 
     def delete_single(self, year_month: str, category_id: str) -> None:
         """Delete one budget row. /pin calls this when it clears a pin, with amount=null."""
+
         self._table.delete_item(Key={"yearMonth": year_month, "categoryId": category_id})
 
     def find_future_months_with_category(self, category_id: str, after_month: str) -> list[str]:
         """Return the sorted yearMonth values later than after_month that hold this categoryId."""
+
         months: set[str] = set()
         params: dict[str, Any] = {
             "FilterExpression": "categoryId = :cid AND yearMonth > :ym",
@@ -85,6 +89,7 @@ class BudgetTable:
 
     def count_rows_for_category(self, category_id: str) -> int:
         """Count each Budget row that names this categoryId. The hard-delete preview calls this."""
+
         count = 0
         params: dict[str, Any] = {
             "FilterExpression": "categoryId = :cid",
@@ -101,6 +106,7 @@ class BudgetTable:
         Used by the hard-delete preview to highlight historical data the delete would erase.
         The caller filters by editability state if it needs only locked vs grace.
         """
+
         months: set[str] = set()
         params: dict[str, Any] = {
             "FilterExpression": "categoryId = :cid AND yearMonth < :ym",
@@ -118,6 +124,7 @@ class BudgetTable:
         Used by hard-delete only — soft-delete (/deactivate) drops just the future pin
         rows. See docs/personal-finance-architecture.md "Hard delete semantics".
         """
+
         keys: list[dict[str, str]] = []
         params: dict[str, Any] = {
             "FilterExpression": "categoryId = :cid",
@@ -152,8 +159,10 @@ class BudgetCarryStore:
 
     def scan_carry_rows(self) -> list[CarryRow]:
         """Return every Budget row as `(yearMonth, categoryId, amount)`."""
+
         return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan_all()]
 
     def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
         """Write one Budget row."""
+
         self._budget_table.put_single(year_month, key, value)

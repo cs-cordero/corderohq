@@ -1,5 +1,3 @@
-"""The Profile table: the people of the household."""
-
 from __future__ import annotations
 
 import logging
@@ -14,14 +12,6 @@ from corderohq.networth.models import HOUSEHOLD_PK, PROFILE_SETTINGS_SK, validat
 _LOGGER = logging.getLogger(__name__)
 
 
-# --- The net worth record ---
-#
-# HOUSEHOLD_PK and PROFILE_SETTINGS_SK are imported from networth.models (the
-# authoritative home for the Profile table's key constants); list_people skips the
-# reserved SETTINGS sentinel so a future household-settings item can't masquerade
-# as a person.
-
-
 class ProfileTable:
     """The household's people.
 
@@ -30,6 +20,10 @@ class ProfileTable:
     the only read pattern anything needs. `Account.owner` references a personId
     from here, so age-based rules resolve owner -> person -> birthYearMonth from
     data rather than any hardcoded string.
+
+    The key constants HOUSEHOLD_PK and PROFILE_SETTINGS_SK come from networth.models. `list_people`
+    skips the reserved SETTINGS item, so that a future household settings item never looks like a
+    person.
     """
 
     def __init__(self, table_name: str) -> None:
@@ -41,6 +35,7 @@ class ProfileTable:
         The reserved SETTINGS sentinel SK (if it ever exists) is excluded — it is
         not a person.
         """
+
         response = self._table.query(
             KeyConditionExpression="householdId = :pk",
             ExpressionAttributeValues={":pk": HOUSEHOLD_PK},
@@ -54,6 +49,7 @@ class ProfileTable:
 
     def create_person(self, name: str, birth_year_month: str) -> dict[str, Any]:
         """Create a person. Validates name non-empty and birthYearMonth as YYYY-MM."""
+
         name = name.strip()
         if not name:
             raise ValueError("Person name must not be empty")
@@ -76,6 +72,7 @@ class ProfileTable:
         self, person_id: str, name: str | None = None, birth_year_month: str | None = None
     ) -> dict[str, Any] | None:
         """Update a person's name and/or birthYearMonth. Returns the item, or None if absent."""
+
         if self.get_person(person_id) is None:
             return None
 
@@ -114,5 +111,6 @@ class ProfileTable:
         Account table, which this Profile-scoped wrapper has no handle on; the
         handler is the single API entry point, so the invariant always holds.
         """
+
         self._table.delete_item(Key={"householdId": HOUSEHOLD_PK, "personId": person_id})
         _LOGGER.info("Deleted person: %s", person_id)

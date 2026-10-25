@@ -1,5 +1,3 @@
-"""An LLM reads a CSV file, and it gives a category to each transaction."""
-
 import json
 import logging
 from typing import Any
@@ -57,6 +55,7 @@ def _get_api_key() -> str:
 
 def _call_claude(api_key: str, system: str, user_text: str) -> str:
     """Call Claude Haiku and return the text response."""
+
     client = anthropic.Anthropic(api_key=api_key)
 
     prompt = TextBlockParam(type="text", text=user_text)
@@ -86,6 +85,7 @@ def map_columns(headers: list[str], sample_rows: list[list[str]]) -> dict[str, A
 
     Returns a dict with keys: date, description, amount, and optionally amount_invert.
     """
+
     api_key = _get_api_key()
 
     csv_preview = ",".join(headers) + "\n"
@@ -111,6 +111,7 @@ def categorize_transactions(
 
     Returns a list of dicts with index, categoryId, categoryName.
     """
+
     api_key = _get_api_key()
 
     category_lines = "\n".join(f"- {c['name']} (categoryId: {c['categoryId']})" for c in categories)

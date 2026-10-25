@@ -1,5 +1,3 @@
-"""The NetWorthSnapshot table: the value of each account in each month."""
-
 from __future__ import annotations
 
 import logging
@@ -24,6 +22,7 @@ class NetWorthSnapshotTable:
 
     def get_month(self, year_month: str) -> list[dict[str, Any]]:
         """Return every recorded row for a month (one per account with a value)."""
+
         response = self._table.query(
             KeyConditionExpression="yearMonth = :ym",
             ExpressionAttributeValues={":ym": year_month},
@@ -32,6 +31,7 @@ class NetWorthSnapshotTable:
 
     def scan_all(self) -> list[dict[str, Any]]:
         """Return every snapshot row across all months, paginating the Scan."""
+
         items: list[dict[str, Any]] = []
         params: dict[str, Any] = {}
         for response in scan_pages(self._table, **params):
@@ -40,6 +40,7 @@ class NetWorthSnapshotTable:
 
     def delete_single(self, year_month: str, account_id: str) -> None:
         """Delete a single snapshot row (undo a mistaken entry)."""
+
         self._table.delete_item(Key={"yearMonth": year_month, "accountId": account_id})
 
     def upsert_month(self, year_month: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -55,6 +56,7 @@ class NetWorthSnapshotTable:
           existing note untouched.
         Accounts not present in `rows` are untouched. Returns get_month(year_month).
         """
+
         now = datetime.now(tz=UTC).isoformat()
         for row in rows:
             account_id = row["accountId"]

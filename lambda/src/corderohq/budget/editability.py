@@ -1,8 +1,3 @@
-"""The state function that decides if the app can change a budget year-month.
-
-Pure functions only. No DynamoDB, no env vars.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime
@@ -27,6 +22,7 @@ _YEAR_MONTH_LEN = 7  # "YYYY-MM"
 
 def _to_month_ordinal(year: int, month: int) -> int:
     """Convert (year, month) to a single integer for easy month-distance math."""
+
     return year * 12 + (month - 1)
 
 
@@ -36,6 +32,7 @@ def _from_month_ordinal(ordinal: int) -> tuple[int, int]:
 
 def _parse_year_month(year_month: str) -> tuple[int, int]:
     """Parse "YYYY-MM" into (year, month). Raises ValueError on malformed input."""
+
     if len(year_month) != _YEAR_MONTH_LEN or year_month[4] != "-":
         raise ValueError(f"Invalid year-month: {year_month!r}, expected YYYY-MM")
     return int(year_month[:4]), int(year_month[5:])
@@ -56,6 +53,7 @@ def editability(year_month: str, now_utc: datetime) -> EditabilityState:
     GRACE is treated identically to EDITABLE for mutation checks; the distinction
     exists so the frontend can surface a "grace expires in X days" banner.
     """
+
     if now_utc.tzinfo is None:
         raise ValueError("now_utc must be timezone-aware")
 

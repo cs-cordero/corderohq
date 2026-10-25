@@ -1,5 +1,3 @@
-"""Tests for LLM-powered CSV import."""
-
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -11,6 +9,7 @@ from corderohq.budget.csv_import import categorize_transactions, map_columns
 
 def _mock_claude_response(text: str) -> MagicMock:
     """Create a mock Claude API response with the given text."""
+
     from anthropic.types import TextBlock
 
     mock_block = MagicMock(spec=TextBlock)
