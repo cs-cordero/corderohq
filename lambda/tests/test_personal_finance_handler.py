@@ -16,7 +16,7 @@ os.environ.setdefault("NETWORTH_SNAPSHOT_TABLE_NAME", "test-NetWorthSnapshot")
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
-from corderohq.accounts import AccountType, AssetClass, FixedClassAccount
+from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
 from corderohq.personal_finance_handler import handler
 
 # Stable "now" used across editability-sensitive tests: June 15, 2026 noon UTC.
@@ -1683,13 +1683,15 @@ class TestPostAccount:
             None,
         )
         assert result["statusCode"] == 201
-        _, kwargs = mock_at.create_account.call_args
-        assert kwargs["name"] == "Chase Checking"
-        assert kwargs["account"] == FixedClassAccount(AccountType.CHECKING, AssetClass.CASH, liability=False)
-        assert kwargs["owners"] == ["p1"]
-        # excludedFromNetWorth defaults to False when absent from the body.
-        assert kwargs["excluded_from_net_worth"] is False
-        assert kwargs["notes"] is None
+        mock_at.create_account.assert_called_once_with(
+            CreateAccountArgs(
+                name="Chase Checking",
+                owners=["p1"],
+                excluded_from_net_worth=False,
+                notes=None,
+                account=FixedClassAccount(AccountType.CHECKING),
+            )
+        )
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
@@ -1711,8 +1713,7 @@ class TestPostAccount:
             None,
         )
         assert result["statusCode"] == 201
-        _, kwargs = mock_at.create_account.call_args
-        assert kwargs["excluded_from_net_worth"] is True
+        assert mock_at.create_account.call_args.args[0].excluded_from_net_worth is True
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
@@ -1734,8 +1735,7 @@ class TestPostAccount:
             None,
         )
         assert result["statusCode"] == 201
-        _, kwargs = mock_at.create_account.call_args
-        assert kwargs["owners"] == ["p1", "p2"]
+        assert mock_at.create_account.call_args.args[0].owners == ["p1", "p2"]
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_unknown_owner_returns_400(self, mock_pt: MagicMock) -> None:

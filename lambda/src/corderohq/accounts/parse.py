@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from typing import Any, assert_never
 
 from corderohq.accounts.types import (
     AccountType,
     AssetClass,
     ChosenClassAccount,
+    CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
     LoanTerms,
     NewAccount,
-    account_type_meta,
 )
 from corderohq.util import YEAR_MONTH_PATTERN
 
@@ -21,24 +21,64 @@ _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
 _ASSET_CLASS_VALUES = frozenset(c.value for c in AssetClass)
 
 
-def parse_new_account(account_type: Any, asset_classes: Any, target_year: Any, loan_terms: Any) -> NewAccount:
-    """Convert the type fields of a create request into the variant for the account type.
+def parse_create_account_args(payload: Mapping[str, Any]) -> CreateAccountArgs:
+    """Convert the body of a create request into checked arguments. Raise ValueError for bad input.
 
-    A fixed-class type ignores `asset_classes`. Raise ValueError for an unknown type or class, for
-    loan terms on a type that does not amortize, and for a target year without TARGET_DATE.
+    The account type decides which other keys the body can hold. A type with a fixed asset class
+    ignores `assetClasses`. The caller checks that each owner exists.
     """
 
-    kind = AccountType(validate_account_type(account_type))
-    meta = account_type_meta(kind)
-    if meta.fixed_asset_class is None:
-        parse_loan_terms(loan_terms, amortizing=False)
-        classes = [AssetClass(c) for c in validate_asset_classes(asset_classes)]
-        return ChosenClassAccount(kind, classes, resolve_target_year(classes, target_year))
-    resolve_target_year([meta.fixed_asset_class], target_year)
-    if meta.amortizing:
-        return LoanAccount(kind, meta.fixed_asset_class, parse_loan_terms(loan_terms, amortizing=True))
-    parse_loan_terms(loan_terms, amortizing=False)
-    return FixedClassAccount(kind, meta.fixed_asset_class, meta.liability)
+    account_type = AccountType(validate_account_type(payload.get("accountType")))
+    account: NewAccount
+    match account_type:
+        case AccountType.CHECKING | AccountType.SAVINGS | AccountType.REAL_ESTATE | AccountType.VEHICLE:
+            _reject_keys(payload, account_type, "targetYear", "loanTerms")
+            account = FixedClassAccount(account_type)
+        case (
+            AccountType.BROKERAGE
+            | AccountType.RETIREMENT_401K
+            | AccountType.RETIREMENT_403B
+            | AccountType.ROTH_IRA
+            | AccountType.TRADITIONAL_IRA
+            | AccountType.HSA
+            | AccountType.PLAN_529
+            | AccountType.PLAN_530A
+            | AccountType.OTHER_ASSET
+        ):
+            _reject_keys(payload, account_type, "loanTerms")
+            asset_classes = [AssetClass(c) for c in validate_asset_classes(payload.get("assetClasses"))]
+            target_year = resolve_target_year(asset_classes, payload.get("targetYear"))
+            account = ChosenClassAccount(account_type, asset_classes, target_year)
+        case AccountType.MORTGAGE | AccountType.OTHER_LIABILITY:
+            _reject_keys(payload, account_type, "targetYear")
+            account = LoanAccount(account_type, parse_loan_terms(payload.get("loanTerms"), amortizing=True))
+        case _:
+            assert_never(account_type)
+
+    name = payload.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("name is required")
+    excluded = payload.get("excludedFromNetWorth", False)
+    if not isinstance(excluded, bool):
+        raise ValueError("excludedFromNetWorth must be a boolean")
+    notes = payload.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        raise ValueError("notes must be a string or null")
+    return CreateAccountArgs(
+        name=name.strip(),
+        owners=validate_owners(payload.get("owners")),
+        excluded_from_net_worth=excluded,
+        notes=notes,
+        account=account,
+    )
+
+
+def _reject_keys(payload: Mapping[str, Any], account_type: AccountType, *keys: str) -> None:
+    """Raise ValueError if the body holds a value for a key that this account type does not take."""
+
+    for key in keys:
+        if payload.get(key) is not None:
+            raise ValueError(f"{key} is not allowed for a {account_type} account")
 
 
 def parse_loan_terms(value: Any, amortizing: bool) -> LoanTerms | None:

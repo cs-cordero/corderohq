@@ -8,6 +8,7 @@ from corderohq.accounts import (
     AccountType,
     AssetClass,
     ChosenClassAccount,
+    CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
     LoanTerms,
@@ -92,17 +93,18 @@ class TestProfileTable:
             profile.update_person("p1", birth_year_month="bad")
 
 
-_CHECKING = FixedClassAccount(AccountType.CHECKING, AssetClass.CASH, liability=False)
+_CHECKING = FixedClassAccount(AccountType.CHECKING)
 
 
 def _create(accounts: AccountTable, account: NewAccount, name: str = "Chase Checking", **kwargs: Any) -> dict[str, Any]:
-    return accounts.create_account(
+    args = CreateAccountArgs(
         name=name,
         owners=kwargs.get("owners", ["p1"]),
         excluded_from_net_worth=kwargs.get("excluded_from_net_worth", False),
         notes=kwargs.get("notes"),
         account=account,
     )
+    return accounts.create_account(args)
 
 
 class TestAccountTableCreate:
@@ -128,7 +130,7 @@ class TestAccountTableCreate:
 
     def test_creates_loan_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": [{"accountId": "a0", "name": "Other", "sortOrder": 4}]}
-        account = LoanAccount(AccountType.MORTGAGE, AssetClass.OTHER, LoanTerms(0.045, 2_500_000_000, "2045-06"))
+        account = LoanAccount(AccountType.MORTGAGE, LoanTerms(0.045, 2_500_000_000, "2045-06"))
         result = _create(accounts, account, name="Mortgage", owners=["p1", "p2"], notes="30-year fixed")
         assert result["liability"] is True
         assert result["assetClasses"] == ["other"]
@@ -142,7 +144,7 @@ class TestAccountTableCreate:
 
     def test_creates_loan_account_without_terms(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = _create(accounts, LoanAccount(AccountType.OTHER_LIABILITY, AssetClass.OTHER, None), name="Loan")
+        result = _create(accounts, LoanAccount(AccountType.OTHER_LIABILITY, None), name="Loan")
         assert "loanTerms" not in result
 
     def test_creates_target_date_with_year(self, accounts: AccountTable, mock: MagicMock) -> None:
@@ -152,11 +154,6 @@ class TestAccountTableCreate:
         assert result["assetClasses"] == ["target_date", "cash"]
         assert result["liability"] is False
         assert result["targetYear"] == 2055
-
-    def test_rejects_empty_name(self, accounts: AccountTable, mock: MagicMock) -> None:
-        mock.scan.return_value = {"Items": []}
-        with pytest.raises(ValueError, match="must not be empty"):
-            _create(accounts, _CHECKING, name="  ")
 
     def test_rejects_duplicate_name_case_insensitive(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": [{"accountId": "a1", "name": "Chase Checking", "sortOrder": 0}]}

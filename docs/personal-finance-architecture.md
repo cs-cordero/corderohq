@@ -55,7 +55,7 @@ lambda/src/corderohq/
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
     budget/editability.py  The editability state function
     budget/auth.py         Admin group check
-    accounts/              Account types, the type rules, and the parse of a new account;
+    accounts/              Account types, the type rules, and the checks of a create request;
                            the budget and the net worth record both use them
     networth/              Profile keys and the snapshot logic of the net worth record
     aws/dynamodb/          One file for each DynamoDB table; __init__.py exports every name

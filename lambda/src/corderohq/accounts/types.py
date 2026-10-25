@@ -99,8 +99,6 @@ class FixedClassAccount:
     """A new account whose type fixes its asset class, such as a checking account."""
 
     account_type: AccountType
-    asset_class: AssetClass
-    liability: bool
 
 
 @dataclass(frozen=True)
@@ -117,8 +115,18 @@ class LoanAccount:
     """A new amortizing liability, such as a mortgage."""
 
     account_type: AccountType
-    asset_class: AssetClass
     loan_terms: LoanTerms | None
 
 
 NewAccount = FixedClassAccount | ChosenClassAccount | LoanAccount
+
+
+@dataclass(frozen=True)
+class CreateAccountArgs:
+    """The checked arguments of a new account."""
+
+    name: str
+    owners: list[str]
+    excluded_from_net_worth: bool
+    notes: str | None
+    account: NewAccount

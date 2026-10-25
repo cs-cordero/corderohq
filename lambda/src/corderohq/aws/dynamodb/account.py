@@ -9,10 +9,10 @@ from ulid import ULID
 
 from corderohq.accounts import (
     ChosenClassAccount,
+    CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
     LoanTerms,
-    NewAccount,
     account_type_meta,
     parse_loan_terms,
     validate_asset_classes,
@@ -47,10 +47,11 @@ class AccountTable:
     def _fixed_class_fields(account: FixedClassAccount) -> dict[str, Any]:
         """Return the stored fields of an account whose type fixes its asset class."""
 
+        meta = account_type_meta(account.account_type)
         return {
             "accountType": account.account_type,
-            "assetClasses": [account.asset_class],
-            "liability": account.liability,
+            "assetClasses": [meta.fixed_asset_class],
+            "liability": meta.liability,
         }
 
     @staticmethod
@@ -72,7 +73,7 @@ class AccountTable:
 
         fields: dict[str, Any] = {
             "accountType": account.account_type,
-            "assetClasses": [account.asset_class],
+            "assetClasses": [account_type_meta(account.account_type).fixed_asset_class],
             "liability": True,
         }
         if account.loan_terms is not None:
@@ -103,40 +104,26 @@ class AccountTable:
         response = self._table.get_item(Key={"accountId": account_id})
         return response.get("Item")
 
-    def create_account(
-        self,
-        *,
-        name: str,
-        owners: list[str],
-        excluded_from_net_worth: bool,
-        notes: str | None,
-        account: NewAccount,
-    ) -> dict[str, Any]:
-        """Create an account, and return the stored item.
+    def create_account(self, args: CreateAccountArgs) -> dict[str, Any]:
+        """Create an account, and return the stored item. Raise ValueError for a duplicate name."""
 
-        `account` holds the fields that depend on the account type. Raise ValueError for an empty
-        or duplicate name. The caller checks that each owner exists.
-        """
-
-        name = name.strip()
-        if not name:
-            raise ValueError("Account name must not be empty")
-        if self._name_exists(name):
-            raise ValueError(f"An account named '{name}' already exists")
+        if self._name_exists(args.name):
+            raise ValueError(f"An account named '{args.name}' already exists")
 
         now = datetime.now(tz=UTC).isoformat()
         item: dict[str, Any] = {
             "accountId": str(ULID()),
-            "name": name,
-            "owners": owners,
-            "excludedFromNetWorth": excluded_from_net_worth,
+            "name": args.name,
+            "owners": args.owners,
+            "excludedFromNetWorth": args.excluded_from_net_worth,
             "active": True,
             "sortOrder": self._next_sort_order(),
             "createdAt": now,
             "updatedAt": now,
         }
-        if notes is not None:
-            item["notes"] = notes
+        if args.notes is not None:
+            item["notes"] = args.notes
+        account = args.account
         match account:
             case FixedClassAccount():
                 item.update(self._fixed_class_fields(account))

@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import parse_new_account, validate_asset_class
+from corderohq.accounts import parse_create_account_args, validate_asset_class, validate_owners
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -1267,19 +1267,20 @@ def _validate_owners(owners: Any) -> tuple[list[str] | None, dict[str, Any] | No
     The list must not be empty, and each personId must exist in the household. Duplicates are removed.
     """
 
-    if not isinstance(owners, list) or not owners:
-        return None, _response(400, "owners must be a non-empty list of personIds")
-    normalized: list[str] = []
-    seen: set[str] = set()
+    try:
+        normalized = validate_owners(owners)
+    except ValueError as e:
+        return None, _response(400, str(e))
+    return normalized, _check_owners_exist(normalized)
+
+
+def _check_owners_exist(owners: list[str]) -> dict[str, Any] | None:
+    """Return a 400 response if a personId is not a person in the household, else None."""
+
     for owner in owners:
-        if not isinstance(owner, str) or not owner:
-            return None, _response(400, "each owner must be a personId string")
         if _PROFILE_TABLE.get_person(owner) is None:
-            return None, _response(400, f"owner '{owner}' is not a person in the household")
-        if owner not in seen:
-            seen.add(owner)
-            normalized.append(owner)
-    return normalized, None
+            return _response(400, f"owner '{owner}' is not a person in the household")
+    return None
 
 
 def _get_accounts(event: dict[str, Any]) -> dict[str, Any]:
@@ -1296,32 +1297,16 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     if body is None:
         return _response(400, "Request body is required")
 
-    name = body.get("name")
-    if not isinstance(name, str) or not name.strip():
-        return _response(400, "name is required")
-    if not body.get("accountType"):
-        return _response(400, "accountType is required")
-    owners, err = _validate_owners(body.get("owners"))
+    try:
+        args = parse_create_account_args(body)
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_owners_exist(args.owners)
     if err:
         return err
-    if owners is None:
-        # _validate_owners returns a list whenever it returns no error. This check tells the type
-        # checker so.
-        return _response(400, "owners is required")
-    excluded = body.get("excludedFromNetWorth", False)
-    if not isinstance(excluded, bool):
-        return _response(400, "excludedFromNetWorth must be a boolean")
-    notes = body.get("notes")
-    if notes is not None and not isinstance(notes, str):
-        return _response(400, "notes must be a string or null")
 
     try:
-        account = parse_new_account(
-            body["accountType"], body.get("assetClasses"), body.get("targetYear"), body.get("loanTerms")
-        )
-        item = _ACCOUNT_TABLE.create_account(
-            name=name, owners=owners, excluded_from_net_worth=excluded, notes=notes, account=account
-        )
+        item = _ACCOUNT_TABLE.create_account(args)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(201, json.dumps(item, default=_json_default))

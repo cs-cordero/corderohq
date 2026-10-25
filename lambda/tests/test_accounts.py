@@ -6,12 +6,13 @@ from corderohq.accounts import (
     AccountType,
     AssetClass,
     ChosenClassAccount,
+    CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
     LoanTerms,
     account_type_meta,
+    parse_create_account_args,
     parse_loan_terms,
-    parse_new_account,
     resolve_target_year,
     validate_account_type,
     validate_asset_class,
@@ -136,60 +137,94 @@ class TestValidateAssetClasses:
 _LOAN_TERMS: dict[str, Any] = {"interestRate": 0.04, "monthlyPayment": 1_000_000, "payoffYearMonth": "2030-01"}
 
 
-class TestParseNewAccount:
-    def test_fixed_class_type_ignores_client_asset_classes(self) -> None:
-        account = parse_new_account("checking", ["us_equity_large_cap"], None, None)
-        assert account == FixedClassAccount(AccountType.CHECKING, AssetClass.CASH, liability=False)
+def _body(account_type: str, **fields: Any) -> dict[str, Any]:
+    return {"name": "Account", "accountType": account_type, "owners": ["p1"], **fields}
 
-    def test_chosen_class_type_keeps_the_set(self) -> None:
-        account = parse_new_account("brokerage", ["us_equity_large_cap", "intl_equity", "cash"], None, None)
-        assert account == ChosenClassAccount(
-            AccountType.BROKERAGE,
-            [AssetClass.US_EQUITY_LARGE_CAP, AssetClass.INTL_EQUITY, AssetClass.CASH],
-            target_year=None,
+
+class TestParseCreateAccountArgs:
+    def test_fixed_class_type_ignores_client_asset_classes(self) -> None:
+        args = parse_create_account_args(_body("checking", assetClasses=["us_equity_large_cap"]))
+        assert args == CreateAccountArgs(
+            name="Account",
+            owners=["p1"],
+            excluded_from_net_worth=False,
+            notes=None,
+            account=FixedClassAccount(AccountType.CHECKING),
         )
 
-    def test_chosen_class_type_with_target_date_needs_a_year(self) -> None:
-        account = parse_new_account("401k", ["target_date", "cash"], 2055, None)
-        assert isinstance(account, ChosenClassAccount)
-        assert account.target_year == 2055
+    def test_chosen_class_type_keeps_the_set(self) -> None:
+        args = parse_create_account_args(_body("brokerage", assetClasses=["us_equity_large_cap", "intl_equity"]))
+        assert args.account == ChosenClassAccount(
+            AccountType.BROKERAGE, [AssetClass.US_EQUITY_LARGE_CAP, AssetClass.INTL_EQUITY], target_year=None
+        )
+
+    def test_target_date_needs_a_year(self) -> None:
+        args = parse_create_account_args(_body("401k", assetClasses=["target_date", "cash"], targetYear=2055))
+        assert isinstance(args.account, ChosenClassAccount)
+        assert args.account.target_year == 2055
         with pytest.raises(ValueError, match="targetYear is required"):
-            parse_new_account("401k", ["target_date"], None, None)
+            parse_create_account_args(_body("401k", assetClasses=["target_date"]))
 
     def test_year_rejected_without_target_date(self) -> None:
         with pytest.raises(ValueError, match="only allowed when target_date"):
-            parse_new_account("brokerage", ["cash"], 2055, None)
-        with pytest.raises(ValueError, match="only allowed when target_date"):
-            parse_new_account("checking", None, 2055, None)
+            parse_create_account_args(_body("brokerage", assetClasses=["cash"], targetYear=2055))
 
-    def test_loan_type_forces_its_class_and_keeps_the_terms(self) -> None:
-        # Even if the client claims equities, a mortgage's asset class is forced.
-        account = parse_new_account("mortgage", ["us_equity_large_cap"], None, _LOAN_TERMS)
-        assert account == LoanAccount(
-            AccountType.MORTGAGE, AssetClass.OTHER, LoanTerms(0.04, 1_000_000, "2030-01")
-        )
+    def test_loan_type_keeps_the_terms(self) -> None:
+        args = parse_create_account_args(_body("mortgage", assetClasses=["us_equity_large_cap"], loanTerms=_LOAN_TERMS))
+        assert args.account == LoanAccount(AccountType.MORTGAGE, LoanTerms(0.04, 1_000_000, "2030-01"))
 
     def test_loan_type_without_terms(self) -> None:
-        account = parse_new_account("other_liability", None, None, None)
-        assert isinstance(account, LoanAccount)
-        assert account.loan_terms is None
+        args = parse_create_account_args(_body("other_liability"))
+        assert args.account == LoanAccount(AccountType.OTHER_LIABILITY, None)
 
-    @pytest.mark.parametrize("account_type", ["brokerage", "checking"])
-    def test_loan_terms_rejected_on_a_type_that_does_not_amortize(self, account_type: str) -> None:
-        with pytest.raises(ValueError, match="only allowed on amortizing"):
-            parse_new_account(account_type, ["us_equity_large_cap"], None, _LOAN_TERMS)
+    @pytest.mark.parametrize(
+        ("account_type", "key", "value"),
+        [
+            ("checking", "loanTerms", _LOAN_TERMS),
+            ("checking", "targetYear", 2055),
+            ("brokerage", "loanTerms", _LOAN_TERMS),
+            ("mortgage", "targetYear", 2055),
+        ],
+    )
+    def test_rejects_a_key_that_the_type_does_not_take(self, account_type: str, key: str, value: object) -> None:
+        body = _body(account_type, assetClasses=["cash"], **{key: value})
+        with pytest.raises(ValueError, match=f"{key} is not allowed for a {account_type} account"):
+            parse_create_account_args(body)
 
-    def test_rejects_invalid_account_type(self) -> None:
+    def test_every_account_type_has_a_case(self) -> None:
+        for account_type in AccountType:
+            parse_create_account_args(_body(account_type.value, assetClasses=["cash"]))
+
+    @pytest.mark.parametrize("account_type", [None, "chequing"])
+    def test_rejects_invalid_account_type(self, account_type: object) -> None:
         with pytest.raises(ValueError, match="Invalid accountType"):
-            parse_new_account("chequing", ["cash"], None, None)
+            parse_create_account_args(_body("checking") | {"accountType": account_type})
 
-    def test_rejects_bad_asset_class(self) -> None:
+    def test_rejects_bad_asset_classes(self) -> None:
         with pytest.raises(ValueError, match="Invalid assetClass"):
-            parse_new_account("brokerage", ["stonks"], None, None)
-
-    def test_rejects_empty_set(self) -> None:
+            parse_create_account_args(_body("brokerage", assetClasses=["stonks"]))
         with pytest.raises(ValueError, match="assetClasses must be a non-empty list"):
-            parse_new_account("brokerage", [], None, None)
+            parse_create_account_args(_body("brokerage", assetClasses=[]))
+
+    @pytest.mark.parametrize("name", [None, "", "   ", 5])
+    def test_rejects_a_bad_name(self, name: object) -> None:
+        with pytest.raises(ValueError, match="name is required"):
+            parse_create_account_args(_body("checking") | {"name": name})
+
+    def test_strips_the_name(self) -> None:
+        assert parse_create_account_args(_body("checking") | {"name": "  Chase  "}).name == "Chase"
+
+    def test_rejects_empty_owners(self) -> None:
+        with pytest.raises(ValueError, match="owners must be a non-empty list"):
+            parse_create_account_args(_body("checking") | {"owners": []})
+
+    def test_rejects_a_non_bool_excluded_flag(self) -> None:
+        with pytest.raises(ValueError, match="excludedFromNetWorth must be a boolean"):
+            parse_create_account_args(_body("checking", excludedFromNetWorth="false"))
+
+    def test_rejects_non_string_notes(self) -> None:
+        with pytest.raises(ValueError, match="notes must be a string or null"):
+            parse_create_account_args(_body("checking", notes=5))
 
 
 class TestParseLoanTerms:
