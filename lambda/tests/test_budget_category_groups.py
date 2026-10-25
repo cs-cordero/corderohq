@@ -1,5 +1,3 @@
-"""Tests for CategoryGroupTable + CategoryTable group-aware methods."""
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -45,7 +43,7 @@ class TestCategoryGroupCreate:
                 {"groupId": "g2", "name": "Essentials", "active": True, "order": 1},
             ]
         }
-        result = group_table.create("Discretionary")
+        result = group_table.create_category_group("Discretionary")
         assert result["name"] == "Discretionary"
         assert result["order"] == 2
         assert "active" not in result  # groups no longer have a lifecycle flag
@@ -53,14 +51,14 @@ class TestCategoryGroupCreate:
 
     def test_empty_name_raises(self, group_table: CategoryGroupTable) -> None:
         with pytest.raises(ValueError, match="must not be empty"):
-            group_table.create("   ")
+            group_table.create_category_group("   ")
 
     def test_duplicate_name_rejected_case_insensitive(
         self, group_table: CategoryGroupTable, group_mock: MagicMock
     ) -> None:
         group_mock.scan.return_value = {"Items": [{"groupId": "g1", "name": "Essentials", "active": True, "order": 0}]}
         with pytest.raises(ValueError, match="already exists"):
-            group_table.create("essentials")
+            group_table.create_category_group("essentials")
 
 
 class TestCategoryGroupReorder:
@@ -77,14 +75,14 @@ class TestCategoryGroupReorder:
 class TestCategoryCreateRequiresGroup:
     def test_create_with_group_id_assigns_to_group(self, cat_table: CategoryTable, cat_mock: MagicMock) -> None:
         cat_mock.scan.return_value = {"Items": []}
-        result = cat_table.create("Groceries", group_id="g1")
+        result = cat_table.create_category("Groceries", group_id="g1")
         assert result["groupId"] == "g1"
         assert result["orderInGroup"] == 0
 
     def test_create_without_group_raises(self, cat_table: CategoryTable, cat_mock: MagicMock) -> None:
         cat_mock.scan.return_value = {"Items": []}
         with pytest.raises(ValueError, match="group_id is required"):
-            cat_table.create("Groceries", group_id="")
+            cat_table.create_category("Groceries", group_id="")
 
     def test_orderInGroup_continues_from_existing_max(self, cat_table: CategoryTable, cat_mock: MagicMock) -> None:
         # Group g1 already has two cats with orderInGroup 0 and 1 — new cat gets 2.
@@ -96,7 +94,7 @@ class TestCategoryCreateRequiresGroup:
                 {"categoryId": "c3", "name": "X", "active": True, "groupId": "g2", "orderInGroup": 9},
             ]
         }
-        result = cat_table.create("New", group_id="g1")
+        result = cat_table.create_category("New", group_id="g1")
         assert result["orderInGroup"] == 2
 
 

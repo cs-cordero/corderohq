@@ -59,7 +59,7 @@ def compute_summary(
     """
 
     txns = transactions.list_for_month(year_month)
-    categories_all = category_table.list_all()
+    categories_all = category_table.get_all_categories()
     category_by_id = {c["categoryId"]: c for c in categories_all}
 
     current_ym = f"{now.year:04d}-{now.month:02d}"

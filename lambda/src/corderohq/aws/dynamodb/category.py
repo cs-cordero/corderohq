@@ -17,7 +17,7 @@ class CategoryTable:
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
-    def list_active(self) -> list[dict[str, Any]]:
+    def get_active_categories(self) -> list[dict[str, Any]]:
         """Return all active categories, sorted by name."""
 
         response = self._table.scan(
@@ -27,20 +27,20 @@ class CategoryTable:
         items: list[dict[str, Any]] = response["Items"]
         return sorted(items, key=lambda c: c["name"])
 
-    def list_all(self) -> list[dict[str, Any]]:
+    def get_all_categories(self) -> list[dict[str, Any]]:
         """Return all categories (active and inactive), sorted by name."""
 
         response = self._table.scan()
         items: list[dict[str, Any]] = response["Items"]
         return sorted(items, key=lambda c: c["name"])
 
-    def get(self, category_id: str) -> dict[str, Any] | None:
+    def get_category_by_id(self, category_id: str) -> dict[str, Any] | None:
         """Return a single category by ID, or None if not found."""
 
         response = self._table.get_item(Key={"categoryId": category_id})
         return response.get("Item")
 
-    def create(self, name: str, group_id: str) -> dict[str, Any]:
+    def create_category(self, name: str, group_id: str) -> dict[str, Any]:
         """Create a new category in `group_id`. Returns the created item."""
 
         name = name.strip()
@@ -79,7 +79,7 @@ class CategoryTable:
         if self._name_exists(name, exclude_id=category_id):
             raise ValueError(f"A category named '{name}' already exists")
 
-        existing = self.get(category_id)
+        existing = self.get_category_by_id(category_id)
         if existing is None:
             return None
 
@@ -119,7 +119,7 @@ class CategoryTable:
     def move_to_group(self, category_id: str, new_group_id: str) -> dict[str, Any] | None:
         """Move a category to a new group, appending it to the end of that group's order."""
 
-        existing = self.get(category_id)
+        existing = self.get_category_by_id(category_id)
         if existing is None:
             return None
         if existing.get("groupId") == new_group_id:
@@ -154,7 +154,7 @@ class CategoryTable:
     def deactivate(self, category_id: str) -> dict[str, Any] | None:
         """Set active=False on a category. Return the changed item, or None if it does not exist."""
 
-        if self.get(category_id) is None:
+        if self.get_category_by_id(category_id) is None:
             return None
 
         now = datetime.now(tz=UTC).isoformat()
@@ -175,7 +175,7 @@ class CategoryTable:
     def reactivate(self, category_id: str) -> dict[str, Any] | None:
         """Re-activate a deactivated category. Returns the updated item, or None if not found."""
 
-        if self.get(category_id) is None:
+        if self.get_category_by_id(category_id) is None:
             return None
 
         now = datetime.now(tz=UTC).isoformat()
@@ -196,12 +196,14 @@ class CategoryTable:
         """
 
         lower_name = name.lower()
-        return any(cat["name"].lower() == lower_name and cat["categoryId"] != exclude_id for cat in self.list_all())
+        return any(
+            cat["name"].lower() == lower_name and cat["categoryId"] != exclude_id for cat in self.get_all_categories()
+        )
 
     def _next_order_in_group(self, group_id: str) -> int:
         """Next available orderInGroup, placing new categories at the end of the group."""
 
-        cats_in_group = [c for c in self.list_all() if c.get("groupId") == group_id]
+        cats_in_group = [c for c in self.get_all_categories() if c.get("groupId") == group_id]
         if not cats_in_group:
             return 0
         return max(int(c.get("orderInGroup", 0)) for c in cats_in_group) + 1

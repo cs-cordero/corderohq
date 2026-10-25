@@ -1,12 +1,17 @@
-"""Tests for net-worth enum and validation helpers."""
+from typing import Any
 
 import pytest
 
 from corderohq.networth.models import (
     AccountType,
     AssetClass,
+    ChosenClassAccount,
+    FixedClassAccount,
+    LoanAccount,
+    LoanTerms,
     account_type_meta,
-    resolve_account_type_fields,
+    parse_loan_terms,
+    parse_new_account,
     resolve_target_year,
     validate_account_type,
     validate_asset_class,
@@ -129,46 +134,73 @@ class TestValidateAssetClasses:
             validate_asset_classes(bad)
 
 
-class TestResolveAccountTypeFields:
-    def test_derives_liability_and_forces_fixed_asset_class(self) -> None:
+_LOAN_TERMS: dict[str, Any] = {"interestRate": 0.04, "monthlyPayment": 1_000_000, "payoffYearMonth": "2030-01"}
+
+
+class TestParseNewAccount:
+    def test_fixed_class_type_ignores_client_asset_classes(self) -> None:
+        account = parse_new_account("checking", ["us_equity_large_cap"], None, None)
+        assert account == FixedClassAccount(AccountType.CHECKING, AssetClass.CASH, liability=False)
+
+    def test_chosen_class_type_keeps_the_set(self) -> None:
+        account = parse_new_account("brokerage", ["us_equity_large_cap", "intl_equity", "cash"], None, None)
+        assert account == ChosenClassAccount(
+            AccountType.BROKERAGE,
+            [AssetClass.US_EQUITY_LARGE_CAP, AssetClass.INTL_EQUITY, AssetClass.CASH],
+            target_year=None,
+        )
+
+    def test_chosen_class_type_with_target_date_needs_a_year(self) -> None:
+        account = parse_new_account("401k", ["target_date", "cash"], 2055, None)
+        assert isinstance(account, ChosenClassAccount)
+        assert account.target_year == 2055
+        with pytest.raises(ValueError, match="targetYear is required"):
+            parse_new_account("401k", ["target_date"], None, None)
+
+    def test_year_rejected_without_target_date(self) -> None:
+        with pytest.raises(ValueError, match="only allowed when target_date"):
+            parse_new_account("brokerage", ["cash"], 2055, None)
+        with pytest.raises(ValueError, match="only allowed when target_date"):
+            parse_new_account("checking", None, 2055, None)
+
+    def test_loan_type_forces_its_class_and_keeps_the_terms(self) -> None:
         # Even if the client claims equities, a mortgage's asset class is forced.
-        account_type, liability, asset_classes, loan_terms = resolve_account_type_fields(
-            "mortgage", ["us_equity_large_cap"], None
+        account = parse_new_account("mortgage", ["us_equity_large_cap"], None, _LOAN_TERMS)
+        assert account == LoanAccount(
+            AccountType.MORTGAGE, AssetClass.OTHER, LoanTerms(0.04, 1_000_000, "2030-01")
         )
-        assert account_type == "mortgage"
-        assert liability is True
-        assert asset_classes == ["other"]
-        assert loan_terms is None
 
-    def test_cash_type_ignores_client_asset_classes(self) -> None:
-        _, liability, asset_classes, _ = resolve_account_type_fields("checking", ["us_equity_large_cap"], None)
-        assert liability is False
-        assert asset_classes == ["cash"]
+    def test_loan_type_without_terms(self) -> None:
+        account = parse_new_account("other_liability", None, None, None)
+        assert isinstance(account, LoanAccount)
+        assert account.loan_terms is None
 
-    def test_choose_type_validates_and_keeps_the_set(self) -> None:
-        _, liability, asset_classes, _ = resolve_account_type_fields(
-            "brokerage", ["us_equity_large_cap", "intl_equity", "cash"], None
-        )
-        assert liability is False
-        assert asset_classes == ["us_equity_large_cap", "intl_equity", "cash"]
-
-    def test_choose_type_rejects_bad_asset_class(self) -> None:
-        with pytest.raises(ValueError, match="Invalid assetClass"):
-            resolve_account_type_fields("brokerage", ["stonks"], None)
-
-    def test_choose_type_rejects_empty_set(self) -> None:
-        with pytest.raises(ValueError, match="assetClasses must be a non-empty list"):
-            resolve_account_type_fields("brokerage", [], None)
-
-    def test_loan_terms_rejected_on_non_amortizing_type(self) -> None:
-        terms = {"interestRate": 0.04, "monthlyPayment": 1, "payoffYearMonth": "2030-01"}
+    @pytest.mark.parametrize("account_type", ["brokerage", "checking"])
+    def test_loan_terms_rejected_on_a_type_that_does_not_amortize(self, account_type: str) -> None:
         with pytest.raises(ValueError, match="only allowed on amortizing"):
-            resolve_account_type_fields("brokerage", ["us_equity_large_cap"], terms)
+            parse_new_account(account_type, ["us_equity_large_cap"], None, _LOAN_TERMS)
 
-    def test_loan_terms_allowed_on_amortizing_type(self) -> None:
-        terms = {"interestRate": 0.04, "monthlyPayment": 1_000_000, "payoffYearMonth": "2030-01"}
-        _, _, _, normalized = resolve_account_type_fields("other_liability", None, terms)
-        assert normalized == terms
+    def test_rejects_invalid_account_type(self) -> None:
+        with pytest.raises(ValueError, match="Invalid accountType"):
+            parse_new_account("chequing", ["cash"], None, None)
+
+    def test_rejects_bad_asset_class(self) -> None:
+        with pytest.raises(ValueError, match="Invalid assetClass"):
+            parse_new_account("brokerage", ["stonks"], None, None)
+
+    def test_rejects_empty_set(self) -> None:
+        with pytest.raises(ValueError, match="assetClasses must be a non-empty list"):
+            parse_new_account("brokerage", [], None, None)
+
+
+class TestParseLoanTerms:
+    def test_absent_terms_are_none(self) -> None:
+        assert parse_loan_terms(None, amortizing=True) is None
+        assert parse_loan_terms(None, amortizing=False) is None
+
+    def test_converts_the_terms(self) -> None:
+        terms = {"interestRate": 0.045, "monthlyPayment": 5, "payoffYearMonth": "2045-06"}
+        assert parse_loan_terms(terms, amortizing=True) == LoanTerms(0.045, 5, "2045-06")
 
 
 class TestTargetYear:
@@ -202,9 +234,6 @@ class TestValidateBirthYearMonth:
 
 
 class TestValidateLoanTerms:
-    def _valid(self) -> dict[str, object]:
-        return {"interestRate": 0.04875, "monthlyPayment": 2_500_000_000, "payoffYearMonth": "2045-06"}
-
     def test_none_is_allowed_and_returns_none(self) -> None:
         assert validate_loan_terms(None, amortizing=True) is None
         assert validate_loan_terms(None, amortizing=False) is None
@@ -254,3 +283,6 @@ class TestValidateLoanTerms:
         terms = self._valid()
         terms["interestRate"] = 0
         assert validate_loan_terms(terms, amortizing=True) is not None
+
+    def _valid(self) -> dict[str, object]:
+        return {"interestRate": 0.04875, "monthlyPayment": 2_500_000_000, "payoffYearMonth": "2045-06"}

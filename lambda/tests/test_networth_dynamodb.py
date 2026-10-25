@@ -5,6 +5,15 @@ from unittest.mock import MagicMock
 import pytest
 
 from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
+from corderohq.networth.models import (
+    AccountType,
+    AssetClass,
+    ChosenClassAccount,
+    FixedClassAccount,
+    LoanAccount,
+    LoanTerms,
+    NewAccount,
+)
 
 
 # Same split-fixture trick as test_budget_categories: share one MagicMock as
@@ -83,50 +92,44 @@ class TestProfileTable:
             profile.update_person("p1", birth_year_month="bad")
 
 
+_CHECKING = FixedClassAccount(AccountType.CHECKING, AssetClass.CASH, liability=False)
+
+
+def _create(accounts: AccountTable, account: NewAccount, name: str = "Chase Checking", **kwargs: Any) -> dict[str, Any]:
+    return accounts.create_account(
+        name=name,
+        owners=kwargs.get("owners", ["p1"]),
+        excluded_from_net_worth=kwargs.get("excluded_from_net_worth", False),
+        notes=kwargs.get("notes"),
+        account=account,
+    )
+
+
 class TestAccountTableCreate:
-    def test_creates_asset_account(self, accounts: AccountTable, mock: MagicMock) -> None:
+    def test_creates_fixed_class_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = accounts.create_account(
-            name="Chase Checking",
-            account_type="checking",
-            asset_classes=["cash"],
-            owners=["p1"],
-        )
+        result = _create(accounts, _CHECKING)
         assert result["name"] == "Chase Checking"
         assert result["accountType"] == "checking"
         assert result["assetClasses"] == ["cash"]
-        # liability is derived from the type, not passed in.
         assert result["liability"] is False
         assert result["owners"] == ["p1"]
-        assert result["excludedFromNetWorth"] is False  # defaults to included
+        assert result["excludedFromNetWorth"] is False
         assert result["active"] is True
         assert result["sortOrder"] == 0
-        assert "loanTerms" not in result and "notes" not in result
+        assert "loanTerms" not in result and "notes" not in result and "targetYear" not in result
         mock.put_item.assert_called_once()
 
     def test_creates_excluded_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = accounts.create_account(
-            name="Kid's 529",
-            account_type="529",
-            asset_classes=["us_equity_large_cap"],
-            owners=["p1"],
-            excluded_from_net_worth=True,
-        )
+        account = ChosenClassAccount(AccountType.PLAN_529, [AssetClass.US_EQUITY_LARGE_CAP], target_year=None)
+        result = _create(accounts, account, name="Kid's 529", excluded_from_net_worth=True)
         assert result["excludedFromNetWorth"] is True
 
-    def test_mortgage_forces_liability_and_asset_class(self, accounts: AccountTable, mock: MagicMock) -> None:
-        # Client claims equities; the type forces liability=True and assetClasses=[other].
+    def test_creates_loan_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": [{"accountId": "a0", "name": "Other", "sortOrder": 4}]}
-        loan_terms = {"interestRate": 0.045, "monthlyPayment": 2_500_000_000, "payoffYearMonth": "2045-06"}
-        result = accounts.create_account(
-            name="Mortgage",
-            account_type="mortgage",
-            asset_classes=["us_equity_large_cap"],
-            owners=["p1", "p2"],
-            loan_terms=loan_terms,
-            notes="30-year fixed",
-        )
+        account = LoanAccount(AccountType.MORTGAGE, AssetClass.OTHER, LoanTerms(0.045, 2_500_000_000, "2045-06"))
+        result = _create(accounts, account, name="Mortgage", owners=["p1", "p2"], notes="30-year fixed")
         assert result["liability"] is True
         assert result["assetClasses"] == ["other"]
         assert result["owners"] == ["p1", "p2"]
@@ -137,57 +140,28 @@ class TestAccountTableCreate:
         assert result["notes"] == "30-year fixed"
         assert result["sortOrder"] == 5  # max existing (4) + 1
 
+    def test_creates_loan_account_without_terms(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.scan.return_value = {"Items": []}
+        result = _create(accounts, LoanAccount(AccountType.OTHER_LIABILITY, AssetClass.OTHER, None), name="Loan")
+        assert "loanTerms" not in result
+
     def test_creates_target_date_with_year(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = accounts.create_account(
-            name="TDF",
-            account_type="401k",
-            asset_classes=["target_date", "cash"],
-            owners=["p1"],
-            target_year=2055,
-        )
+        account = ChosenClassAccount(AccountType.RETIREMENT_401K, [AssetClass.TARGET_DATE, AssetClass.CASH], 2055)
+        result = _create(accounts, account, name="TDF")
         assert result["assetClasses"] == ["target_date", "cash"]
+        assert result["liability"] is False
         assert result["targetYear"] == 2055
 
-    def test_target_date_requires_year(self, accounts: AccountTable, mock: MagicMock) -> None:
+    def test_rejects_empty_name(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        with pytest.raises(ValueError, match="targetYear is required"):
-            accounts.create_account(name="TDF", account_type="401k", asset_classes=["target_date"], owners=["p1"])
-
-    def test_year_rejected_without_target_date(self, accounts: AccountTable, mock: MagicMock) -> None:
-        mock.scan.return_value = {"Items": []}
-        with pytest.raises(ValueError, match="only allowed when target_date"):
-            accounts.create_account(
-                name="B", account_type="brokerage", asset_classes=["cash"], owners=["p1"], target_year=2055
-            )
-
-    def test_rejects_empty_owners(self, accounts: AccountTable, mock: MagicMock) -> None:
-        mock.scan.return_value = {"Items": []}
-        with pytest.raises(ValueError, match="owners must be a non-empty list"):
-            accounts.create_account(name="X", account_type="checking", asset_classes=["cash"], owners=[])
-
-    def test_rejects_invalid_account_type(self, accounts: AccountTable, mock: MagicMock) -> None:
-        mock.scan.return_value = {"Items": []}
-        with pytest.raises(ValueError, match="Invalid accountType"):
-            accounts.create_account(name="X", account_type="chequing", asset_classes=["cash"], owners=["p1"])
-
-    def test_rejects_loan_terms_on_non_amortizing_type(self, accounts: AccountTable, mock: MagicMock) -> None:
-        mock.scan.return_value = {"Items": []}
-        with pytest.raises(ValueError, match="only allowed on amortizing"):
-            accounts.create_account(
-                name="Brokerage",
-                account_type="brokerage",
-                asset_classes=["us_equity_large_cap"],
-                owners=["p1"],
-                loan_terms={"interestRate": 0.04, "monthlyPayment": 1, "payoffYearMonth": "2030-01"},
-            )
+        with pytest.raises(ValueError, match="must not be empty"):
+            _create(accounts, _CHECKING, name="  ")
 
     def test_rejects_duplicate_name_case_insensitive(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": [{"accountId": "a1", "name": "Chase Checking", "sortOrder": 0}]}
         with pytest.raises(ValueError, match="already exists"):
-            accounts.create_account(
-                name="chase checking", account_type="checking", asset_classes=["cash"], owners=["p1"]
-            )
+            _create(accounts, _CHECKING, name="chase checking")
 
 
 class TestAccountTableUpdate:

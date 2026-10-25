@@ -1,5 +1,3 @@
-"""Tests for CategoryTable."""
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,20 +29,20 @@ class TestListActive:
                 {"categoryId": "1", "name": "Auto", "active": True},
             ]
         }
-        result = table.list_active()
+        result = table.get_active_categories()
         assert len(result) == 2
         assert result[0]["name"] == "Auto"
         assert result[1]["name"] == "Groceries"
 
     def test_returns_empty_list_when_no_categories(self, table: CategoryTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
-        result = table.list_active()
+        result = table.get_active_categories()
         assert result == []
 
 
 class TestCreate:
     def test_creates_category_with_ulid_and_timestamps(self, table: CategoryTable, mock: MagicMock) -> None:
-        result = table.create("Groceries", group_id="g1")
+        result = table.create_category("Groceries", group_id="g1")
         assert result["name"] == "Groceries"
         assert result["active"] is True
         assert "categoryId" in result
@@ -55,16 +53,16 @@ class TestCreate:
         mock.put_item.assert_called_once()
 
     def test_strips_whitespace_from_name(self, table: CategoryTable) -> None:
-        result = table.create("  Groceries  ", group_id="g1")
+        result = table.create_category("  Groceries  ", group_id="g1")
         assert result["name"] == "Groceries"
 
     def test_raises_on_empty_name(self, table: CategoryTable) -> None:
         with pytest.raises(ValueError, match="must not be empty"):
-            table.create("", group_id="g1")
+            table.create_category("", group_id="g1")
 
     def test_raises_on_whitespace_only_name(self, table: CategoryTable) -> None:
         with pytest.raises(ValueError, match="must not be empty"):
-            table.create("   ", group_id="g1")
+            table.create_category("   ", group_id="g1")
 
 
 class TestUpdate:

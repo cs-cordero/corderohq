@@ -25,7 +25,7 @@ from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
 from corderohq.budget.editability import EditabilityState, editability
-from corderohq.networth.models import validate_asset_class
+from corderohq.networth.models import parse_new_account, validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -114,7 +114,7 @@ def _ensure_hydrated(now: datetime) -> None:
 
     densify(
         BudgetCarryStore(_BUDGET_TABLE),
-        active_category_ids(_CATEGORY_TABLE.list_all()),
+        active_category_ids(_CATEGORY_TABLE.get_all_categories()),
         _year_month_of(now),
         cold_start_value=0,
     )
@@ -257,7 +257,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 def _get_categories(event: dict[str, Any]) -> dict[str, Any]:
     include_inactive = (event.get("queryStringParameters") or {}).get("include_inactive", "")
-    categories = _CATEGORY_TABLE.list_all() if include_inactive.lower() == "true" else _CATEGORY_TABLE.list_active()
+    if include_inactive.lower() == "true":
+        categories = _CATEGORY_TABLE.get_all_categories()
+    else:
+        categories = _CATEGORY_TABLE.get_active_categories()
     return _json_response(200, json.dumps(categories, default=_json_default))
 
 
@@ -280,14 +283,14 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     group_id = body.get("groupId")
     if not isinstance(group_id, str) or not group_id:
         return _response(400, "groupId is required")
-    if _CATEGORY_GROUP_TABLE.get(group_id) is None:
+    if _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id) is None:
         return _response(400, f"groupId '{group_id}' does not exist")
 
     # Densify first. The new category then goes into a current month that is dense.
     _ensure_hydrated(now)
 
     try:
-        item = _CATEGORY_TABLE.create(name, group_id)
+        item = _CATEGORY_TABLE.create_category(name, group_id)
     except ValueError as e:
         return _response(400, str(e))
 
@@ -325,14 +328,14 @@ def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
         if item is None:
             return _response(404, "Category not found")
     else:
-        item = _CATEGORY_TABLE.get(category_id)
+        item = _CATEGORY_TABLE.get_category_by_id(category_id)
         if item is None:
             return _response(404, "Category not found")
 
     if new_group_id is not None:
         if not isinstance(new_group_id, str) or not new_group_id:
             return _response(400, "groupId must be a non-empty string")
-        if _CATEGORY_GROUP_TABLE.get(new_group_id) is None:
+        if _CATEGORY_GROUP_TABLE.get_category_group_by_id(new_group_id) is None:
             return _response(400, f"groupId '{new_group_id}' does not exist")
         item = _CATEGORY_TABLE.move_to_group(category_id, new_group_id)
 
@@ -352,7 +355,7 @@ def _deactivate_category(
     confirm = bool(body.get("confirm", False))
     explanation = (body.get("explanation") or "").strip()
 
-    if _CATEGORY_TABLE.get(category_id) is None:
+    if _CATEGORY_TABLE.get_category_by_id(category_id) is None:
         return _response(404, "Category not found")
 
     current_month = _year_month_of(now)
@@ -416,7 +419,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
     if not is_budget_admin(event, _STAGE):
         return _response(403, "Admin-only endpoint")
 
-    item = _CATEGORY_TABLE.get(category_id)
+    item = _CATEGORY_TABLE.get_category_by_id(category_id)
     if item is None:
         return _response(404, "Category not found")
 
@@ -464,7 +467,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
     if not explanation:
         return _response(400, "explanation is required")
 
-    item = _CATEGORY_TABLE.get(category_id)
+    item = _CATEGORY_TABLE.get_category_by_id(category_id)
     if item is None:
         return _response(404, "Category not found")
     if confirm_name != item["name"]:
@@ -507,7 +510,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
 
 
 def _get_category_groups() -> dict[str, Any]:
-    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.get_all_category_groups(), default=_json_default))
 
 
 def _post_category_group(event: dict[str, Any]) -> dict[str, Any]:
@@ -518,7 +521,7 @@ def _post_category_group(event: dict[str, Any]) -> dict[str, Any]:
     if not name:
         return _response(400, "name is required")
     try:
-        item = _CATEGORY_GROUP_TABLE.create(name)
+        item = _CATEGORY_GROUP_TABLE.create_category_group(name)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(201, json.dumps(item, default=_json_default))
@@ -531,7 +534,7 @@ def _put_category_group(event: dict[str, Any], group_id: str) -> dict[str, Any]:
     name = body.get("name", "")
     if not name:
         return _response(400, "name is required")
-    existing = _CATEGORY_GROUP_TABLE.get(group_id)
+    existing = _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id)
     if existing is None:
         return _response(404, "Group not found")
     if existing.get("system"):
@@ -550,13 +553,13 @@ def _delete_category_group(group_id: str) -> dict[str, Any]:
     category in the group moves to the Unassigned group.
     """
 
-    existing = _CATEGORY_GROUP_TABLE.get(group_id)
+    existing = _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id)
     if existing is None:
         return _response(404, "Group not found")
     if existing.get("system"):
         return _response(403, "System groups cannot be deleted")
 
-    cats_in_group = [c for c in _CATEGORY_TABLE.list_all() if c.get("groupId") == group_id]
+    cats_in_group = [c for c in _CATEGORY_TABLE.get_all_categories() if c.get("groupId") == group_id]
     active_blockers = [
         {"categoryId": c["categoryId"], "name": c["name"]} for c in cats_in_group if c.get("active", True)
     ]
@@ -592,7 +595,7 @@ def _post_category_groups_reorder(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(order, list) or not all(isinstance(g, str) for g in order):
         return _response(400, "'order' must be a list of groupId strings")
     _CATEGORY_GROUP_TABLE.reorder(order)
-    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.get_all_category_groups(), default=_json_default))
 
 
 def _post_categories_reorder(event: dict[str, Any]) -> dict[str, Any]:
@@ -610,10 +613,10 @@ def _post_categories_reorder(event: dict[str, Any]) -> dict[str, Any]:
         return _response(400, "'groupId' is required")
     if not isinstance(order, list) or not all(isinstance(c, str) for c in order):
         return _response(400, "'order' must be a list of categoryId strings")
-    if _CATEGORY_GROUP_TABLE.get(group_id) is None:
+    if _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id) is None:
         return _response(404, "Group not found")
     _CATEGORY_TABLE.reorder_in_group(group_id, order)
-    return _json_response(200, json.dumps(_CATEGORY_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_CATEGORY_TABLE.get_all_categories(), default=_json_default))
 
 
 # --- Budget ---
@@ -635,7 +638,7 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
     # carried values.
     targets = resolve_future_targets(
-        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.list_all()), year_month
+        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
     )
     return _json_response(200, json.dumps(targets, default=_json_default))
 
@@ -848,7 +851,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     )
 
     resolved = resolve_future_targets(
-        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.list_all()), year_month
+        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
     )
 
     return _json_response(
@@ -967,7 +970,7 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
 
     _ensure_hydrated(now)
 
-    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.list_all()}
+    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.get_all_categories()}
     validations = _validate_commit_rows(rows, valid_category_ids, override_active, now)
     invalid = [v for v in validations if v["issues"]]
     if invalid:
@@ -1072,7 +1075,7 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
         return _response(400, "No valid transactions found in CSV")
 
     # Step 3: the LLM gives a category to each row.
-    categories = _CATEGORY_TABLE.list_active()
+    categories = _CATEGORY_TABLE.get_active_categories()
     if categories:
         assignments = categorize_transactions(descriptions, categories)
         for i, assignment in enumerate(assignments):
@@ -1087,7 +1090,7 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     # Per-row pre-validation surfaces missing_category / locked_month issues so the
     # review UI can render specific annotations without round-tripping through
     # /commit just to learn what's wrong.
-    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.list_all()}
+    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.get_all_categories()}
     validations = _validate_commit_rows(parsed_transactions, valid_category_ids, override_active=False, now=now)
 
     return _json_response(
@@ -1293,12 +1296,11 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     if body is None:
         return _response(400, "Request body is required")
 
-    # `liability` and (for fixed-class types) `assetClasses` are derived from the type
-    # server-side, so they are not required inputs — only name, type, and owners are.
-    for field in ("name", "accountType"):
-        if not body.get(field):
-            return _response(400, f"{field} is required")
-
+    name = body.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return _response(400, "name is required")
+    if not body.get("accountType"):
+        return _response(400, "accountType is required")
     owners, err = _validate_owners(body.get("owners"))
     if err:
         return err
@@ -1306,17 +1308,19 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
         # _validate_owners returns a list whenever it returns no error. This check tells the type
         # checker so.
         return _response(400, "owners is required")
+    excluded = body.get("excludedFromNetWorth", False)
+    if not isinstance(excluded, bool):
+        return _response(400, "excludedFromNetWorth must be a boolean")
+    notes = body.get("notes")
+    if notes is not None and not isinstance(notes, str):
+        return _response(400, "notes must be a string or null")
 
     try:
+        account = parse_new_account(
+            body["accountType"], body.get("assetClasses"), body.get("targetYear"), body.get("loanTerms")
+        )
         item = _ACCOUNT_TABLE.create_account(
-            name=body["name"],
-            account_type=body["accountType"],
-            asset_classes=body.get("assetClasses"),
-            owners=owners,
-            excluded_from_net_worth=bool(body.get("excludedFromNetWorth", False)),
-            target_year=body.get("targetYear"),
-            loan_terms=body.get("loanTerms"),
-            notes=body.get("notes"),
+            name=name, owners=owners, excluded_from_net_worth=excluded, notes=notes, account=account
         )
     except ValueError as e:
         return _response(400, str(e))

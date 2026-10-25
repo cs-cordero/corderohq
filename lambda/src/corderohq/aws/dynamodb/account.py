@@ -3,17 +3,20 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, assert_never
 
 from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
 from corderohq.networth.models import (
+    ChosenClassAccount,
+    FixedClassAccount,
+    LoanAccount,
+    LoanTerms,
+    NewAccount,
     account_type_meta,
-    resolve_account_type_fields,
-    resolve_target_year,
+    parse_loan_terms,
     validate_asset_classes,
-    validate_loan_terms,
     validate_owners,
     validate_target_year,
 )
@@ -21,12 +24,14 @@ from corderohq.networth.models import (
 _LOGGER = logging.getLogger(__name__)
 
 
-def _loan_terms_for_storage(loan_terms: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of loanTerms with `interestRate` as a Decimal, because DynamoDB rejects floats."""
+def _loan_terms_item(terms: LoanTerms) -> dict[str, Any]:
+    """Return the stored form of loan terms. `interestRate` is a Decimal, because DynamoDB rejects floats."""
 
-    stored = dict(loan_terms)
-    stored["interestRate"] = Decimal(str(stored["interestRate"]))
-    return stored
+    return {
+        "interestRate": Decimal(str(terms.interest_rate)),
+        "monthlyPayment": terms.monthly_payment,
+        "payoffYearMonth": terms.payoff_year_month,
+    }
 
 
 class AccountTable:
@@ -37,6 +42,42 @@ class AccountTable:
         """Sort the accounts by sortOrder, and then by name. Case does not count."""
 
         return sorted(items, key=lambda a: (int(a.get("sortOrder", 0)), str(a.get("name", "")).lower()))
+
+    @staticmethod
+    def _fixed_class_fields(account: FixedClassAccount) -> dict[str, Any]:
+        """Return the stored fields of an account whose type fixes its asset class."""
+
+        return {
+            "accountType": account.account_type,
+            "assetClasses": [account.asset_class],
+            "liability": account.liability,
+        }
+
+    @staticmethod
+    def _chosen_class_fields(account: ChosenClassAccount) -> dict[str, Any]:
+        """Return the stored fields of an asset account whose asset classes the user chose."""
+
+        fields: dict[str, Any] = {
+            "accountType": account.account_type,
+            "assetClasses": list(account.asset_classes),
+            "liability": False,
+        }
+        if account.target_year is not None:
+            fields["targetYear"] = account.target_year
+        return fields
+
+    @staticmethod
+    def _loan_fields(account: LoanAccount) -> dict[str, Any]:
+        """Return the stored fields of an amortizing liability."""
+
+        fields: dict[str, Any] = {
+            "accountType": account.account_type,
+            "assetClasses": [account.asset_class],
+            "liability": True,
+        }
+        if account.loan_terms is not None:
+            fields["loanTerms"] = _loan_terms_item(account.loan_terms)
+        return fields
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -66,31 +107,20 @@ class AccountTable:
         self,
         *,
         name: str,
-        account_type: str,
-        asset_classes: list[str] | None,
         owners: list[str],
-        excluded_from_net_worth: bool = False,
-        target_year: int | None = None,
-        loan_terms: dict[str, Any] | None = None,
-        notes: str | None = None,
+        excluded_from_net_worth: bool,
+        notes: str | None,
+        account: NewAccount,
     ) -> dict[str, Any]:
         """Create an account, and return the stored item.
 
-        The account type decides `liability`, the asset classes when the type fixes them, and
-        whether loan terms are permitted. Raise ValueError for invalid input or a duplicate name.
-        The caller checks that each owner exists.
+        `account` holds the fields that depend on the account type. Raise ValueError for an empty
+        or duplicate name. The caller checks that each owner exists.
         """
 
         name = name.strip()
         if not name:
             raise ValueError("Account name must not be empty")
-        account_type, liability, asset_classes, normalized_loan_terms = resolve_account_type_fields(
-            account_type, asset_classes, loan_terms
-        )
-        normalized_owners = validate_owners(owners)
-        if not isinstance(excluded_from_net_worth, bool):
-            raise ValueError("excludedFromNetWorth must be a boolean")
-        resolved_target_year = resolve_target_year(asset_classes, target_year)
         if self._name_exists(name):
             raise ValueError(f"An account named '{name}' already exists")
 
@@ -98,24 +128,24 @@ class AccountTable:
         item: dict[str, Any] = {
             "accountId": str(ULID()),
             "name": name,
-            "accountType": account_type,
-            "assetClasses": asset_classes,
-            "liability": liability,
-            "owners": normalized_owners,
+            "owners": owners,
             "excludedFromNetWorth": excluded_from_net_worth,
             "active": True,
             "sortOrder": self._next_sort_order(),
             "createdAt": now,
             "updatedAt": now,
         }
-        # Optional fields are omitted (not stored as null) when absent, so a row
-        # only carries what was actually asserted.
-        if resolved_target_year is not None:
-            item["targetYear"] = resolved_target_year
-        if normalized_loan_terms is not None:
-            item["loanTerms"] = _loan_terms_for_storage(normalized_loan_terms)
         if notes is not None:
             item["notes"] = notes
+        match account:
+            case FixedClassAccount():
+                item.update(self._fixed_class_fields(account))
+            case ChosenClassAccount():
+                item.update(self._chosen_class_fields(account))
+            case LoanAccount():
+                item.update(self._loan_fields(account))
+            case _:
+                assert_never(account)
 
         self._table.put_item(Item=item)
         _LOGGER.info("Created account: %s (%s)", item["name"], item["accountId"])
@@ -175,10 +205,10 @@ class AccountTable:
             if updates["loanTerms"] is None:
                 remove_parts.append("loanTerms")
             else:
-                normalized = validate_loan_terms(updates["loanTerms"], amortizing=meta.amortizing)
-                if normalized is not None:  # always true for a non-None input; narrows the type
+                terms = parse_loan_terms(updates["loanTerms"], amortizing=meta.amortizing)
+                if terms is not None:  # always true for a non-None input; narrows the type
                     set_parts.append("loanTerms = :lt")
-                    values[":lt"] = _loan_terms_for_storage(normalized)
+                    values[":lt"] = _loan_terms_item(terms)
         if "notes" in updates:
             if updates["notes"] is None:
                 remove_parts.append("notes")

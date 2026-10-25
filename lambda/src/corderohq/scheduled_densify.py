@@ -33,7 +33,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         rows_written = densify(
             BudgetCarryStore(_BUDGET_TABLE),
-            active_category_ids(_CATEGORY_TABLE.list_all()),
+            active_category_ids(_CATEGORY_TABLE.get_all_categories()),
             current_ym,
             cold_start_value=0,
         )

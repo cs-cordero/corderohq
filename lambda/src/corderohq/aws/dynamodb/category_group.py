@@ -17,7 +17,7 @@ class CategoryGroupTable:
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
-    def list_all(self) -> list[dict[str, Any]]:
+    def get_all_category_groups(self) -> list[dict[str, Any]]:
         """Return all groups (active + inactive), sorted by order then name."""
 
         response = self._table.scan()
@@ -26,11 +26,11 @@ class CategoryGroupTable:
         # therefore stays in place when the user changes the order of the other groups.
         return sorted(items, key=lambda g: (bool(g.get("system", False)), int(g.get("order", 0)), g["name"]))
 
-    def get(self, group_id: str) -> dict[str, Any] | None:
+    def get_category_group_by_id(self, group_id: str) -> dict[str, Any] | None:
         response = self._table.get_item(Key={"groupId": group_id})
         return response.get("Item")
 
-    def create(self, name: str, system: bool = False) -> dict[str, Any]:
+    def create_category_group(self, name: str, system: bool = False) -> dict[str, Any]:
         """Create a group, and return it.
 
         A `system` group cannot be renamed or deleted. Raise ValueError for an empty or duplicate name.
@@ -61,10 +61,10 @@ class CategoryGroupTable:
         It holds the inactive categories whose group was deleted.
         """
 
-        for g in self.list_all():
+        for g in self.get_all_category_groups():
             if g.get("system"):
                 return g
-        return self.create("Unassigned", system=True)
+        return self.create_category_group("Unassigned", system=True)
 
     def update(self, group_id: str, name: str) -> dict[str, Any] | None:
         name = name.strip()
@@ -72,7 +72,7 @@ class CategoryGroupTable:
             raise ValueError("Group name must not be empty")
         if self._name_exists(name, exclude_id=group_id):
             raise ValueError(f"A group named '{name}' already exists")
-        if self.get(group_id) is None:
+        if self.get_category_group_by_id(group_id) is None:
             return None
         now = datetime.now(tz=UTC).isoformat()
         response = self._table.update_item(
@@ -116,12 +116,14 @@ class CategoryGroupTable:
         """
 
         lower_name = name.lower()
-        return any(g["name"].lower() == lower_name and g["groupId"] != exclude_id for g in self.list_all())
+        return any(
+            g["name"].lower() == lower_name and g["groupId"] != exclude_id for g in self.get_all_category_groups()
+        )
 
     def _next_order(self) -> int:
         """Return the next order value for a group that is not a system group."""
 
-        regular = [g for g in self.list_all() if not g.get("system")]
+        regular = [g for g in self.get_all_category_groups() if not g.get("system")]
         if not regular:
             return 0
         return max(int(g.get("order", 0)) for g in regular) + 1

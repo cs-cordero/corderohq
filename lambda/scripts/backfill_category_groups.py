@@ -1,22 +1,3 @@
-"""Ongoing migration: ensure the "Unassigned" sentinel group exists and any orphaned
-categories (no `groupId`) get assigned to it.
-
-CP12 introduced category groups. After the initial bootstrap, `POST /api/categories`
-requires a `groupId`, so fresh categories can't be created without one through the
-API. This script's remaining job:
-
-1. Idempotently create the "Unassigned" sentinel group (`system: true`) if missing.
-2. Sweep any Category row that lacks a `groupId` into Unassigned. (Shouldn't happen
-   organically — guards against direct DB writes / pre-CP12 leftovers.)
-
-The original General-group bootstrap was removed once the initial migration ran;
-new categories are placed in user-chosen groups at create time.
-
-Usage:
-    uv run python lambda/scripts/backfill_category_groups.py --stage dev
-    uv run python lambda/scripts/backfill_category_groups.py --stage prod
-"""
-
 import argparse
 from datetime import UTC, datetime
 from typing import Any
@@ -58,7 +39,7 @@ def backfill(stage: str, dry_run: bool) -> None:
     now = datetime.now(tz=UTC).isoformat()
 
     # 1. Ensure the "Unassigned" sentinel exists. The backend blocks rename/delete on
-    # system groups, and `list_all()` always sorts them last.
+    # system groups, and `get_all_category_groups()` always sorts them last.
     if unassigned is None:
         unassigned = {
             "groupId": str(ULID()),
@@ -99,7 +80,16 @@ def backfill(stage: str, dry_run: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Make sure that the "Unassigned" group exists, and move each category with no groupId into it.
+
+    The script is safe to run again.
+
+    Usage:
+        uv run python lambda/scripts/backfill_category_groups.py --stage dev
+        uv run python lambda/scripts/backfill_category_groups.py --stage prod
+    """
+
+    parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--stage", required=True, choices=("dev", "prod"))
     parser.add_argument("--dry-run", action="store_true", help="Print what would be written without writing")
     args = parser.parse_args()
