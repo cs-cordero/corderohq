@@ -4,8 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
-from corderohq.networth.models import (
+from corderohq.accounts import (
     AccountType,
     AssetClass,
     ChosenClassAccount,
@@ -14,6 +13,7 @@ from corderohq.networth.models import (
     LoanTerms,
     NewAccount,
 )
+from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
 
 
 # Same split-fixture trick as test_budget_categories: share one MagicMock as

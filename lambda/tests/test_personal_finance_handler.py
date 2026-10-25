@@ -16,7 +16,7 @@ os.environ.setdefault("NETWORTH_SNAPSHOT_TABLE_NAME", "test-NetWorthSnapshot")
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
-from corderohq.networth.models import AccountType, AssetClass, FixedClassAccount
+from corderohq.accounts import AccountType, AssetClass, FixedClassAccount
 from corderohq.personal_finance_handler import handler
 
 # Stable "now" used across editability-sensitive tests: June 15, 2026 noon UTC.

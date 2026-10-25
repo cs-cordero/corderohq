@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from corderohq.accounts import parse_new_account, validate_asset_class
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -25,7 +26,6 @@ from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
 from corderohq.budget.editability import EditabilityState, editability
-from corderohq.networth.models import parse_new_account, validate_asset_class
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 

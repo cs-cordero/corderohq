@@ -39,7 +39,7 @@ from zoneinfo import ZoneInfo
 
 import boto3
 
-from corderohq.networth.models import AssetClass, validate_asset_class
+from corderohq.accounts import AssetClass, validate_asset_class
 
 _BUDGET_TZ = ZoneInfo("America/New_York")
 # Friendly labels → enum codes (plus each code maps to itself), matched case-insensitively.

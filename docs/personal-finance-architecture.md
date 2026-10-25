@@ -55,7 +55,9 @@ lambda/src/corderohq/
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
     budget/editability.py  The editability state function
     budget/auth.py         Admin group check
-    networth/              Net worth models and snapshot logic
+    accounts/              Account types, the type rules, and the parse of a new account;
+                           the budget and the net worth record both use them
+    networth/              Profile keys and the snapshot logic of the net worth record
     aws/dynamodb/          One file for each DynamoDB table; __init__.py exports every name
         util.py            The shared boto3 resource, the budget time zone, scan_pages(), query_pages()
         summary.py         compute_summary()
@@ -229,7 +231,7 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 | Account-{stage}          | accountId             | —          | accountType, liability,    |
 |                          |                       |            | assetClasses, owners,      |
 |                          |                       |            | active, sortOrder, and     |
-|                          |                       |            | more. See networth/models. |
+|                          |                       |            | more. See accounts/.       |
 |                          |                       |            | For the CSV import:        |
 |                          |                       |            | budgetRole (SPENDING /     |
 |                          |                       |            | HOLDING; absent means the  |

@@ -7,8 +7,7 @@ from typing import Any, assert_never
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
-from corderohq.networth.models import (
+from corderohq.accounts import (
     ChosenClassAccount,
     FixedClassAccount,
     LoanAccount,
@@ -20,6 +19,7 @@ from corderohq.networth.models import (
     validate_owners,
     validate_target_year,
 )
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
 
 _LOGGER = logging.getLogger(__name__)
 
