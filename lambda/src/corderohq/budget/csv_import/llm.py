@@ -1,5 +1,3 @@
-"""An LLM reads a CSV file, and it gives a category to each transaction."""
-
 import json
 import logging
 from typing import Any
@@ -57,6 +55,7 @@ def _get_api_key() -> str:
 
 def _call_claude(api_key: str, system: str, user_text: str) -> str:
     """Call Claude Haiku and return the text response."""
+
     client = anthropic.Anthropic(api_key=api_key)
 
     prompt = TextBlockParam(type="text", text=user_text)
@@ -82,10 +81,11 @@ def _call_claude(api_key: str, system: str, user_text: str) -> str:
 
 
 def map_columns(headers: list[str], sample_rows: list[list[str]]) -> dict[str, Any]:
-    """Use Claude to identify which CSV columns are date, description, and amount.
+    """Ask Claude which CSV columns hold the date, the description, and the amount.
 
-    Returns a dict with keys: date, description, amount, and optionally amount_invert.
+    Return a dict with the keys `date`, `description`, and `amount`, and optionally `amount_invert`.
     """
+
     api_key = _get_api_key()
 
     csv_preview = ",".join(headers) + "\n"
@@ -103,14 +103,11 @@ def categorize_transactions(
     descriptions: list[str],
     categories: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Use Claude to assign categories to transaction descriptions.
+    """Ask Claude for the best category of each transaction description.
 
-    Args:
-        descriptions: list of transaction description strings
-        categories: list of category dicts with categoryId and name
-
-    Returns a list of dicts with index, categoryId, categoryName.
+    Return one dict for each description, in order, with `index`, `categoryId`, and `categoryName`.
     """
+
     api_key = _get_api_key()
 
     category_lines = "\n".join(f"- {c['name']} (categoryId: {c['categoryId']})" for c in categories)

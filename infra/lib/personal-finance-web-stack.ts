@@ -53,7 +53,7 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
  * - CloudWatch alarm (prod stage only): personal-finance-handler-prod-errors → shared alert topic
  * - CloudWatch alarm (prod stage only): budget-scheduled-densify-prod-errors → shared alert topic
  * - API Gateway HTTP API: personal-finance-api-{stage} (Cognito JWT authorizer)
- * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /pin), /api/transactions (+ /upload, /commit, /update, /delete), /api/summary, /api/audit-log, /api/profile (+ /people, /people/{personId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
+ * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /pin), /api/transactions (+ /upload, /commit, /update, /delete), /api/summary, /api/audit-log, /api/profiles (GET / POST, + /{profileId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
  * - S3 bucket: personal-finance-assets-{stage}-{account}-{region} (frontend assets)
  * - CloudFront distribution: S3 origin (frontend) + API Gateway origin (/api/*) + Cognito proxy (/oauth2/*)
  * - Route 53 A record: {stage domain} → CloudFront
@@ -323,10 +323,9 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             { path: "/api/audit-log", methods: [apigatewayv2.HttpMethod.GET] },
 
             // Household profile (net worth)
-            { path: "/api/profile", methods: [apigatewayv2.HttpMethod.GET] },
-            { path: "/api/profile/people", methods: [apigatewayv2.HttpMethod.POST] },
-            { path: "/api/profile/people/{personId}", methods: [apigatewayv2.HttpMethod.PUT] },
-            { path: "/api/profile/people/{personId}/delete", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/profiles", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST] },
+            { path: "/api/profiles/{profileId}", methods: [apigatewayv2.HttpMethod.PUT] },
+            { path: "/api/profiles/{profileId}/delete", methods: [apigatewayv2.HttpMethod.POST] },
 
             // Accounts (net worth)
             { path: "/api/accounts", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST] },

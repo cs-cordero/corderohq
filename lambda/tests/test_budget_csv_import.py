@@ -1,5 +1,3 @@
-"""Tests for LLM-powered CSV import."""
-
 import json
 import os
 from unittest.mock import MagicMock, patch
@@ -11,6 +9,7 @@ from corderohq.budget.csv_import import categorize_transactions, map_columns
 
 def _mock_claude_response(text: str) -> MagicMock:
     """Create a mock Claude API response with the given text."""
+
     from anthropic.types import TextBlock
 
     mock_block = MagicMock(spec=TextBlock)
@@ -22,8 +21,8 @@ def _mock_claude_response(text: str) -> MagicMock:
 
 
 class TestMapColumns:
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_returns_column_mapping(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
@@ -40,8 +39,8 @@ class TestMapColumns:
         assert result["description"] == "Description"
         assert result["amount"] == "Amount"
 
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_handles_amount_invert_flag(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
@@ -61,8 +60,8 @@ class TestMapColumns:
 
 
 class TestCategorizeTransactions:
-    @patch("corderohq.budget.csv_import.get_ssm_param", return_value="sk-ant-test")
-    @patch("corderohq.budget.csv_import.anthropic.Anthropic")
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
     def test_returns_category_assignments(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client

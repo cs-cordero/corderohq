@@ -1,5 +1,3 @@
-"""Tests for TransactionsTable."""
-
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,14 +28,14 @@ class TestList:
                 {"yearMonth": "2026-03", "sortId": "2026-03-01#abc", "description": "Coffee"},
             ]
         }
-        result = table.list_for_month("2026-03")
+        result = table.list_transactions_for_month("2026-03")
         assert len(result) == 1
         assert result[0]["description"] == "Coffee"
 
 
 class TestCreate:
     def test_creates_transaction_with_sort_id(self, table: TransactionsTable, mock: MagicMock) -> None:
-        result = table.create(
+        result = table.create_transaction(
             year_month="2026-03",
             transaction_date="2026-03-15",
             description="Grocery store",
@@ -53,7 +51,7 @@ class TestCreate:
 
     def test_raises_on_empty_description(self, table: TransactionsTable) -> None:
         with pytest.raises(ValueError, match="must not be empty"):
-            table.create("2026-03", "2026-03-15", "", 100, "cat1")
+            table.create_transaction("2026-03", "2026-03-15", "", 100, "cat1")
 
 
 class TestUpdate:
@@ -64,19 +62,19 @@ class TestUpdate:
         mock.update_item.return_value = {
             "Attributes": {"yearMonth": "2026-03", "sortId": "2026-03-15#abc", "description": "New"}
         }
-        result = table.update("2026-03", "2026-03-15#abc", {"description": "New"})
+        result = table.update_transaction("2026-03", "2026-03-15#abc", {"description": "New"})
         assert result is not None
         assert result["description"] == "New"
 
     def test_returns_none_when_not_found(self, table: TransactionsTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
-        result = table.update("2026-03", "nonexistent", {"description": "New"})
+        result = table.update_transaction("2026-03", "nonexistent", {"description": "New"})
         assert result is None
 
     def test_returns_existing_when_no_updates(self, table: TransactionsTable, mock: MagicMock) -> None:
         existing = {"yearMonth": "2026-03", "sortId": "2026-03-15#abc", "description": "Same"}
         mock.get_item.return_value = {"Item": existing}
-        result = table.update("2026-03", "2026-03-15#abc", {})
+        result = table.update_transaction("2026-03", "2026-03-15#abc", {})
         assert result == existing
         mock.update_item.assert_not_called()
 
@@ -84,12 +82,36 @@ class TestUpdate:
 class TestDelete:
     def test_deletes_existing_transaction(self, table: TransactionsTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {"Item": {"yearMonth": "2026-03", "sortId": "2026-03-15#abc"}}
-        result = table.delete("2026-03", "2026-03-15#abc")
+        result = table.delete_transaction("2026-03", "2026-03-15#abc")
         assert result is True
         mock.delete_item.assert_called_once()
 
     def test_returns_false_when_not_found(self, table: TransactionsTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
-        result = table.delete("2026-03", "nonexistent")
+        result = table.delete_transaction("2026-03", "nonexistent")
         assert result is False
         mock.delete_item.assert_not_called()
+
+
+class TestRowsForCategory:
+    def test_returns_the_keys_from_every_page(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.scan.side_effect = [
+            {"Items": [{"yearMonth": "2026-03", "sortId": "a"}], "LastEvaluatedKey": {"k": "v"}},
+            {"Items": [{"yearMonth": "2026-04", "sortId": "b"}]},
+        ]
+        assert table.get_rows_for_category("cat1") == [
+            {"yearMonth": "2026-03", "sortId": "a"},
+            {"yearMonth": "2026-04", "sortId": "b"},
+        ]
+        assert mock.scan.call_args.kwargs["ExpressionAttributeValues"] == {":cid": "cat1"}
+
+    def test_delete_all_deletes_each_row(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.scan.return_value = {"Items": [{"yearMonth": "2026-03", "sortId": "a"}]}
+        batch = mock.batch_writer.return_value.__enter__.return_value
+        assert table.delete_all_transactions_for_category("cat1") == 1
+        batch.delete_item.assert_called_once_with(Key={"yearMonth": "2026-03", "sortId": "a"})
+
+    def test_delete_all_with_no_rows_writes_nothing(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.scan.return_value = {"Items": []}
+        assert table.delete_all_transactions_for_category("cat1") == 0
+        mock.batch_writer.assert_not_called()

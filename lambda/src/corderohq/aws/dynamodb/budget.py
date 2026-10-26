@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
+from corderohq.budget.densify import DenseSparseStore, StoredValue
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class BudgetTable:
+    """Monthly budget target management."""
+
+    def __init__(self, table_name: str) -> None:
+        self._table = DYNAMO_RESOURCE.Table(table_name)
+
+    def get_budget_targets(self, year_month: str) -> list[dict[str, Any]]:
+        """Get all budget targets for a given month (YYYY-MM)."""
+
+        return query_all_items(
+            self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
+        )
+
+    def set_all_budget_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Set the budget targets for one month. This writes over every target in that month."""
+
+        existing = self.get_budget_targets(year_month)
+        with self._table.batch_writer() as batch:
+            for item in existing:
+                batch.delete_item(Key={"yearMonth": year_month, "categoryId": item["categoryId"]})
+
+        items: list[dict[str, Any]] = []
+        with self._table.batch_writer() as batch:
+            for target in targets:
+                item: dict[str, Any] = {
+                    "yearMonth": year_month,
+                    "categoryId": target["categoryId"],
+                    "amount": target["amount"],
+                }
+                batch.put_item(Item=item)
+                items.append(item)
+
+        _LOGGER.info("Set %d targets for %s", len(items), year_month)
+        return items
+
+    def scan(self) -> list[dict[str, Any]]:
+        """Return every row in the table."""
+
+        return scan_all_items(self._table)
+
+    def set_single_budget_target(self, year_month: str, category_id: str, amount: Any) -> None:
+        """Write one budget row."""
+
+        self._table.put_item(
+            Item={"yearMonth": year_month, "categoryId": category_id, "amount": amount},
+        )
+
+    def delete_single_budget_target(self, year_month: str, category_id: str) -> None:
+        """Delete one budget row."""
+
+        self._table.delete_item(Key={"yearMonth": year_month, "categoryId": category_id})
+
+    def get_rows_for_category(self, category_id: str) -> list[dict[str, Any]]:
+        """Return the key of every Budget row that names this categoryId, in all months."""
+
+        return scan_all_items(
+            self._table,
+            FilterExpression="categoryId = :cid",
+            ExpressionAttributeValues={":cid": category_id},
+            ProjectionExpression="yearMonth, categoryId",
+        )
+
+    def delete_all_for_category(self, category_id: str) -> int:
+        """Delete every Budget row that names this categoryId. Return the number of deleted rows."""
+
+        keys = [
+            {"yearMonth": str(row["yearMonth"]), "categoryId": str(row["categoryId"])}
+            for row in self.get_rows_for_category(category_id)
+        ]
+        if not keys:
+            return 0
+        with self._table.batch_writer() as batch:
+            for key in keys:
+                batch.delete_item(Key=key)
+        _LOGGER.info("Hard-deleted %d Budget rows for category %s", len(keys), category_id)
+        return len(keys)
+
+
+class BudgetDensifyAdapter(DenseSparseStore):
+    """Implements the DenseSparseStore protocol for the BudgetTable class."""
+
+    def __init__(self, budget_table: BudgetTable) -> None:
+        self._budget_table = budget_table
+
+    def scan_stored_values(self) -> list[StoredValue]:
+        """Return every Budget row as `(yearMonth, categoryId, amount)`."""
+
+        return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan()]
+
+    def put_stored_value(self, year_month: str, key: str, value: Any) -> None:
+        """Write one Budget row."""
+
+        self._budget_table.set_single_budget_target(year_month, key, value)

@@ -1,5 +1,3 @@
-"""API Gateway Lambda handler for the personal finance app."""
-
 import base64
 import csv
 import io
@@ -9,9 +7,18 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from corderohq.accounts import (
+    Keep,
+    SetTo,
+    parse_create_account_args,
+    parse_update_account_args,
+    validate_asset_class,
+)
 from corderohq.aws.dynamodb import (
     AccountTable,
-    AuditLogTable,
+    AuditAction,
+    BudgetAuditLogTable,
+    BudgetDensifyAdapter,
     BudgetTable,
     CategoryGroupTable,
     CategoryTable,
@@ -23,8 +30,7 @@ from corderohq.aws.dynamodb import (
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
-from corderohq.budget.editability import editability
-from corderohq.networth.models import validate_asset_class
+from corderohq.budget.editability import EditabilityState, editability
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -34,7 +40,7 @@ _CATEGORY_GROUP_TABLE = CategoryGroupTable(get_env_var("CATEGORY_GROUP_TABLE_NAM
 _CATEGORY_TABLE = CategoryTable(get_env_var("CATEGORY_TABLE_NAME"))
 _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
 _TRANSACTIONS_TABLE = TransactionsTable(get_env_var("TRANSACTIONS_TABLE_NAME"))
-_AUDIT_LOG_TABLE = AuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
+_AUDIT_LOG_TABLE = BudgetAuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
 _PROFILE_TABLE = ProfileTable(get_env_var("PROFILE_TABLE_NAME"))
 _ACCOUNT_TABLE = AccountTable(get_env_var("ACCOUNT_TABLE_NAME"))
 _NETWORTH_SNAPSHOT_TABLE = NetWorthSnapshotTable(get_env_var("NETWORTH_SNAPSHOT_TABLE_NAME"))
@@ -50,6 +56,7 @@ _SECURITY_HEADERS = {
 
 def _now_utc() -> datetime:
     """Return the real UTC time. This sits in its own function so a test can replace it."""
+
     return datetime.now(tz=UTC)
 
 
@@ -57,34 +64,19 @@ _BUDGET_TZ = ZoneInfo("America/New_York")
 
 
 def _year_month_of(now: datetime) -> str:
-    """Return the year-month string, in BUDGET_TZ (America/New_York).
+    """Return the year-month of `now` in ET, because the budget month changes at midnight ET."""
 
-    The budget rolls over at midnight ET on the 1st, per the architecture spec.
-    Using the UTC year/month would put the rollover a few hours early for the
-    east-of-UTC perspective (e.g. midnight UTC on Aug 1 is still July 31 8pm ET).
-    Convert to ET first so the answer matches editability's clock.
-    """
     et = now.astimezone(_BUDGET_TZ)
     return f"{et.year:04d}-{et.month:02d}"
 
 
 def _resolve_now(event: dict[str, Any]) -> datetime:
-    """Return the "now" that this one request must use.
+    """Return the "now" of this request.
 
-    Honors `X-Simulated-Date` in non-prod stages so dev users can simulate
-    viewing the app at a different date (rollover, lock, future-pin testing).
-    Prod stages ignore the header entirely.
-
-    Simulated dates in the **past** are rejected: densification cold-starts at
-    the simulated year-month and would write spurious `$0` rows that linger as
-    historical data once the sim is cleared. Future-only keeps the data model
-    consistent with the "time only moves forward" invariant.
-
-    Accepts ISO-8601 date (`2026-12-15`) or datetime (`2026-12-15T10:00:00Z`).
-    Date-only values are anchored at noon UTC. Invalid or past values are
-    logged and ignored — we fall back to real time rather than erroring the
-    request.
+    Outside prod, the `X-Simulated-Date` header can set a future date, as an ISO-8601 date or datetime. A date gets the
+    time noon UTC. A past or invalid value is ignored, because a past date would write wrong rows.
     """
+
     if _STAGE != "prod":
         headers = event.get("headers") or {}
         raw = headers.get("x-simulated-date") or headers.get("X-Simulated-Date")
@@ -120,18 +112,22 @@ def _resolve_now(event: dict[str, Any]) -> datetime:
 
 
 def _ensure_hydrated(now: datetime) -> None:
-    """Densify each month, up to and including the year-month of `now`.
+    """Make each month dense, up to and including the year-month of `now`.
 
-    Idempotent and cheap when the table is already current — densify scans and
-    returns 0 writes. Called at the top of every handler whose correctness
-    depends on dense rows for past/current months (reads, /replace, /pin,
-    category create). See docs/personal-finance-architecture.md "Densification".
+    Call this before any work that needs the dense rows of past and current months.
     """
-    densify(_BUDGET_TABLE, _CATEGORY_TABLE, _year_month_of(now))
+
+    densify(
+        BudgetDensifyAdapter(_BUDGET_TABLE),
+        [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()],
+        _year_month_of(now),
+        cold_start_value=0,
+    )
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     """Route API Gateway HTTP API requests."""
+
     try:
         # Work out the effective "now" one time here, and pass it to every handler that
         # needs it. In dev it obeys the X-Simulated-Date header. In prod it always uses the
@@ -215,16 +211,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _get_audit_log(event)
 
         # Household profile (net worth)
-        elif path == "/api/profile" and method == "GET":
-            return _get_profile()
-        elif path == "/api/profile/people" and method == "POST":
-            return _post_person(event)
-        elif path.startswith("/api/profile/people/") and path.endswith("/delete") and method == "POST":
-            person_id = path.split("/")[-2]
-            return _delete_person(person_id)
-        elif path.startswith("/api/profile/people/") and method == "PUT":
-            person_id = path.split("/")[-1]
-            return _put_person(event, person_id)
+        elif path == "/api/profiles" and method == "GET":
+            return _get_profiles()
+        elif path == "/api/profiles" and method == "POST":
+            return _post_profile(event)
+        elif path.startswith("/api/profiles/") and path.endswith("/delete") and method == "POST":
+            profile_id = path.split("/")[-2]
+            return _delete_profile(profile_id)
+        elif path.startswith("/api/profiles/") and method == "PUT":
+            profile_id = path.split("/")[-1]
+            return _put_profile(event, profile_id)
 
         # Accounts (net worth)
         elif path == "/api/accounts" and method == "GET":
@@ -266,7 +262,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
 def _get_categories(event: dict[str, Any]) -> dict[str, Any]:
     include_inactive = (event.get("queryStringParameters") or {}).get("include_inactive", "")
-    categories = _CATEGORY_TABLE.list_all() if include_inactive.lower() == "true" else _CATEGORY_TABLE.list_active()
+    if include_inactive.lower() == "true":
+        categories = _CATEGORY_TABLE.get_all_categories()
+    else:
+        categories = _CATEGORY_TABLE.get_active_categories()
     return _json_response(200, json.dumps(categories, default=_json_default))
 
 
@@ -289,21 +288,21 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     group_id = body.get("groupId")
     if not isinstance(group_id, str) or not group_id:
         return _response(400, "groupId is required")
-    if _CATEGORY_GROUP_TABLE.get(group_id) is None:
+    if _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id) is None:
         return _response(400, f"groupId '{group_id}' does not exist")
 
     # Densify first. The new category then goes into a current month that is dense.
     _ensure_hydrated(now)
 
     try:
-        item = _CATEGORY_TABLE.create(name, group_id)
+        item = _CATEGORY_TABLE.create_category(name, group_id)
     except ValueError as e:
         return _response(400, str(e))
 
     # A new category appears in the current month at once, so that a summary of the kind
     # Spec 1 describes shows it. A walk-back from a later month then finds initialTarget,
     # until the user pins a different amount. See "Category lifecycle" in the architecture.
-    _BUDGET_TABLE.put_single(_year_month_of(now), item["categoryId"], initial_target)
+    _BUDGET_TABLE.set_single_budget_target(_year_month_of(now), item["categoryId"], initial_target)
 
     return _json_response(201, json.dumps(item, default=_json_default))
 
@@ -311,11 +310,9 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
 def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
     """Rename a category, move it to a different group, or do both.
 
-    Body: `{name?: string, groupId?: string}`. At least one must be present.
-    `name` triggers the nameHistory append behavior (see CategoryTable.update);
-    `groupId` moves the category to the new group, placing it at the end of
-    that group's order.
+    The body is `{name?, groupId?}`, with at least one key. A moved category goes to the end of its new group.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -330,20 +327,20 @@ def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
         if not name:
             return _response(400, "name must not be empty")
         try:
-            item = _CATEGORY_TABLE.update(category_id, name)
+            item = _CATEGORY_TABLE.update_category(category_id, name)
         except ValueError as e:
             return _response(400, str(e))
         if item is None:
             return _response(404, "Category not found")
     else:
-        item = _CATEGORY_TABLE.get(category_id)
+        item = _CATEGORY_TABLE.get_category_by_id(category_id)
         if item is None:
             return _response(404, "Category not found")
 
     if new_group_id is not None:
         if not isinstance(new_group_id, str) or not new_group_id:
             return _response(400, "groupId must be a non-empty string")
-        if _CATEGORY_GROUP_TABLE.get(new_group_id) is None:
+        if _CATEGORY_GROUP_TABLE.get_category_group_by_id(new_group_id) is None:
             return _response(400, f"groupId '{new_group_id}' does not exist")
         item = _CATEGORY_TABLE.move_to_group(category_id, new_group_id)
 
@@ -353,25 +350,22 @@ def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
 def _deactivate_category(
     event: dict[str, Any], category_id: str, user: dict[str, str], now: datetime
 ) -> dict[str, Any]:
-    """Set a category to inactive. On a confirmation, delete its future pin rows.
+    """Set a category to inactive.
 
-    Two-phase: without `confirm: true` in the body, returns the list of future months
-    that have pin rows for this category (so the UI can prompt the user). With
-    `confirm: true`, deletes those pin rows and writes one UNPIN audit entry per drop.
-
-    The architecture treats "deactivation itself" as not audited (no DEACTIVATE event)
-    but the UNPIN entries on dropped pins ARE recorded so the budget-target log stays
-    complete. See docs/personal-finance-architecture.md "Audit scope".
+    Without `confirm: true`, return the future months that have pins for the category, and change nothing. With
+    `confirm: true`, deactivate it, delete those pins, and write one UNPIN audit entry for each pin.
     """
+
     body = _parse_json_body(event) or {}
     confirm = bool(body.get("confirm", False))
     explanation = (body.get("explanation") or "").strip()
 
-    if _CATEGORY_TABLE.get(category_id) is None:
+    if _CATEGORY_TABLE.get_category_by_id(category_id) is None:
         return _response(404, "Category not found")
 
     current_month = _year_month_of(now)
-    affected_months = _BUDGET_TABLE.find_future_months_with_category(category_id, current_month)
+    rows = _BUDGET_TABLE.get_rows_for_category(category_id)
+    affected_months = sorted({row["yearMonth"] for row in rows if row["yearMonth"] > current_month})
 
     if affected_months and not confirm:
         # Return affectedMonths, so that the UI can show a confirmation box. Change nothing yet.
@@ -392,13 +386,13 @@ def _deactivate_category(
     # Delete the pin rows and write the audit entries before the active flag changes. The
     # audit trail then holds the amounts that were there before.
     for month in affected_months:
-        existing = _BUDGET_TABLE.get_targets(month)
+        existing = _BUDGET_TABLE.get_budget_targets(month)
         old_amount = next((t["amount"] for t in existing if t["categoryId"] == category_id), None)
-        _BUDGET_TABLE.delete_single(month, category_id)
+        _BUDGET_TABLE.delete_single_budget_target(month, category_id)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
             category_id=category_id,
-            action="UNPIN",
+            action=AuditAction.UNPIN,
             explanation=explanation,
             user=user,
             changes={"amount": {"before": old_amount, "after": None}},
@@ -419,13 +413,11 @@ def _reactivate_category(category_id: str) -> dict[str, Any]:
 
 
 def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dict[str, Any]:
-    """Answer GET /api/categories/{id}. Today only ?deletion_preview=true uses it.
+    """Answer GET /api/categories/{id}?deletion_preview=true, for admins only.
 
-    Admin-only impact summary for the hard-delete flow: counts of Budget rows,
-    Transactions, and locked months affected. The locked-month count is what
-    surfaces "this delete will erase data the user can't otherwise rewrite,"
-    so it shows up prominently in the AdminToolsPage confirmation.
+    Return the number of Budget rows, transactions, and locked months that a hard delete would erase.
     """
+
     query = event.get("queryStringParameters") or {}
     if query.get("deletion_preview", "").lower() != "true":
         return _response(400, "GET /api/categories/{id} requires ?deletion_preview=true")
@@ -433,19 +425,19 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
     if not is_budget_admin(event, _STAGE):
         return _response(403, "Admin-only endpoint")
 
-    item = _CATEGORY_TABLE.get(category_id)
+    item = _CATEGORY_TABLE.get_category_by_id(category_id)
     if item is None:
         return _response(404, "Category not found")
 
-    budget_count = _BUDGET_TABLE.count_rows_for_category(category_id)
-    txn_count = _TRANSACTIONS_TABLE.count_rows_for_category(category_id)
+    budget_rows = _BUDGET_TABLE.get_rows_for_category(category_id)
+    txn_rows = _TRANSACTIONS_TABLE.get_rows_for_category(category_id)
 
     # A locked month is a past month with a Budget row for this category, where
     # year_month is at or before current_ym less the grace period. A month in grace is still
     # open to change, so we count it as not locked. This matches the editability function.
     current_ym = _year_month_of(now)
-    past_months = _BUDGET_TABLE.find_past_months_with_category(category_id, current_ym)
-    locked_months = [ym for ym in past_months if editability(ym, now) == "LOCKED"]
+    past_months = sorted({row["yearMonth"] for row in budget_rows if row["yearMonth"] < current_ym})
+    locked_months = [ym for ym in past_months if editability(ym, now) == EditabilityState.LOCKED]
 
     return _json_response(
         200,
@@ -453,8 +445,8 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
             {
                 "category": item,
                 "deletionPreview": {
-                    "budgetRows": budget_count,
-                    "transactions": txn_count,
+                    "budgetRows": len(budget_rows),
+                    "transactions": len(txn_rows),
                     "lockedMonthsAffected": locked_months,
                 },
             },
@@ -464,20 +456,12 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
 
 
 def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[str, str]) -> dict[str, Any]:
-    """Delete a category, and every row that names it, for ever.
+    """Delete a category, and every row that names it, for ever. Admins only.
 
-    Admin-only via JWT group claim (no `override` flag — this is intrinsically
-    admin per architecture: "CATEGORY_HARD_DELETE is the only intrinsically
-    admin-only audit action"). Body requires `confirm: true`, `confirmName`
-    matching the current name, and `explanation`.
-
-    Cascade order (matters for crash recovery — if we die mid-cascade we want
-    the audit entry to still be writable):
-      1. Delete all Budget rows for this categoryId.
-      2. Delete all Transactions for this categoryId.
-      3. Delete the Category row itself.
-      4. Write one CATEGORY_HARD_DELETE audit entry with counts + previous name.
+    The body needs `confirm: true`, a `confirmName` that matches the name, and an `explanation`. Write one
+    CATEGORY_HARD_DELETE audit entry.
     """
+
     if not is_budget_admin(event, _STAGE):
         return _response(403, "Admin-only endpoint")
 
@@ -489,22 +473,22 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
     if not explanation:
         return _response(400, "explanation is required")
 
-    item = _CATEGORY_TABLE.get(category_id)
+    item = _CATEGORY_TABLE.get_category_by_id(category_id)
     if item is None:
         return _response(404, "Category not found")
     if confirm_name != item["name"]:
         return _response(400, f"confirmName must match the current category name exactly ('{item['name']}')")
 
     budget_rows_deleted = _BUDGET_TABLE.delete_all_for_category(category_id)
-    txn_rows_deleted = _TRANSACTIONS_TABLE.delete_all_for_category(category_id)
-    _CATEGORY_TABLE.delete(category_id)
+    txn_rows_deleted = _TRANSACTIONS_TABLE.delete_all_transactions_for_category(category_id)
+    _CATEGORY_TABLE.delete_category(category_id)
 
     # Write the audit entry last. The cascade then either finished in full, or it left
     # nothing in the log to explain. effectiveYearMonth is null, as the spec states.
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=None,
         category_id=category_id,
-        action="CATEGORY_HARD_DELETE",
+        action=AuditAction.CATEGORY_HARD_DELETE,
         explanation=explanation,
         user=user,
         changes={
@@ -532,7 +516,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
 
 
 def _get_category_groups() -> dict[str, Any]:
-    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.get_all_category_groups(), default=_json_default))
 
 
 def _post_category_group(event: dict[str, Any]) -> dict[str, Any]:
@@ -543,7 +527,7 @@ def _post_category_group(event: dict[str, Any]) -> dict[str, Any]:
     if not name:
         return _response(400, "name is required")
     try:
-        item = _CATEGORY_GROUP_TABLE.create(name)
+        item = _CATEGORY_GROUP_TABLE.create_category_group(name)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(201, json.dumps(item, default=_json_default))
@@ -556,36 +540,32 @@ def _put_category_group(event: dict[str, Any], group_id: str) -> dict[str, Any]:
     name = body.get("name", "")
     if not name:
         return _response(400, "name is required")
-    existing = _CATEGORY_GROUP_TABLE.get(group_id)
+    existing = _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id)
     if existing is None:
         return _response(404, "Group not found")
     if existing.get("system"):
         return _response(403, "System groups cannot be renamed")
     try:
-        item = _CATEGORY_GROUP_TABLE.update(group_id, name)
+        item = _CATEGORY_GROUP_TABLE.update_category_group(group_id, name)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
 def _delete_category_group(group_id: str) -> dict[str, Any]:
-    """Hard-delete a group.
+    """Delete a group for ever.
 
-    Two rules:
-    - System groups (Unassigned) cannot be deleted.
-    - Active categories block the delete with a 409 — the user must move them
-      to another group first.
-
-    Deactivated categories in the group are auto-moved to the Unassigned
-    sentinel group on delete so they don't leave a dangling groupId reference.
+    A system group cannot be deleted. An active category in the group blocks the delete with a 409. Each inactive
+    category in the group moves to the Unassigned group.
     """
-    existing = _CATEGORY_GROUP_TABLE.get(group_id)
+
+    existing = _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id)
     if existing is None:
         return _response(404, "Group not found")
     if existing.get("system"):
         return _response(403, "System groups cannot be deleted")
 
-    cats_in_group = [c for c in _CATEGORY_TABLE.list_all() if c.get("groupId") == group_id]
+    cats_in_group = [c for c in _CATEGORY_TABLE.get_all_categories() if c.get("groupId") == group_id]
     active_blockers = [
         {"categoryId": c["categoryId"], "name": c["name"]} for c in cats_in_group if c.get("active", True)
     ]
@@ -606,7 +586,7 @@ def _delete_category_group(group_id: str) -> dict[str, Any]:
         for cat in inactive_cats:
             _CATEGORY_TABLE.move_to_group(cat["categoryId"], unassigned["groupId"])
 
-    _CATEGORY_GROUP_TABLE.delete(group_id)
+    _CATEGORY_GROUP_TABLE.delete_category_group(group_id)
     return _json_response(
         200,
         json.dumps({"groupId": group_id, "movedDeactivatedCategories": len(inactive_cats)}),
@@ -621,17 +601,15 @@ def _post_category_groups_reorder(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(order, list) or not all(isinstance(g, str) for g in order):
         return _response(400, "'order' must be a list of groupId strings")
     _CATEGORY_GROUP_TABLE.reorder(order)
-    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_CATEGORY_GROUP_TABLE.get_all_category_groups(), default=_json_default))
 
 
 def _post_categories_reorder(event: dict[str, Any]) -> dict[str, Any]:
-    """Apply a new ordering for categories within a group.
+    """Set the order of the categories in a group.
 
-    Body: `{groupId, order: [categoryId, ...]}`. Each category in `order` is set
-    to `(groupId, orderInGroup=index)`. Effectively also supports cross-group
-    moves: pass a category currently in group X with target groupId Y and it
-    migrates as part of the reorder.
+    The body is `{groupId, order: [categoryId, ...]}`. A category from a different group moves to `groupId`.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -641,10 +619,10 @@ def _post_categories_reorder(event: dict[str, Any]) -> dict[str, Any]:
         return _response(400, "'groupId' is required")
     if not isinstance(order, list) or not all(isinstance(c, str) for c in order):
         return _response(400, "'order' must be a list of categoryId strings")
-    if _CATEGORY_GROUP_TABLE.get(group_id) is None:
+    if _CATEGORY_GROUP_TABLE.get_category_group_by_id(group_id) is None:
         return _response(404, "Group not found")
     _CATEGORY_TABLE.reorder_in_group(group_id, order)
-    return _json_response(200, json.dumps(_CATEGORY_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_CATEGORY_TABLE.get_all_categories(), default=_json_default))
 
 
 # --- Budget ---
@@ -660,26 +638,24 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     if year_month <= current_ym:
         # Dense month (past, grace, current). Stored rows are authoritative;
         # no walk-back needed.
-        return _json_response(200, json.dumps(_BUDGET_TABLE.get_targets(year_month), default=_json_default))
+        return _json_response(200, json.dumps(_BUDGET_TABLE.get_budget_targets(year_month), default=_json_default))
 
     # Future month: resolve effective values via per-category walk-back,
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
     # carried values.
-    targets = resolve_future_targets(_BUDGET_TABLE, _CATEGORY_TABLE, year_month)
+    active_ids = [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()]
+    targets = resolve_future_targets(BudgetDensifyAdapter(_BUDGET_TABLE), active_ids, year_month)
     return _json_response(200, json.dumps(targets, default=_json_default))
 
 
 def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Replace-all write for a dense month (current, grace, or locked-via-override).
+    """Replace all budget targets of a dense month.
 
-    Architecture invariants enforced here:
-    - Body must include every category that has an existing row OR a non-zero transaction
-      in this month. Missing categories return a single 409 listing all of them.
-    - Future months are rejected — they're sparse and go through /pin instead.
-    - Audit emits CREATE (new row) or UPDATE (changed amount) per category. /replace never
-      produces DELETE entries; row deletions happen via /pin (null), deactivation drop, or
-      hard delete.
+    A dense month is the current month, the grace month, or a locked month with an override. A future month is rejected;
+    use /pin for it. The body must hold each category that has a row, or a transaction that is not zero, in the month.
+    Else a 409 lists the missing categories. Each new or changed target writes one CREATE or UPDATE audit entry.
     """
+
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
 
@@ -718,9 +694,9 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             ),
         )
 
-    existing = _BUDGET_TABLE.get_targets(year_month)
+    existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
-    txns = _TRANSACTIONS_TABLE.list_for_month(year_month)
+    txns = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
     txn_cat_ids = {t["categoryId"] for t in txns if t.get("amount") != 0}
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
@@ -741,7 +717,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
         )
 
     old_by_category = {t["categoryId"]: t["amount"] for t in existing}
-    items = _BUDGET_TABLE.put_targets(year_month, targets)
+    items = _BUDGET_TABLE.set_all_budget_targets(year_month, targets)
 
     new_by_category = {t["categoryId"]: t["amount"] for t in items}
     for cat_id, new_amount in new_by_category.items():
@@ -750,10 +726,10 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             continue
 
         if old_amount is None:
-            action = "CREATE"
+            action = AuditAction.CREATE
             changes: dict[str, Any] = {"amount": {"before": None, "after": new_amount}}
         else:
-            action = "UPDATE"
+            action = AuditAction.UPDATE
             changes = {"amount": {"before": old_amount, "after": new_amount}}
 
         _AUDIT_LOG_TABLE.write_entry(
@@ -770,21 +746,16 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
 
 
 def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
-    """Pin / unpin future-month rows.
+    """Set or clear the pins of a future month.
 
-    Editability: `year_month` must be EDITABLE AND strictly in the future.
-    Current / grace / locked months reject — those are dense and /replace is the
-    right endpoint. Override has no effect here (architecture: "Override does not
-    unlock /pin for non-future months").
+    The body is `{targets: [{categoryId, amount: number | null}], explanation}`. A category that is not in `targets`
+    does not change. A number sets the pin and writes a PIN audit entry. Null deletes the pin and writes an UNPIN audit
+    entry. A pin with the same value does nothing. Only a future month is accepted, also with an override.
 
-    Body: `{targets: [{categoryId, amount: number | null}], explanation}`. Upsert
-    semantics — categories omitted from `targets` are untouched. `amount: null`
-    deletes the pin row (UNPIN audit entry); a number creates or updates the pin
-    row (PIN audit entry). Same-value pins are no-ops with no audit.
-
-    Returns `{targets: <walk-back-resolved rows for year_month>, warnings:
-    {downstreamPins, pinMatchesCarriedValue}}`.
+    Return `{targets, warnings: {downstreamPins, pinMatchesCarriedValue}}`, where `targets` holds the resolved values of
+    the month.
     """
+
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
 
@@ -817,7 +788,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             ),
         )
     state = editability(year_month, now)
-    if state != "EDITABLE":
+    if state != EditabilityState.EDITABLE:
         return _json_response(
             409,
             json.dumps(
@@ -833,7 +804,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
 
     # Snapshot table state before any writes so walk-back warnings are computed
     # against the pre-write world.
-    rows_before = _BUDGET_TABLE.scan_all()
+    rows_before = _BUDGET_TABLE.scan()
     by_key_before: dict[tuple[str, str], Any] = {(r["yearMonth"], r["categoryId"]): r["amount"] for r in rows_before}
 
     pin_matches_carried: list[str] = []
@@ -846,11 +817,11 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         if new_amount is None:
             if old_amount is None:
                 continue
-            _BUDGET_TABLE.delete_single(year_month, cat_id)
+            _BUDGET_TABLE.delete_single_budget_target(year_month, cat_id)
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
-                action="UNPIN",
+                action=AuditAction.UNPIN,
                 explanation=explanation,
                 user=user,
                 changes={"amount": {"before": old_amount, "after": None}},
@@ -858,7 +829,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         else:
             if old_amount == new_amount:
                 continue
-            _BUDGET_TABLE.put_single(year_month, cat_id, new_amount)
+            _BUDGET_TABLE.set_single_budget_target(year_month, cat_id, new_amount)
             # Warning: would walk-back have resolved to this same value without the pin?
             sans_pin = {k: v for k, v in by_key_before.items() if k != (year_month, cat_id)}
             if walk_back_for(sans_pin, year_month, cat_id) == new_amount:
@@ -866,14 +837,14 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
-                action="PIN",
+                action=AuditAction.PIN,
                 explanation=explanation,
                 user=user,
                 changes={"amount": {"before": old_amount, "after": new_amount}},
             )
 
     # Re-scan for fresh state, then compute downstream pins + resolved view.
-    rows_after = _BUDGET_TABLE.scan_all()
+    rows_after = _BUDGET_TABLE.scan()
     touched_cat_ids = {t["categoryId"] for t in targets}
     downstream_pins = sorted(
         (
@@ -884,7 +855,8 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         key=lambda p: (p["yearMonth"], p["categoryId"]),
     )
 
-    resolved = resolve_future_targets(_BUDGET_TABLE, _CATEGORY_TABLE, year_month)
+    active_ids = [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()]
+    resolved = resolve_future_targets(BudgetDensifyAdapter(_BUDGET_TABLE), active_ids, year_month)
 
     return _json_response(
         200,
@@ -909,7 +881,7 @@ def _get_transactions(event: dict[str, Any]) -> dict[str, Any]:
     if not month or not YEAR_MONTH_PATTERN.match(month):
         return _response(400, "query parameter 'month' is required (YYYY-MM)")
 
-    txns = _TRANSACTIONS_TABLE.list_for_month(month)
+    txns = _TRANSACTIONS_TABLE.list_transactions_for_month(month)
     return _json_response(200, json.dumps(txns, default=_json_default))
 
 
@@ -931,7 +903,7 @@ def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
         return err
 
     try:
-        item = _TRANSACTIONS_TABLE.create(
+        item = _TRANSACTIONS_TABLE.create_transaction(
             year_month=body["yearMonth"],
             transaction_date=body["transactionDate"],
             description=body["description"],
@@ -950,15 +922,12 @@ def _validate_commit_rows(
     override_active: bool,
     now: datetime,
 ) -> list[dict[str, Any]]:
-    """Per-row validation for /transactions/commit and /transactions/upload.
+    """Return the issues of each row for /transactions/commit and /transactions/upload.
 
-    Returns one validation block per input row:
-        {"index": i, "issues": ["missing_category"?, "locked_month"?]}
-
-    Issues use a closed enum so the frontend can render specific UI per issue.
-    `locked_month` is suppressed when `override_active=True` since admin override
-    intentionally bypasses the editability gate.
+    Each result is `{index, issues}`. The issues are `missing_category` and `locked_month`. An override suppresses
+    `locked_month`.
     """
+
     results: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
         issues: list[str] = []
@@ -969,26 +938,20 @@ def _validate_commit_rows(
         ym = txn_date[:7] if len(txn_date) >= 7 else ""
         if ym and YEAR_MONTH_PATTERN.match(ym):
             state = editability(ym, now)
-            if state == "LOCKED" and not override_active:
+            if state == EditabilityState.LOCKED and not override_active:
                 issues.append("locked_month")
         results.append({"index": i, "issues": issues})
     return results
 
 
 def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str, Any]:
-    """Atomic, all-or-nothing CSV commit.
+    """Save all rows of a CSV import, or none of them.
 
-    Body: `{rows: [{transactionDate, description, amount, categoryId}, ...], override?}`.
-    Pre-flight validates every row (categoryId present and known; transactionDate
-    year-month is editable or admin-overridden). If any row has issues, returns 409
-    with the full validation list so the UI can render every offender in one pass —
-    no partial commits.
-
-    On success, batch-writes all rows. The handler is intentionally NOT idempotent:
-    re-running on the same body will create duplicate transactions because each
-    DynamoDB item gets a fresh ULID-suffixed sort key. Callers should treat a 200
-    as final and a non-200 as "nothing happened" — never a "retry safely" signal.
+    The body is `{rows: [{transactionDate, description, amount, categoryId}, ...], override?}`. If any row has an issue,
+    return a 409 with the issues of all rows, and save nothing. A second call with the same body saves the rows again,
+    as duplicates.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1011,7 +974,7 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
 
     _ensure_hydrated(now)
 
-    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.list_all()}
+    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.get_all_categories()}
     validations = _validate_commit_rows(rows, valid_category_ids, override_active, now)
     invalid = [v for v in validations if v["issues"]]
     if invalid:
@@ -1036,7 +999,7 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
                 "categoryId": row["categoryId"],
             }
         )
-    created = _TRANSACTIONS_TABLE.batch_create(items_to_create)
+    created = _TRANSACTIONS_TABLE.batch_create_transaction(items_to_create)
 
     return _json_response(200, json.dumps({"count": len(created), "transactions": created}, default=_json_default))
 
@@ -1116,7 +1079,7 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
         return _response(400, "No valid transactions found in CSV")
 
     # Step 3: the LLM gives a category to each row.
-    categories = _CATEGORY_TABLE.list_active()
+    categories = _CATEGORY_TABLE.get_active_categories()
     if categories:
         assignments = categorize_transactions(descriptions, categories)
         for i, assignment in enumerate(assignments):
@@ -1131,7 +1094,7 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     # Per-row pre-validation surfaces missing_category / locked_month issues so the
     # review UI can render specific annotations without round-tripping through
     # /commit just to learn what's wrong.
-    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.list_all()}
+    valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.get_all_categories()}
     validations = _validate_commit_rows(parsed_transactions, valid_category_ids, override_active=False, now=now)
 
     return _json_response(
@@ -1169,7 +1132,7 @@ def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
         if field in body:
             updates[field] = body[field]
 
-    item = _TRANSACTIONS_TABLE.update(year_month, sort_id, updates)
+    item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, updates)
     if item is None:
         return _response(404, "Transaction not found")
 
@@ -1196,7 +1159,7 @@ def _delete_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if err:
         return err
 
-    deleted = _TRANSACTIONS_TABLE.batch_delete(items)
+    deleted = _TRANSACTIONS_TABLE.batch_delete_transaction(items)
     return _json_response(200, json.dumps({"deleted": deleted}))
 
 
@@ -1231,11 +1194,11 @@ def _get_audit_log(event: dict[str, Any]) -> dict[str, Any]:
 # --- Household profile (net worth) ---
 
 
-def _get_profile() -> dict[str, Any]:
-    return _json_response(200, json.dumps(_PROFILE_TABLE.list_people(), default=_json_default))
+def _get_profiles() -> dict[str, Any]:
+    return _json_response(200, json.dumps(_PROFILE_TABLE.list_profiles(), default=_json_default))
 
 
-def _post_person(event: dict[str, Any]) -> dict[str, Any]:
+def _post_profile(event: dict[str, Any]) -> dict[str, Any]:
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1248,13 +1211,13 @@ def _post_person(event: dict[str, Any]) -> dict[str, Any]:
         return _response(400, "birthYearMonth is required")
 
     try:
-        item = _PROFILE_TABLE.create_person(name, birth_year_month)
+        item = _PROFILE_TABLE.create_profile(name, birth_year_month)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(201, json.dumps(item, default=_json_default))
 
 
-def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
+def _put_profile(event: dict[str, Any], profile_id: str) -> dict[str, Any]:
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1265,71 +1228,58 @@ def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
         return _response(400, "name and/or birthYearMonth is required")
 
     try:
-        item = _PROFILE_TABLE.update_person(person_id, name=name, birth_year_month=birth_year_month)
+        item = _PROFILE_TABLE.update_profile(profile_id, name=name, birth_year_month=birth_year_month)
     except ValueError as e:
         return _response(400, str(e))
     if item is None:
-        return _response(404, "Person not found")
+        return _response(404, "Profile not found")
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
-def _delete_person(person_id: str) -> dict[str, Any]:
-    """Hard-delete a person, blocked if any account still names them as owner.
+def _delete_profile(profile_id: str) -> dict[str, Any]:
+    """Delete a profile for ever.
 
-    People are rarely removed — this endpoint exists to undo a fat-fingered create,
-    so a 409 listing the referencing accounts (rather than cascading) keeps owner
-    references from silently dangling.
+    If an account still names the profile as an owner, return a 409 that lists those accounts.
     """
-    if _PROFILE_TABLE.get_person(person_id) is None:
-        return _response(404, "Person not found")
 
-    blocking = _ACCOUNT_TABLE.accounts_with_owner(person_id)
+    if _PROFILE_TABLE.get_profile(profile_id) is None:
+        return _response(404, "Profile not found")
+
+    blocking = _ACCOUNT_TABLE.accounts_with_owner(profile_id)
     if blocking:
         return _json_response(
             409,
             json.dumps(
                 {
-                    "error": "Person is the owner of one or more accounts; reassign them first",
-                    "personId": person_id,
+                    "error": "Profile is the owner of one or more accounts; reassign them first",
+                    "personId": profile_id,
                     "blockingAccounts": blocking,
                 }
             ),
         )
 
-    _PROFILE_TABLE.delete_person(person_id)
-    return _json_response(200, json.dumps({"personId": person_id}))
+    _PROFILE_TABLE.delete_profile(profile_id)
+    return _json_response(200, json.dumps({"personId": profile_id}))
 
 
 # --- Accounts (net worth) ---
 
 
-def _validate_owners(owners: Any) -> tuple[list[str] | None, dict[str, Any] | None]:
-    """Validate an account's `owners` list, returning (normalized_owners, error).
+def _check_owners_exist(owners: list[str]) -> dict[str, Any] | None:
+    """Return a 400 response if a personId is not a person in the household, else None."""
 
-    An account is owned by one or more household people. Valid input is a non-empty
-    list of personId strings that each exist in the household. On success returns
-    (deduped list, None); on failure (None, 400 response). The foreign-key existence
-    check is the part the table wrapper deliberately leaves to the handler (it needs
-    a Profile lookup).
-    """
-    if not isinstance(owners, list) or not owners:
-        return None, _response(400, "owners must be a non-empty list of personIds")
-    normalized: list[str] = []
-    seen: set[str] = set()
     for owner in owners:
-        if not isinstance(owner, str) or not owner:
-            return None, _response(400, "each owner must be a personId string")
-        if _PROFILE_TABLE.get_person(owner) is None:
-            return None, _response(400, f"owner '{owner}' is not a person in the household")
-        if owner not in seen:
-            seen.add(owner)
-            normalized.append(owner)
-    return normalized, None
+        if _PROFILE_TABLE.get_profile(owner) is None:
+            return _response(400, f"owner '{owner}' is not a person in the household")
+    return None
 
 
 def _get_accounts(event: dict[str, Any]) -> dict[str, Any]:
     include_inactive = (event.get("queryStringParameters") or {}).get("include_inactive", "")
-    accounts = _ACCOUNT_TABLE.list_all() if include_inactive.lower() == "true" else _ACCOUNT_TABLE.list_active()
+    if include_inactive.lower() == "true":
+        accounts = _ACCOUNT_TABLE.get_all_accounts()
+    else:
+        accounts = _ACCOUNT_TABLE.get_active_accounts()
     return _json_response(200, json.dumps(accounts, default=_json_default))
 
 
@@ -1338,73 +1288,50 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     if body is None:
         return _response(400, "Request body is required")
 
-    # `liability` and (for fixed-class types) `assetClasses` are derived from the type
-    # server-side, so they are not required inputs — only name, type, and owners are.
-    for field in ("name", "accountType"):
-        if not body.get(field):
-            return _response(400, f"{field} is required")
-
-    owners, err = _validate_owners(body.get("owners"))
+    try:
+        args = parse_create_account_args(body)
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_owners_exist(args.owners)
     if err:
         return err
 
     try:
-        item = _ACCOUNT_TABLE.create(
-            name=body["name"],
-            account_type=body["accountType"],
-            asset_classes=body.get("assetClasses"),
-            owners=owners,
-            excluded_from_net_worth=bool(body.get("excludedFromNetWorth", False)),
-            target_year=body.get("targetYear"),
-            loan_terms=body.get("loanTerms"),
-            notes=body.get("notes"),
-        )
+        item = _ACCOUNT_TABLE.create_account(args)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(201, json.dumps(item, default=_json_default))
 
 
 def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
-    """Edit an account's mutable fields.
+    """Change the given fields of an account.
 
-    Body may carry any of name/assetClasses/owners/excludedFromNetWorth/targetYear/
-    loanTerms/notes/sortOrder. A field present with value null removes the optional
-    attribute (loanTerms/notes). `owners` and `assetClasses`, when present, are
-    non-empty lists that replace the current values. `targetYear` is reconciled
-    against the effective asset-class set. `accountType` and `liability` are immutable
-    (the type drives liability, the asset-class rules, and loan-term eligibility) and
-    are ignored here.
+    See `parse_update_account_args` for the editable fields. The type of an account cannot change.
     """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-
-    editable_fields = (
-        "name",
-        "assetClasses",
-        "owners",
-        "excludedFromNetWorth",
-        "targetYear",
-        "loanTerms",
-        "notes",
-        "sortOrder",
-    )
-    updates = {field: body[field] for field in editable_fields if field in body}
-    if not updates:
-        return _response(400, f"at least one editable field is required: {list(editable_fields)}")
-
-    if "owners" in updates:
-        owners, err = _validate_owners(updates["owners"])
-        if err:
-            return err
-        updates["owners"] = owners
+    existing = _ACCOUNT_TABLE.get_account_by_id(account_id)
+    if existing is None:
+        return _response(404, "Account not found")
 
     try:
-        item = _ACCOUNT_TABLE.update(account_id, updates)
+        args = parse_update_account_args(body, existing)
     except ValueError as e:
         return _response(400, str(e))
-    if item is None:
-        return _response(404, "Account not found")
+    match args.owners:
+        case SetTo(value=owners):
+            err = _check_owners_exist(owners)
+            if err:
+                return err
+        case Keep():
+            pass
+
+    try:
+        item = _ACCOUNT_TABLE.update_account(account_id, args)
+    except ValueError as e:
+        return _response(400, str(e))
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
@@ -1430,19 +1357,15 @@ def _post_accounts_reorder(event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(order, list) or not all(isinstance(a, str) for a in order):
         return _response(400, "'order' must be a list of accountId strings")
     _ACCOUNT_TABLE.reorder(order)
-    return _json_response(200, json.dumps(_ACCOUNT_TABLE.list_all(), default=_json_default))
+    return _json_response(200, json.dumps(_ACCOUNT_TABLE.get_all_accounts(), default=_json_default))
 
 
 # --- Net worth snapshots ---
 
 
 def _reject_future_or_malformed_month(year_month: str, now: datetime) -> dict[str, Any] | None:
-    """Return a 400 response if `year_month` is malformed or in the future, else None.
+    """Return a 400 response if `year_month` is malformed or in the future, else None."""
 
-    Recording a future balance is meaningless (that's the simulator's job someday),
-    so the effective-now check reuses the same clock as the budget feature, keeping
-    the dev X-Simulated-Date header working.
-    """
     if not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "Invalid month format, expected YYYY-MM")
     if year_month > _year_month_of(now):
@@ -1452,28 +1375,25 @@ def _reject_future_or_malformed_month(year_month: str, now: datetime) -> dict[st
 
 def _get_networth_month(year_month: str, now: datetime) -> dict[str, Any]:
     """Return a month's snapshot rows with per-account prefill from the last prior value."""
+
     err = _reject_future_or_malformed_month(year_month, now)
     if err:
         return err
 
-    accounts = _ACCOUNT_TABLE.list_all()
-    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_month(year_month)
-    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan_all(), year_month)
+    accounts = _ACCOUNT_TABLE.get_all_accounts()
+    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_snapshot_for_month(year_month)
+    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan(), year_month)
     rows = build_month_view(accounts, month_rows, prefill)
     return _json_response(200, json.dumps({"yearMonth": year_month, "rows": rows}, default=_json_default))
 
 
 def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) -> dict[str, Any]:
-    """Upsert a month's snapshot rows, per asset class.
+    """Merge the balance rows of one month.
 
-    Body: {rows: [{accountId, note?: string | null,
-                   classes: [{assetClass, value: number | null}, ...]}]}. Per class, a
-    non-negative integer (millionths) writes that class's value; null clears just that
-    class; classes omitted from the list are left untouched (per-class merge). A `note`
-    key replaces/clears the account-month note; omitting it preserves the note.
-    Accounts omitted from `rows` are untouched. Unknown accountIds and asset-class
-    values are rejected.
+    The body is `{rows: [{accountId, note?, classes: [{assetClass, value: number | null}, ...]}]}`. See
+    `NetWorthSnapshotTable.upsert_snapshot_record` for the merge rules. An unknown accountId or asset class is rejected.
     """
+
     err = _reject_future_or_malformed_month(year_month, now)
     if err:
         return err
@@ -1485,7 +1405,7 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
     if not isinstance(rows, list):
         return _response(400, "rows array is required")
 
-    accounts_by_id = {a["accountId"]: a for a in _ACCOUNT_TABLE.list_all()}
+    accounts_by_id = {a["accountId"]: a for a in _ACCOUNT_TABLE.get_all_accounts()}
     unknown: list[str] = []
     upsert_rows: list[dict[str, Any]] = []
     for row in rows:
@@ -1534,18 +1454,19 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
             json.dumps({"error": "unknown accountId(s) in rows", "unknownAccountIds": sorted(set(unknown))}),
         )
 
-    _NETWORTH_SNAPSHOT_TABLE.upsert_month(year_month, upsert_rows)
+    _NETWORTH_SNAPSHOT_TABLE.upsert_snapshot_record(year_month, upsert_rows)
     # Return the same per-class shape as GET so the client sees a consistent view.
-    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_month(year_month)
-    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan_all(), year_month)
+    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_snapshot_for_month(year_month)
+    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan(), year_month)
     view = build_month_view(list(accounts_by_id.values()), month_rows, prefill)
     return _json_response(200, json.dumps({"yearMonth": year_month, "rows": view}, default=_json_default))
 
 
 def _get_networth_history() -> dict[str, Any]:
     """Return the full Excel-style history: accounts, months, values, monthly totals."""
-    accounts = _ACCOUNT_TABLE.list_all()
-    all_rows = _NETWORTH_SNAPSHOT_TABLE.scan_all()
+
+    accounts = _ACCOUNT_TABLE.get_all_accounts()
+    all_rows = _NETWORTH_SNAPSHOT_TABLE.scan()
     return _json_response(200, json.dumps(build_history(accounts, all_rows), default=_json_default))
 
 
@@ -1554,6 +1475,7 @@ def _get_networth_history() -> dict[str, Any]:
 
 def _parse_json_body(event: dict[str, Any]) -> dict[str, Any] | None:
     """Parse the JSON body of an API Gateway event. It decodes base64 when the body needs it."""
+
     raw_body = event.get("body", "")
     if event.get("isBase64Encoded") and raw_body:
         raw_body = base64.b64decode(raw_body).decode("utf-8")
@@ -1563,14 +1485,11 @@ def _parse_json_body(event: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _extract_user(event: dict[str, Any]) -> dict[str, str]:
-    """Snapshot the JWT-claims user identity for the audit log.
+    """Return the `sub`, `email`, and `username` claims of the request, for the audit log.
 
-    Reads `sub`, `email`, `cognito:username` from the API Gateway JWT-authorizer claims.
-    Per the architecture doc's "Audit user identity" section, these are written verbatim
-    into audit entries as a point-in-time snapshot; subsequent profile edits don't rewrite
-    history. Missing claims fall back to empty strings rather than raising — handlers that
-    don't end up writing audit entries shouldn't fail on a malformed token here.
+    A missing claim becomes an empty string.
     """
+
     claims = event.get("requestContext", {}).get("authorizer", {}).get("jwt", {}).get("claims", {})
     return {
         "sub": claims.get("sub", ""),
@@ -1580,12 +1499,12 @@ def _extract_user(event: dict[str, Any]) -> dict[str, str]:
 
 
 def _resolve_override(event: dict[str, Any], body: dict[str, Any]) -> tuple[bool, dict[str, Any] | None]:
-    """Parse `override` flag from body and verify the JWT carries admin claim.
+    """Read the `override` flag of the body. Return `(override_active, error_response)`.
 
-    Returns (override_active, error_response).
-    - override_active is True only if override was requested AND the JWT carries the admin group claim.
-    - error_response is non-None when override was requested but the JWT lacks the admin group claim (403).
+    `override_active` is True only when the body asks for an override and the user is an admin. A request for an
+    override from a user who is not an admin gets a 403 response.
     """
+
     requested = bool(body.get("override", False))
     if not requested:
         return (False, None)
@@ -1595,21 +1514,19 @@ def _resolve_override(event: dict[str, Any], body: dict[str, Any]) -> tuple[bool
 
 
 def _check_year_month_editable(year_month: str, override_active: bool, now: datetime) -> dict[str, Any] | None:
-    """Return a 409 response dict if the year-month is locked, else None.
+    """Return a 409 response if the year-month is locked and there is no override, else None."""
 
-    `override_active` skips the check entirely.
-    """
     if override_active:
         return None
     state = editability(year_month, now)
-    if state == "LOCKED":
+    if state == EditabilityState.LOCKED:
         return _json_response(
             409,
             json.dumps(
                 {
                     "error": "year-month is locked; admin override required to mutate",
                     "yearMonth": year_month,
-                    "state": "LOCKED",
+                    "state": EditabilityState.LOCKED,
                 }
             ),
         )
@@ -1623,6 +1540,7 @@ def _check_year_months_editable(
     now: datetime,
 ) -> dict[str, Any] | None:
     """Batch variant. Returns 409 listing every offending item if any is in a LOCKED month."""
+
     if override_active:
         return None
     offending: list[dict[str, Any]] = []
@@ -1630,7 +1548,7 @@ def _check_year_months_editable(
         ym = item.get(year_month_key)
         if not isinstance(ym, str) or not YEAR_MONTH_PATTERN.match(ym):
             continue
-        if editability(ym, now) == "LOCKED":
+        if editability(ym, now) == EditabilityState.LOCKED:
             offending.append({"index": index, "yearMonth": ym})
     if offending:
         return _json_response(
@@ -1647,6 +1565,7 @@ def _check_year_months_editable(
 
 def _json_default(obj: object) -> Any:
     """JSON serializer for types not serializable by default."""
+
     from decimal import Decimal
 
     if isinstance(obj, Decimal):

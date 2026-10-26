@@ -1,15 +1,17 @@
-"""The state function that decides if the app can change a budget year-month.
-
-Pure functions only. No DynamoDB, no env vars.
-"""
-
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
-EditabilityState = Literal["EDITABLE", "GRACE", "LOCKED"]
+
+class EditabilityState(StrEnum):
+    """Whether a year-month can change. GRACE is the previous month in its grace period."""
+
+    EDITABLE = "EDITABLE"
+    GRACE = "GRACE"
+    LOCKED = "LOCKED"
+
 
 _N_FUTURE_MONTHS = 12
 _GRACE_PERIOD_DAYS = 7
@@ -20,6 +22,7 @@ _YEAR_MONTH_LEN = 7  # "YYYY-MM"
 
 def _to_month_ordinal(year: int, month: int) -> int:
     """Convert (year, month) to a single integer for easy month-distance math."""
+
     return year * 12 + (month - 1)
 
 
@@ -29,26 +32,25 @@ def _from_month_ordinal(ordinal: int) -> tuple[int, int]:
 
 def _parse_year_month(year_month: str) -> tuple[int, int]:
     """Parse "YYYY-MM" into (year, month). Raises ValueError on malformed input."""
+
     if len(year_month) != _YEAR_MONTH_LEN or year_month[4] != "-":
         raise ValueError(f"Invalid year-month: {year_month!r}, expected YYYY-MM")
     return int(year_month[:4]), int(year_month[5:])
 
 
 def editability(year_month: str, now_utc: datetime) -> EditabilityState:
-    """Return the editability state of the given year-month at the given instant.
+    """Return the editability state of `year_month` at the instant `now_utc`.
 
-    `now_utc` must be a timezone-aware datetime in UTC.
+    `now_utc` must be a timezone-aware datetime.
 
-    Rules:
-    - The current year-month (in BUDGET_TZ) is EDITABLE.
-    - Any of the next N_FUTURE_MONTHS year-months after current is EDITABLE.
-    - The previous year-month is GRACE if `now_et` is strictly before midnight ET
-      on day (1 + GRACE_PERIOD_DAYS) of the current year-month. Otherwise LOCKED.
-    - Everything else is LOCKED.
+    - The current month (in ET) and the next _N_FUTURE_MONTHS months are EDITABLE.
+    - The previous month is GRACE until midnight ET at the start of day 1 + _GRACE_PERIOD_DAYS of the current month.
+      After that, it is LOCKED.
+    - All other months are LOCKED.
 
-    GRACE is treated identically to EDITABLE for mutation checks; the distinction
-    exists so the frontend can surface a "grace expires in X days" banner.
+    The user can change a GRACE month, the same as an EDITABLE month.
     """
+
     if now_utc.tzinfo is None:
         raise ValueError("now_utc must be timezone-aware")
 
@@ -61,7 +63,7 @@ def editability(year_month: str, now_utc: datetime) -> EditabilityState:
     diff = target_ord - current_ord
 
     if diff == 0 or 1 <= diff <= _N_FUTURE_MONTHS:
-        return "EDITABLE"
+        return EditabilityState.EDITABLE
 
     if diff == -1:
         grace_cutoff_et = datetime(
@@ -74,6 +76,6 @@ def editability(year_month: str, now_utc: datetime) -> EditabilityState:
             tzinfo=tz,
         )
         if now_et < grace_cutoff_et:
-            return "GRACE"
+            return EditabilityState.GRACE
 
-    return "LOCKED"
+    return EditabilityState.LOCKED
