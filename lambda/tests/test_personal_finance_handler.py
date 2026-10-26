@@ -17,7 +17,7 @@ os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
 from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
-from corderohq.budget.dispositions import Disposition
+from corderohq.budget.dispositions import Classification, Disposition
 from corderohq.budget.transactions import UpdateTransactionArgs
 from corderohq.common import Keep, Remove, SetTo
 from corderohq.personal_finance_handler import handler
@@ -2115,10 +2115,9 @@ class TestTransactionDispositions:
             None,
         )
         assert result["statusCode"] == 201
-        kwargs = mock_tt.create_transaction.call_args.kwargs
-        assert kwargs["disposition"] == "SKIP"
-        assert kwargs["category_id"] is None
-        assert kwargs["note"] == "paycheck"
+        new = mock_tt.create_transaction.call_args.args[0]
+        assert new.classification == Classification(Disposition.SKIP, None)
+        assert new.note == "paycheck"
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_create_budget_row_without_category_returns_400(self, mock_tt: MagicMock) -> None:
@@ -2273,7 +2272,7 @@ class TestTransactionDispositions:
             None,
         )
         assert result["statusCode"] == 200
-        items = mock_tt.batch_create_transaction.call_args.args[0]
+        items = [new.to_item() for new in mock_tt.batch_create_transaction.call_args.args[0]]
         assert items[0] == {
             "yearMonth": _EDITABLE_MONTH,
             "transactionDate": f"{_EDITABLE_MONTH}-10",

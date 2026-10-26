@@ -7,8 +7,7 @@ from typing import Any
 from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
-from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition
-from corderohq.budget.transactions import UpdateTransactionArgs
+from corderohq.budget.transactions import NewTransaction, UpdateTransactionArgs
 from corderohq.common import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
@@ -16,6 +15,12 @@ _LOGGER = logging.getLogger(__name__)
 
 class TransactionsTable:
     """Actual transactions data. These data are applied against budget categories."""
+
+    @staticmethod
+    def _new_item(new: NewTransaction, created_at: str) -> dict[str, Any]:
+        """Return the stored item of a new transaction. The sort key sorts by date, and a ULID makes it unique."""
+
+        return {**new.to_item(), "sortId": f"{new.transaction_date}#{ULID()}", "createdAt": created_at}
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -27,73 +32,22 @@ class TransactionsTable:
             self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
 
-    def create_transaction(
-        self,
-        year_month: str,
-        transaction_date: str,
-        description: str,
-        amount: int,
-        category_id: str | None,
-        disposition: Disposition = Disposition.BUDGET,
-        account_id: str | None = None,
-        note: str | None = None,
-    ) -> dict[str, Any]:
+    def create_transaction(self, new: NewTransaction) -> dict[str, Any]:
         """Create a single transaction. Returns the created item."""
 
-        description = description.strip()
-        if not description:
-            raise ValueError("Transaction description must not be empty")
-
-        now = datetime.now(tz=UTC).isoformat()
-        sort_id = f"{transaction_date}#{ULID()}"
-
-        item: dict[str, Any] = {
-            "yearMonth": year_month,
-            "sortId": sort_id,
-            "transactionDate": transaction_date,
-            "description": description,
-            "amount": amount,
-            "disposition": disposition,
-            "createdAt": now,
-        }
-        if category_id is not None:
-            item["categoryId"] = category_id
-        if account_id is not None:
-            item["accountId"] = account_id
-        if note is not None:
-            item["note"] = note
-
+        item = self._new_item(new, datetime.now(tz=UTC).isoformat())
         self._table.put_item(Item=item)
-        _LOGGER.info("Created transaction %s in %s", sort_id, year_month)
+        _LOGGER.info("Created transaction %s in %s", item["sortId"], item["yearMonth"])
         return item
 
-    def batch_create_transaction(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Create multiple transactions in a batch. Returns the created items.
-
-        Each dict must have yearMonth, transactionDate, description, and amount. The keys
-        disposition, categoryId, accountId, and note are copied when they are present.
-        """
+    def batch_create_transaction(self, rows: list[NewTransaction]) -> list[dict[str, Any]]:
+        """Create multiple transactions in a batch. Returns the created items."""
 
         now = datetime.now(tz=UTC).isoformat()
-        items: list[dict[str, Any]] = []
-
+        items = [self._new_item(new, now) for new in rows]
         with self._table.batch_writer() as batch:
-            for transaction in transactions:
-                sort_id = f"{transaction['transactionDate']}#{ULID()}"
-                item: dict[str, Any] = {
-                    "yearMonth": transaction["yearMonth"],
-                    "sortId": sort_id,
-                    "transactionDate": transaction["transactionDate"],
-                    "description": transaction["description"].strip(),
-                    "amount": transaction["amount"],
-                    "createdAt": now,
-                }
-                for name in DISPOSITION_ATTRIBUTES:
-                    if transaction.get(name) is not None:
-                        item[name] = transaction[name]
+            for item in items:
                 batch.put_item(Item=item)
-                items.append(item)
-
         _LOGGER.info("Batch created %d transactions", len(items))
         return items
 

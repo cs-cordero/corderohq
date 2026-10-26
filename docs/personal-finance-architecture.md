@@ -51,6 +51,7 @@ lambda/src/corderohq/
         fingerprints.py    The fingerprint of each row, to find a row that was saved before
         directions.py      The direction table: a suggested disposition for each CSV row
     budget/dispositions.py The Budget / Off-budget / Skip rules of a transaction
+    budget/transactions.py The checks of a new or changed transaction, at the API boundary
     budget/income.py       Payment rules, net amount, and the IncomePlan row IDs
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
     budget/editability.py  The editability state function

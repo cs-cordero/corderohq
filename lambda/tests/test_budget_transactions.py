@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from corderohq.aws.dynamodb import TransactionsTable
-from corderohq.budget.dispositions import Disposition
-from corderohq.budget.transactions import UpdateTransactionArgs
+from corderohq.budget.dispositions import Classification, Disposition
+from corderohq.budget.transactions import NewTransaction, UpdateTransactionArgs
 from corderohq.common import Keep, Remove, SetTo
 
 
@@ -37,80 +37,52 @@ class TestList:
         assert result[0]["description"] == "Coffee"
 
 
+def _new(description: str, classification: Classification, **fields: Any) -> NewTransaction:
+    return NewTransaction(
+        year_month="2026-03",
+        transaction_date=fields.get("transaction_date", "2026-03-15"),
+        description=description,
+        amount=fields.get("amount", 100),
+        classification=classification,
+        account_id=fields.get("account_id"),
+        note=fields.get("note"),
+    )
+
+
 class TestCreate:
     def test_creates_transaction_with_sort_id(self, table: TransactionsTable, mock: MagicMock) -> None:
-        result = table.create_transaction(
-            year_month="2026-03",
-            transaction_date="2026-03-15",
-            description="Grocery store",
-            amount=50000000,
-            category_id="cat1",
-        )
+        result = table.create_transaction(_new("Grocery store", Classification(Disposition.BUDGET, "cat1")))
         assert result["yearMonth"] == "2026-03"
         assert result["sortId"].startswith("2026-03-15#")
         assert result["description"] == "Grocery store"
-        assert result["amount"] == 50000000
-        assert "createdAt" in result
-        mock.put_item.assert_called_once()
-
-    def test_raises_on_empty_description(self, table: TransactionsTable) -> None:
-        with pytest.raises(ValueError, match="must not be empty"):
-            table.create_transaction("2026-03", "2026-03-15", "", 100, "cat1")
-
-    def test_stores_budget_disposition_by_default(self, table: TransactionsTable) -> None:
-        result = table.create_transaction("2026-03", "2026-03-15", "Coffee", 100, "cat1")
         assert result["disposition"] == "BUDGET"
         assert result["categoryId"] == "cat1"
-        assert "accountId" not in result
-        assert "note" not in result
+        assert "accountId" not in result and "note" not in result
+        assert "createdAt" in result
+        assert mock.put_item.call_args.kwargs["Item"] == result
 
-    def test_skip_row_has_no_category(self, table: TransactionsTable, mock: MagicMock) -> None:
-        result = table.create_transaction(
-            "2026-03",
-            "2026-03-15",
-            "Payroll",
-            -100,
-            None,
-            disposition=Disposition.SKIP,
-            account_id="acct1",
-            note="paycheck",
-        )
+    def test_skip_row_has_no_category(self, table: TransactionsTable) -> None:
+        new = _new("Payroll", Classification(Disposition.SKIP, None), amount=-100, account_id="acct1", note="paycheck")
+        result = table.create_transaction(new)
         assert result["disposition"] == "SKIP"
         assert "categoryId" not in result
         assert result["accountId"] == "acct1"
         assert result["note"] == "paycheck"
-        assert mock.put_item.call_args.kwargs["Item"] == result
 
 
 class TestBatchCreate:
-    def test_copies_present_disposition_fields_only(self, table: TransactionsTable, mock: MagicMock) -> None:
+    def test_writes_each_row(self, table: TransactionsTable, mock: MagicMock) -> None:
         writer = mock.batch_writer.return_value.__enter__.return_value
-        result = table.batch_create_transaction(
-            [
-                {
-                    "yearMonth": "2026-03",
-                    "transactionDate": "2026-03-15",
-                    "description": " Hotel ",
-                    "amount": 100,
-                    "disposition": "OFF_BUDGET",
-                    "note": "work trip",
-                },
-                {
-                    "yearMonth": "2026-03",
-                    "transactionDate": "2026-03-16",
-                    "description": "Groceries",
-                    "amount": 200,
-                    "disposition": "BUDGET",
-                    "categoryId": "cat1",
-                },
-            ]
-        )
-        assert result[0]["description"] == "Hotel"
+        rows = [
+            _new("Hotel", Classification(Disposition.OFF_BUDGET, None), note="work trip"),
+            _new("Groceries", Classification(Disposition.BUDGET, "cat1"), transaction_date="2026-03-16"),
+        ]
+        result = table.batch_create_transaction(rows)
         assert result[0]["disposition"] == "OFF_BUDGET"
         assert result[0]["note"] == "work trip"
         assert "categoryId" not in result[0]
         assert result[1]["categoryId"] == "cat1"
-        assert "note" not in result[1]
+        assert result[1]["sortId"].startswith("2026-03-16#")
         assert writer.put_item.call_count == 2
 
 
