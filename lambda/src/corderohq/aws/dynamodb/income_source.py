@@ -6,7 +6,9 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items, update_expression
+from corderohq.budget.income import CreateIncomeSourceArgs, UpdateIncomeSourceArgs
+from corderohq.common import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,11 +44,11 @@ class IncomeSourceTable:
         response = self._table.get_item(Key={"incomeSourceId": income_source_id})
         return response.get("Item")
 
-    def create_income_source(self, owners: list[str], label: str, frequency: str) -> dict[str, Any]:
+    def create_income_source(self, args: CreateIncomeSourceArgs) -> dict[str, Any]:
         """Create an active income source at the end of the order. Returns the created item.
 
-        `owners` is one or more personIds, the same as on an account. A joint source, such as the
-        interest of a joint account, has two. It does not check that each person exists.
+        A joint source, such as the interest of a joint account, has two owners. The first payment is not part of
+        the item. It does not check that each person exists.
         """
 
         existing = self.get_all_income_sources()
@@ -54,9 +56,9 @@ class IncomeSourceTable:
         now = datetime.now(tz=UTC).isoformat()
         item: dict[str, Any] = {
             "incomeSourceId": str(ULID()),
-            "owners": owners,
-            "label": label,
-            "frequency": frequency,
+            "owners": args.owners,
+            "label": args.label,
+            "frequency": args.frequency,
             "active": True,
             "sortOrder": sort_order,
             "createdAt": now,
@@ -66,22 +68,16 @@ class IncomeSourceTable:
         _LOGGER.info("Created income source %s", item["incomeSourceId"])
         return item
 
-    def update_income_source(self, income_source_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Change `label`, `frequency`, and/or `owners`. Returns the changed item, or None if not found."""
+    def update_income_source(self, income_source_id: str, args: UpdateIncomeSourceArgs) -> dict[str, Any] | None:
+        """Apply the checked changes to an income source. Returns the changed item, or None if not found."""
 
         if self.get_income_source_by_id(income_source_id) is None:
             return None
-        set_parts = ["updatedAt = :now"]
-        values: dict[str, Any] = {":now": datetime.now(tz=UTC).isoformat()}
-        for field in ("label", "frequency", "owners"):
-            if field in updates:
-                set_parts.append(f"{field} = :{field}")
-                values[f":{field}"] = updates[field]
+        changes: dict[str, FieldChange[Any]] = {"label": args.label, "frequency": args.frequency, "owners": args.owners}
         response = self._table.update_item(
             Key={"incomeSourceId": income_source_id},
-            UpdateExpression="SET " + ", ".join(set_parts),
-            ExpressionAttributeValues=values,
             ReturnValues="ALL_NEW",
+            **update_expression(changes, always_set={"updatedAt": datetime.now(tz=UTC).isoformat()}),
         )
         return response["Attributes"]
 

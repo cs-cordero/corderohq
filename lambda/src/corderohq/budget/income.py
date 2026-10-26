@@ -1,13 +1,23 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
 
+from corderohq.accounts import validate_owners
+from corderohq.common import Keep, SetTo
+
 # The sort keys of the IncomePlan table.
 PAYMENT_LINE_PREFIX = "SRC#"
 ONE_TIME_LINE_PREFIX = "ONE#"
+
+MIN_PAYMENTS_PER_MONTH = 1
+MAX_PAYMENTS_PER_MONTH = 5
+LABEL_MAX_LENGTH = 100
+
+_EDITABLE_INCOME_SOURCE_KEYS = ("label", "frequency", "owners")
 
 
 class IncomeLineType(StrEnum):
@@ -35,27 +45,112 @@ class DeductionKind(StrEnum):
     POSTTAX_SAVINGS = "POSTTAX_SAVINGS"
 
 
-MIN_PAYMENTS_PER_MONTH = 1
-MAX_PAYMENTS_PER_MONTH = 5
-LABEL_MAX_LENGTH = 100
+@dataclass(frozen=True)
+class Deduction:
+    """One deduction from one payment, such as a tax."""
+
+    label: str
+    kind: DeductionKind
+    amount: int  # millionths of a dollar
+
+    def to_item(self) -> dict[str, Any]:
+        """Converts an instance of Deduction to how it is stored in DynamoDB."""
+
+        return {"label": self.label, "kind": self.kind, "amount": self.amount}
+
+
+@dataclass(frozen=True)
+class Payment:
+    """The pay of one income source in one month.
+
+    `gross` and each deduction are for one payment. `payments_per_month` is the number of payments that the plan counts
+    in the month.
+    """
+
+    payments_per_month: int
+    gross: int  # millionths of a dollar
+    deductions: tuple[Deduction, ...]
+
+    @property
+    def net(self) -> int:
+        """The net amount of one payment: the gross amount minus every deduction."""
+
+        return self.gross - sum(deduction.amount for deduction in self.deductions)
+
+    @property
+    def monthly_net(self) -> int:
+        """The net amount that the plan counts in one month."""
+
+        return self.net * self.payments_per_month
+
+    def to_item(self) -> dict[str, Any]:
+        """Converts an instance of Payment to how it is stored in DynamoDB."""
+
+        return {
+            "paymentsPerMonth": self.payments_per_month,
+            "gross": self.gross,
+            "deductions": [deduction.to_item() for deduction in self.deductions],
+        }
+
+
+@dataclass(frozen=True)
+class CreateIncomeSourceArgs:
+    """The checked arguments of a new income source, and its first payment."""
+
+    owners: list[str]
+    label: str
+    frequency: PayFrequency
+    initial_payment: Payment
+
+
+@dataclass(frozen=True)
+class UpdateIncomeSourceArgs:
+    """The checked changes to an income source. Each field that the request did not name is Keep()."""
+
+    label: Keep | SetTo[str]
+    frequency: Keep | SetTo[PayFrequency]
+    owners: Keep | SetTo[list[str]]
+
+
+@dataclass(frozen=True)
+class PaymentChange:
+    """The new payment of one income source in one month. A payment of None removes the pin."""
+
+    income_source_id: str
+    payment: Payment | None
+
+
+@dataclass(frozen=True)
+class CreateOneTimeLineArgs:
+    """The checked arguments of a new one-time income line."""
+
+    label: str
+    amount: int  # millionths of a dollar
+
+
+@dataclass(frozen=True)
+class UpdateOneTimeLineArgs:
+    """The checked new label and amount of a one-time income line."""
+
+    line_id: str
+    label: str
+    amount: int  # millionths of a dollar
+
+
+@dataclass(frozen=True)
+class DeleteOneTimeLineArgs:
+    """The one-time income line to delete."""
+
+    line_id: str
+
+
+type OneTimeLineArgs = CreateOneTimeLineArgs | UpdateOneTimeLineArgs | DeleteOneTimeLineArgs
 
 
 def payment_line_id(income_source_id: str) -> str:
     """Return the IncomePlan sort key of the payment row of one income source."""
 
     return f"{PAYMENT_LINE_PREFIX}{income_source_id}"
-
-
-def _as_int(value: Any, name: str) -> int:
-    """Return `value` as an int. Accept an int or an integral Decimal. Reject a bool."""
-
-    if isinstance(value, bool):
-        raise ValueError(f"{name} must be an integer")
-    if isinstance(value, int):
-        return value
-    if isinstance(value, Decimal) and value == value.to_integral_value():
-        return int(value)
-    raise ValueError(f"{name} must be an integer")
 
 
 def validate_label(value: Any, name: str = "label") -> str:
@@ -78,11 +173,20 @@ def validate_frequency(value: Any) -> PayFrequency:
         raise ValueError(f"frequency must be one of {[f.value for f in PayFrequency]}") from None
 
 
-def validate_payment(raw: Any) -> dict[str, Any]:
-    """Check a payment, and return it in its stored shape. Raise `ValueError` if a rule fails.
+def validate_one_time_amount(value: Any) -> int:
+    """Return the net amount of a one-time income line. It must be more than 0."""
 
-    The stored shape is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`. Each
-    amount is for one payment. The net amount must not be negative.
+    amount = _as_int(value, "amount")
+    if amount <= 0:
+        raise ValueError("amount must be more than 0")
+    return amount
+
+
+def parse_payment(raw: Any) -> Payment:
+    """Convert a payment from a request body or a stored row into a Payment. Raise ValueError if a rule fails.
+
+    The shape is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`. A value read back from DynamoDB is a
+    `Decimal`, so an integral `Decimal` is accepted. The net amount must not be negative.
     """
 
     if not isinstance(raw, Mapping):
@@ -99,53 +203,116 @@ def validate_payment(raw: Any) -> dict[str, Any]:
     raw_deductions = raw.get("deductions", [])
     if not isinstance(raw_deductions, list):
         raise ValueError("deductions must be a list")
-    deductions: list[dict[str, Any]] = []
-    for index, raw_deduction in enumerate(raw_deductions):
-        where = f"deductions[{index}]"
-        if not isinstance(raw_deduction, Mapping):
-            raise ValueError(f"{where} must be an object")
-        try:
-            kind = DeductionKind(raw_deduction.get("kind"))
-        except ValueError:
-            raise ValueError(f"{where}.kind must be one of {[k.value for k in DeductionKind]}") from None
-        amount = _as_int(raw_deduction.get("amount"), f"{where}.amount")
-        if amount < 0:
-            raise ValueError(f"{where}.amount must not be negative")
-        deductions.append(
-            {"label": validate_label(raw_deduction.get("label"), f"{where}.label"), "kind": kind, "amount": amount}
-        )
+    deductions = tuple(
+        _parse_deduction(raw_deduction, f"deductions[{index}]") for index, raw_deduction in enumerate(raw_deductions)
+    )
 
-    payment = {"paymentsPerMonth": payments_per_month, "gross": gross, "deductions": deductions}
-    if net_amount(payment) < 0:
+    payment = Payment(payments_per_month=payments_per_month, gross=gross, deductions=deductions)
+    if payment.net < 0:
         raise ValueError("the deductions must not be more than the gross amount")
     return payment
 
 
-def net_amount(payment: Mapping[str, Any]) -> int:
-    """Return the net amount of one payment: the gross amount minus every deduction."""
+def parse_create_income_source_args(payload: Mapping[str, Any]) -> CreateIncomeSourceArgs:
+    """Convert the body of a create request into checked arguments. Raise ValueError for bad input.
 
-    total_deductions = sum(_as_int(d["amount"], "amount") for d in payment["deductions"])
-    return _as_int(payment["gross"], "gross") - total_deductions
+    It does not check that each owner exists.
+    """
 
-
-def monthly_net(payment: Mapping[str, Any]) -> int:
-    """Return the net amount that the plan counts in one month."""
-
-    return net_amount(payment) * _as_int(payment["paymentsPerMonth"], "paymentsPerMonth")
-
-
-def payments_equal(first: Mapping[str, Any] | None, second: Mapping[str, Any] | None) -> bool:
-    """Return True if two payments are the same, after each one goes through the checks."""
-
-    if first is None or second is None:
-        return first is None and second is None
-    return validate_payment(first) == validate_payment(second)
+    return CreateIncomeSourceArgs(
+        owners=validate_owners(payload.get("owners")),
+        label=validate_label(payload.get("label")),
+        frequency=validate_frequency(payload.get("frequency")),
+        initial_payment=parse_payment(payload.get("initialPayment")),
+    )
 
 
-def validate_one_time_amount(value: Any) -> int:
-    """Return the net amount of a one-time income line. It must be more than 0."""
+def parse_update_income_source_args(payload: Mapping[str, Any]) -> UpdateIncomeSourceArgs:
+    """Convert the body of an update request into checked changes. Raise ValueError for bad input.
 
-    amount = _as_int(value, "amount")
-    if amount <= 0:
-        raise ValueError("amount must be more than 0")
-    return amount
+    An absent key changes nothing. It does not check that each owner exists.
+    """
+
+    if not any(key in payload for key in _EDITABLE_INCOME_SOURCE_KEYS):
+        raise ValueError(f"at least one editable field is required: {list(_EDITABLE_INCOME_SOURCE_KEYS)}")
+    return UpdateIncomeSourceArgs(
+        label=SetTo(validate_label(payload["label"])) if "label" in payload else Keep(),
+        frequency=SetTo(validate_frequency(payload["frequency"])) if "frequency" in payload else Keep(),
+        owners=SetTo(validate_owners(payload["owners"])) if "owners" in payload else Keep(),
+    )
+
+
+def parse_payment_changes(payload: Mapping[str, Any], *, allow_remove: bool) -> list[PaymentChange]:
+    """Convert `payments`, a list of `{incomeSourceId, payment}`, into checked changes. Raise ValueError for bad input.
+
+    A null `payment` removes the pin, and only `allow_remove` permits it. It does not check that each income source
+    exists.
+    """
+
+    raw_rows = payload.get("payments")
+    if not isinstance(raw_rows, list):
+        raise ValueError("payments array is required")
+    changes: list[PaymentChange] = []
+    for index, raw in enumerate(raw_rows):
+        if not isinstance(raw, Mapping) or not isinstance(raw.get("incomeSourceId"), str):
+            raise ValueError(f"payments[{index}] must have incomeSourceId")
+        if "payment" not in raw:
+            raise ValueError(f"payments[{index}] must have payment")
+        if raw["payment"] is None and not allow_remove:
+            raise ValueError(f"payments[{index}]: payment must not be null here")
+        try:
+            payment = parse_payment(raw["payment"]) if raw["payment"] is not None else None
+        except ValueError as e:
+            raise ValueError(f"payments[{index}]: {e}") from None
+        changes.append(PaymentChange(income_source_id=raw["incomeSourceId"], payment=payment))
+    return changes
+
+
+def parse_one_time_line_args(payload: Mapping[str, Any]) -> OneTimeLineArgs:
+    """Convert the body of a one-time line request into checked arguments. Raise ValueError for bad input.
+
+    A body with no `lineId` creates a line. A body with `lineId` and `delete: true` deletes the line. Any other body
+    with `lineId` changes the line.
+    """
+
+    raw_line_id = payload.get("lineId")
+    if raw_line_id is None:
+        return CreateOneTimeLineArgs(
+            label=validate_label(payload.get("label")), amount=validate_one_time_amount(payload.get("amount"))
+        )
+    if not isinstance(raw_line_id, str) or not raw_line_id.startswith(ONE_TIME_LINE_PREFIX):
+        raise ValueError("lineId of a one-time line is required")
+    if payload.get("delete") is True:
+        return DeleteOneTimeLineArgs(line_id=raw_line_id)
+    return UpdateOneTimeLineArgs(
+        line_id=raw_line_id,
+        label=validate_label(payload.get("label")),
+        amount=validate_one_time_amount(payload.get("amount")),
+    )
+
+
+def _as_int(value: Any, name: str) -> int:
+    """Return `value` as an int. Accept an int or an integral Decimal. Reject a bool."""
+
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, Decimal) and value == value.to_integral_value():
+        return int(value)
+    raise ValueError(f"{name} must be an integer")
+
+
+def _parse_deduction(raw: Any, where: str) -> Deduction:
+    """Convert one deduction of a payment into a Deduction. Raise ValueError if a rule fails."""
+
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{where} must be an object")
+    try:
+        kind = DeductionKind(raw.get("kind"))
+    except ValueError:
+        raise ValueError(f"{where}.kind must be one of {[k.value for k in DeductionKind]}") from None
+    amount = _as_int(raw.get("amount"), f"{where}.amount")
+    if amount < 0:
+        raise ValueError(f"{where}.amount must not be negative")
+    return Deduction(label=validate_label(raw.get("label"), f"{where}.label"), kind=kind, amount=amount)

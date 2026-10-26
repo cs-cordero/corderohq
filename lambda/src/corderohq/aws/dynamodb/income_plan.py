@@ -5,19 +5,25 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
 from corderohq.budget.densify import DenseSparseStore, StoredValue
-from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, IncomeLineType, payment_line_id
+from corderohq.budget.income import (
+    ONE_TIME_LINE_PREFIX,
+    PAYMENT_LINE_PREFIX,
+    CreateOneTimeLineArgs,
+    IncomeLineType,
+    Payment,
+    UpdateOneTimeLineArgs,
+    parse_payment,
+    payment_line_id,
+)
+from corderohq.common import SetTo
 
 
-def get_payment(row: dict[str, Any]) -> dict[str, Any]:
+def get_payment(row: dict[str, Any]) -> Payment:
     """Return the payment of a stored payment row."""
 
-    return {
-        "paymentsPerMonth": row["paymentsPerMonth"],
-        "gross": row["gross"],
-        "deductions": row.get("deductions", []),
-    }
+    return parse_payment(row)
 
 
 class IncomePlanTable:
@@ -49,7 +55,7 @@ class IncomePlanTable:
         )
         return [item for item in items if str(item["lineId"]).startswith(PAYMENT_LINE_PREFIX)]
 
-    def put_payment(self, year_month: str, income_source_id: str, payment: dict[str, Any]) -> dict[str, Any]:
+    def put_payment(self, year_month: str, income_source_id: str, payment: Payment) -> dict[str, Any]:
         """Write the payment row of one income source in one month."""
 
         item: dict[str, Any] = {
@@ -57,7 +63,7 @@ class IncomePlanTable:
             "lineId": payment_line_id(income_source_id),
             "lineType": IncomeLineType.PAYMENT,
             "incomeSourceId": income_source_id,
-            **payment,
+            **payment.to_item(),
         }
         self._table.put_item(Item=item)
         return item
@@ -80,24 +86,36 @@ class IncomePlanTable:
         response = self._table.get_item(Key={"yearMonth": year_month, "lineId": line_id})
         return response.get("Item")
 
-    def put_one_time(self, year_month: str, label: str, amount: int, line_id: str | None = None) -> dict[str, Any]:
-        """Create a one-time income line, or replace it when `line_id` is given."""
+    def create_one_time_line(self, year_month: str, args: CreateOneTimeLineArgs) -> dict[str, Any]:
+        """Create a one-time income line in one month. Returns the created item."""
 
         now = datetime.now(tz=UTC).isoformat()
-        existing = self.get_line(year_month, line_id) if line_id else None
         item: dict[str, Any] = {
             "yearMonth": year_month,
-            "lineId": line_id or f"{ONE_TIME_LINE_PREFIX}{ULID()}",
+            "lineId": f"{ONE_TIME_LINE_PREFIX}{ULID()}",
             "lineType": IncomeLineType.ONE_TIME,
-            "label": label,
-            "amount": amount,
-            "createdAt": existing["createdAt"] if existing else now,
+            "label": args.label,
+            "amount": args.amount,
+            "createdAt": now,
             "updatedAt": now,
         }
         self._table.put_item(Item=item)
         return item
 
-    def delete_line(self, year_month: str, line_id: str) -> None:
+    def update_one_time_line(self, year_month: str, args: UpdateOneTimeLineArgs) -> dict[str, Any]:
+        """Set the label and the amount of a one-time income line. Returns the updated item."""
+
+        response = self._table.update_item(
+            Key={"yearMonth": year_month, "lineId": args.line_id},
+            ReturnValues="ALL_NEW",
+            **update_expression(
+                {"label": SetTo(args.label), "amount": SetTo(args.amount)},
+                always_set={"updatedAt": datetime.now(tz=UTC).isoformat()},
+            ),
+        )
+        return response["Attributes"]
+
+    def delete_one_time_line(self, year_month: str, line_id: str) -> None:
         self._table.delete_item(Key={"yearMonth": year_month, "lineId": line_id})
 
 

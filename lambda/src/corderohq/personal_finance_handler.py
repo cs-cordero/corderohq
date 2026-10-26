@@ -3,18 +3,12 @@ import csv
 import io
 import json
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, assert_never
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import (
-    parse_create_account_args,
-    parse_update_account_args,
-    validate_asset_class,
-    validate_owners,
-)
+from corderohq.accounts import parse_create_account_args, parse_update_account_args, validate_asset_class
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -39,14 +33,17 @@ from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import carry_map, densify, resolve_future_targets, walk_back_for
 from corderohq.budget.editability import EditabilityState, editability
 from corderohq.budget.income import (
-    ONE_TIME_LINE_PREFIX,
+    CreateOneTimeLineArgs,
+    DeleteOneTimeLineArgs,
     IncomeLineType,
+    Payment,
+    PaymentChange,
+    UpdateOneTimeLineArgs,
+    parse_create_income_source_args,
+    parse_one_time_line_args,
+    parse_payment_changes,
+    parse_update_income_source_args,
     payment_line_id,
-    payments_equal,
-    validate_frequency,
-    validate_label,
-    validate_one_time_amount,
-    validate_payment,
 )
 from corderohq.budget.transaction_args import (
     CreateTransactionArgs,
@@ -964,37 +961,30 @@ def _post_income_source(event: dict[str, Any], user: dict[str, str], now: dateti
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-
     explanation = (body.get("explanation") or "").strip()
     if not explanation:
         return _response(400, "explanation is required")
     try:
-        owners = validate_owners(body.get("owners"))
+        args = parse_create_income_source_args(body)
     except ValueError as e:
         return _response(400, str(e))
-    err = _check_owners_exist(owners)
+    err = _check_owners_exist(args.owners)
     if err:
         return err
-    try:
-        label = validate_label(body.get("label"))
-        frequency = validate_frequency(body.get("frequency"))
-        payment = validate_payment(body.get("initialPayment"))
-    except ValueError as e:
-        return _response(400, str(e))
 
     # Densify first. The first payment row then goes into a current month that is dense.
     _ensure_hydrated(now)
 
     current_ym = _year_month_of(now)
-    source = _INCOME_SOURCE_TABLE.create_income_source(owners, label, frequency)
-    row = _INCOME_PLAN_TABLE.put_payment(current_ym, source["incomeSourceId"], payment)
+    source = _INCOME_SOURCE_TABLE.create_income_source(args)
+    row = _INCOME_PLAN_TABLE.put_payment(current_ym, source["incomeSourceId"], args.initial_payment)
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=current_ym,
         category_id=None,
         action=AuditAction.INCOME_CREATE,
         explanation=explanation,
         user=user,
-        changes={"payment": {"before": None, "after": payment}, "label": label},
+        changes={"payment": {"before": None, "after": args.initial_payment.to_item()}, "label": args.label},
         income_source_id=source["incomeSourceId"],
         income_line_id=row["lineId"],
     )
@@ -1007,26 +997,19 @@ def _put_income_source(event: dict[str, Any], income_source_id: str) -> dict[str
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-    updates: dict[str, Any] = {}
     try:
-        if "label" in body:
-            updates["label"] = validate_label(body["label"])
-        if "frequency" in body:
-            updates["frequency"] = validate_frequency(body["frequency"])
+        args = parse_update_income_source_args(body)
     except ValueError as e:
         return _response(400, str(e))
-    if "owners" in body:
-        try:
-            owners = validate_owners(body["owners"])
-        except ValueError as e:
-            return _response(400, str(e))
-        err = _check_owners_exist(owners)
-        if err:
-            return err
-        updates["owners"] = owners
-    if not updates:
-        return _response(400, "label, frequency, or owners is required")
-    item = _INCOME_SOURCE_TABLE.update_income_source(income_source_id, updates)
+    match args.owners:
+        case SetTo(value=owners):
+            err = _check_owners_exist(owners)
+            if err:
+                return err
+        case Keep():
+            pass
+
+    item = _INCOME_SOURCE_TABLE.update_income_source(income_source_id, args)
     if item is None:
         return _response(404, "Income source not found")
     return _json_response(200, json.dumps(item, default=_json_default))
@@ -1085,7 +1068,7 @@ def _deactivate_income_source(
             action=AuditAction.INCOME_UNPIN,
             explanation=explanation,
             user=user,
-            changes={"payment": {"before": get_payment(old_row) if old_row else None, "after": None}},
+            changes={"payment": {"before": _payment_item(get_payment(old_row) if old_row else None), "after": None}},
             income_source_id=income_source_id,
             income_line_id=line_id,
         )
@@ -1116,41 +1099,19 @@ def _get_income(year_month: str, now: datetime) -> dict[str, Any]:
     return _json_response(200, json.dumps(_income_month_response(year_month, now), default=_json_default))
 
 
-@dataclass(frozen=True)
-class _PaymentChange:
-    """One entry of `body.payments`."""
+def _payment_item(payment: Payment | None) -> dict[str, Any] | None:
+    """Return a payment as an audit entry stores it, or None."""
 
-    income_source_id: str
-    payment: dict[str, Any] | None  # None removes the pin
+    return payment.to_item() if payment is not None else None
 
 
-def _parse_payment_rows(body: dict[str, Any], dense: bool) -> tuple[list[_PaymentChange], dict[str, Any] | None]:
-    """Read and check `body.payments`: a list of `{incomeSourceId, payment}`.
+def _check_income_sources_exist(changes: list[PaymentChange]) -> dict[str, Any] | None:
+    """Return a 400 response if an income source in `changes` does not exist, else None."""
 
-    Returns `(changes, error_response)`. In a dense month (`/replace`), `payment` must not be null: to stop a source,
-    deactivate it. In a future month (`/pin`), a `null` removes the pin.
-    """
-
-    raw_rows = body.get("payments")
-    if not isinstance(raw_rows, list):
-        return [], _response(400, "payments array is required")
-    changes: list[_PaymentChange] = []
-    for index, raw in enumerate(raw_rows):
-        if not isinstance(raw, dict) or not isinstance(raw.get("incomeSourceId"), str):
-            return [], _response(400, f"payments[{index}] must have incomeSourceId")
-        if "payment" not in raw:
-            return [], _response(400, f"payments[{index}] must have payment")
-        if dense and raw["payment"] is None:
-            return [], _response(400, f"payments[{index}]: payment must not be null here")
-        source_id = raw["incomeSourceId"]
-        if _INCOME_SOURCE_TABLE.get_income_source_by_id(source_id) is None:
-            return [], _response(400, f"payments[{index}]: income source '{source_id}' does not exist")
-        try:
-            payment = validate_payment(raw["payment"]) if raw["payment"] is not None else None
-        except ValueError as e:
-            return [], _response(400, f"payments[{index}]: {e}")
-        changes.append(_PaymentChange(income_source_id=source_id, payment=payment))
-    return changes, None
+    for index, change in enumerate(changes):
+        if _INCOME_SOURCE_TABLE.get_income_source_by_id(change.income_source_id) is None:
+            return _response(400, f"payments[{index}]: income source '{change.income_source_id}' does not exist")
+    return None
 
 
 def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
@@ -1169,7 +1130,11 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     explanation = (body.get("explanation") or "").strip()
     if not explanation:
         return _response(400, "explanation is required")
-    changes, err = _parse_payment_rows(body, dense=True)
+    try:
+        changes = parse_payment_changes(body, allow_remove=False)
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_income_sources_exist(changes)
     if err:
         return err
 
@@ -1215,16 +1180,17 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
         source_id = change.income_source_id
         stored = existing.get(source_id)
         before = get_payment(stored) if stored else None
-        if change.payment is None or payments_equal(before, change.payment):
+        after = change.payment
+        if after is None or after == before:
             continue
-        _INCOME_PLAN_TABLE.put_payment(year_month, source_id, change.payment)
+        _INCOME_PLAN_TABLE.put_payment(year_month, source_id, after)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=year_month,
             category_id=None,
             action=AuditAction.INCOME_CREATE if before is None else AuditAction.INCOME_UPDATE,
             explanation=explanation,
             user=user,
-            changes={"payment": {"before": before, "after": change.payment}},
+            changes={"payment": {"before": _payment_item(before), "after": after.to_item()}},
             override=override_active,
             income_source_id=source_id,
             income_line_id=payment_line_id(source_id),
@@ -1252,7 +1218,11 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     explanation = (body.get("explanation") or "").strip()
     if not explanation:
         return _response(400, "explanation is required")
-    changes, err = _parse_payment_rows(body, dense=False)
+    try:
+        changes = parse_payment_changes(body, allow_remove=True)
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_income_sources_exist(changes)
     if err:
         return err
 
@@ -1289,14 +1259,14 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         source_id = change.income_source_id
         before = by_key_before.get((year_month, source_id))
         after = change.payment
-        if payments_equal(before, after):
+        if after == before:
             continue
         if after is None:
             _INCOME_PLAN_TABLE.delete_payment(year_month, source_id)
         else:
             _INCOME_PLAN_TABLE.put_payment(year_month, source_id, after)
             sans_pin = {k: v for k, v in by_key_before.items() if k != (year_month, source_id)}
-            if payments_equal(walk_back_for(sans_pin, year_month, source_id), after):
+            if walk_back_for(sans_pin, year_month, source_id) == after:
                 pin_matches_carried.append(source_id)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=year_month,
@@ -1304,7 +1274,7 @@ def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             action=AuditAction.INCOME_PIN if after is not None else AuditAction.INCOME_UNPIN,
             explanation=explanation,
             user=user,
-            changes={"payment": {"before": before, "after": after}},
+            changes={"payment": {"before": _payment_item(before), "after": _payment_item(after)}},
             income_source_id=source_id,
             income_line_id=payment_line_id(source_id),
         )
@@ -1355,33 +1325,10 @@ def _post_one_time(event: dict[str, Any], year_month: str, user: dict[str, str],
     if not explanation:
         return _response(400, "explanation is required")
 
-    if body.get("lineId") is None:
-        line_action = AuditAction.ONE_TIME_CREATE
-    elif body.get("delete") is True:
-        line_action = AuditAction.ONE_TIME_DELETE
-    else:
-        line_action = AuditAction.ONE_TIME_UPDATE
-
-    new_line: dict[str, Any] | None = None
-    if line_action != AuditAction.ONE_TIME_DELETE:
-        try:
-            label = validate_label(body.get("label"))
-            amount = validate_one_time_amount(body.get("amount"))
-        except ValueError as e:
-            return _response(400, str(e))
-        new_line = {"label": label, "amount": amount}
-
-    existing_line_id: str | None = None
-    old_line: dict[str, Any] | None = None
-    if line_action != AuditAction.ONE_TIME_CREATE:
-        raw_line_id = body.get("lineId")
-        if not isinstance(raw_line_id, str) or not raw_line_id.startswith(ONE_TIME_LINE_PREFIX):
-            return _response(400, "lineId of a one-time line is required")
-        stored = _INCOME_PLAN_TABLE.get_line(year_month, raw_line_id)
-        if stored is None:
-            return _response(404, "One-time line not found")
-        existing_line_id = raw_line_id
-        old_line = {"label": stored["label"], "amount": stored["amount"]}
+    try:
+        args = parse_one_time_line_args(body)
+    except ValueError as e:
+        return _response(400, str(e))
 
     override_active, err = _resolve_override(event, body)
     if err:
@@ -1390,31 +1337,103 @@ def _post_one_time(event: dict[str, Any], year_month: str, user: dict[str, str],
     if err:
         return err
 
-    result: dict[str, Any]
-    if new_line is None and existing_line_id is not None:
-        _INCOME_PLAN_TABLE.delete_line(year_month, existing_line_id)
-        line_id = existing_line_id
-        status, result = 200, {"deleted": existing_line_id}
-    elif new_line is not None:
-        item = _INCOME_PLAN_TABLE.put_one_time(
-            year_month, new_line["label"], new_line["amount"], line_id=existing_line_id
-        )
-        line_id = str(item["lineId"])
-        status, result = (201 if line_action == AuditAction.ONE_TIME_CREATE else 200), item
-    else:
-        return _response(400, f"unknown one-time action '{line_action}'")
+    match args:
+        case CreateOneTimeLineArgs():
+            return _create_one_time_line(year_month, args, explanation, user, override_active)
+        case UpdateOneTimeLineArgs():
+            return _update_one_time_line(year_month, args, explanation, user, override_active)
+        case DeleteOneTimeLineArgs():
+            return _delete_one_time_line(year_month, args, explanation, user, override_active)
+        case _:
+            assert_never(args)
+
+
+def _create_one_time_line(
+    year_month: str, args: CreateOneTimeLineArgs, explanation: str, user: dict[str, str], override_active: bool
+) -> dict[str, Any]:
+    """Create a one-time income line, and write a ONE_TIME_CREATE audit entry."""
+
+    item = _INCOME_PLAN_TABLE.create_one_time_line(year_month, args)
+    _write_one_time_line_audit(
+        year_month,
+        AuditAction.ONE_TIME_CREATE,
+        str(item["lineId"]),
+        before=None,
+        after={"label": args.label, "amount": args.amount},
+        explanation=explanation,
+        user=user,
+        override_active=override_active,
+    )
+    return _json_response(201, json.dumps(item, default=_json_default))
+
+
+def _update_one_time_line(
+    year_month: str, args: UpdateOneTimeLineArgs, explanation: str, user: dict[str, str], override_active: bool
+) -> dict[str, Any]:
+    """Change the label and the amount of a one-time income line, and write a ONE_TIME_UPDATE audit entry."""
+
+    stored = _INCOME_PLAN_TABLE.get_line(year_month, args.line_id)
+    if stored is None:
+        return _response(404, "One-time line not found")
+    item = _INCOME_PLAN_TABLE.update_one_time_line(year_month, args)
+    _write_one_time_line_audit(
+        year_month,
+        AuditAction.ONE_TIME_UPDATE,
+        args.line_id,
+        before={"label": stored["label"], "amount": stored["amount"]},
+        after={"label": args.label, "amount": args.amount},
+        explanation=explanation,
+        user=user,
+        override_active=override_active,
+    )
+    return _json_response(200, json.dumps(item, default=_json_default))
+
+
+def _delete_one_time_line(
+    year_month: str, args: DeleteOneTimeLineArgs, explanation: str, user: dict[str, str], override_active: bool
+) -> dict[str, Any]:
+    """Delete a one-time income line, and write a ONE_TIME_DELETE audit entry that keeps its label."""
+
+    stored = _INCOME_PLAN_TABLE.get_line(year_month, args.line_id)
+    if stored is None:
+        return _response(404, "One-time line not found")
+    _INCOME_PLAN_TABLE.delete_one_time_line(year_month, args.line_id)
+    _write_one_time_line_audit(
+        year_month,
+        AuditAction.ONE_TIME_DELETE,
+        args.line_id,
+        before={"label": stored["label"], "amount": stored["amount"]},
+        after=None,
+        explanation=explanation,
+        user=user,
+        override_active=override_active,
+    )
+    return _json_response(200, json.dumps({"deleted": args.line_id}, default=_json_default))
+
+
+def _write_one_time_line_audit(
+    year_month: str,
+    action: AuditAction,
+    line_id: str,
+    *,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+    explanation: str,
+    user: dict[str, str],
+    override_active: bool,
+) -> None:
+    """Write the audit entry of one change to a one-time income line."""
 
     _AUDIT_LOG_TABLE.write_entry(
         effective_year_month=year_month,
         category_id=None,
-        action=line_action,
+        action=action,
         explanation=explanation,
         user=user,
-        changes={"line": {"before": old_line, "after": new_line}},
+        changes={"line": {"before": before, "after": after}},
         override=override_active,
         income_line_id=line_id,
     )
-    return _json_response(status, json.dumps(result, default=_json_default))
 
 
 # --- Transactions ---

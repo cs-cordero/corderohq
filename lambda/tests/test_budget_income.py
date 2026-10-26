@@ -24,14 +24,26 @@ os.environ.setdefault("STAGE", "test")
 from corderohq.aws.dynamodb import IncomePlanDensifyAdapter, IncomePlanTable, IncomeSourceTable, compute_income
 from corderohq.budget.densify import densify
 from corderohq.budget.income import (
-    monthly_net,
-    net_amount,
-    payments_equal,
+    CreateIncomeSourceArgs,
+    CreateOneTimeLineArgs,
+    Deduction,
+    DeductionKind,
+    DeleteOneTimeLineArgs,
+    PayFrequency,
+    Payment,
+    PaymentChange,
+    UpdateIncomeSourceArgs,
+    UpdateOneTimeLineArgs,
+    parse_create_income_source_args,
+    parse_one_time_line_args,
+    parse_payment,
+    parse_payment_changes,
+    parse_update_income_source_args,
     validate_frequency,
     validate_label,
     validate_one_time_amount,
-    validate_payment,
 )
+from corderohq.common import Keep, SetTo
 from corderohq.personal_finance_handler import handler
 
 # The same frozen "now" as test_personal_finance_handler: 2026-06 is the current month,
@@ -50,6 +62,14 @@ _PAYMENT: dict[str, Any] = {
         {"label": "401k", "kind": "PRETAX_SAVINGS", "amount": 400_000_000},
     ],
 }
+_PAYMENT_ARGS = Payment(
+    payments_per_month=2,
+    gross=5_000_000_000,
+    deductions=(
+        Deduction(label="Federal tax", kind=DeductionKind.TAX, amount=600_000_000),
+        Deduction(label="401k", kind=DeductionKind.PRETAX_SAVINGS, amount=400_000_000),
+    ),
+)
 _NET = 4_000_000_000
 
 
@@ -60,13 +80,16 @@ def _raised(payment: dict[str, Any], gross: int) -> dict[str, Any]:
 # --- The payment rules ---
 
 
-class TestValidatePayment:
-    def test_returns_the_stored_shape(self) -> None:
-        assert validate_payment(_PAYMENT) == _PAYMENT
+class TestParsePayment:
+    def test_returns_a_payment(self) -> None:
+        assert parse_payment(_PAYMENT) == _PAYMENT_ARGS
+
+    def test_to_item_returns_the_stored_shape(self) -> None:
+        assert _PAYMENT_ARGS.to_item() == _PAYMENT
 
     def test_label_is_trimmed(self) -> None:
         raw = {**_PAYMENT, "deductions": [{"label": "  Tax  ", "kind": "TAX", "amount": 1}]}
-        assert validate_payment(raw)["deductions"][0]["label"] == "Tax"
+        assert parse_payment(raw).deductions[0].label == "Tax"
 
     def test_accepts_integral_decimals_from_dynamodb(self) -> None:
         raw = {
@@ -74,9 +97,9 @@ class TestValidatePayment:
             "gross": Decimal("5000000000"),
             "deductions": [{"label": "Tax", "kind": "TAX", "amount": Decimal("1000000000")}],
         }
-        result = validate_payment(raw)
-        assert result["gross"] == 5_000_000_000
-        assert isinstance(result["gross"], int)
+        result = parse_payment(raw)
+        assert result.gross == 5_000_000_000
+        assert isinstance(result.gross, int)
 
     @pytest.mark.parametrize(
         ("change", "message"),
@@ -95,29 +118,27 @@ class TestValidatePayment:
     )
     def test_rejects_a_broken_payment(self, change: dict[str, Any], message: str) -> None:
         with pytest.raises(ValueError, match=message):
-            validate_payment({**_PAYMENT, **change})
+            parse_payment({**_PAYMENT, **change})
 
     def test_rejects_a_value_that_is_not_an_object(self) -> None:
         with pytest.raises(ValueError, match="payment must be an object"):
-            validate_payment(None)
+            parse_payment(None)
 
 
 class TestNetPay:
     def test_net_and_monthly_net(self) -> None:
-        assert net_amount(_PAYMENT) == _NET
-        assert monthly_net(_PAYMENT) == 2 * _NET
+        assert _PAYMENT_ARGS.net == _NET
+        assert _PAYMENT_ARGS.monthly_net == 2 * _NET
 
     def test_no_deductions(self) -> None:
-        assert net_amount({"paymentsPerMonth": 1, "gross": 7, "deductions": []}) == 7
+        assert Payment(payments_per_month=1, gross=7, deductions=()).net == 7
 
 
 class TestSmallRules:
-    def test_payments_equal_ignores_int_and_decimal(self) -> None:
+    def test_a_stored_payment_equals_the_same_payment_from_a_request(self) -> None:
         stored = {**_PAYMENT, "gross": Decimal("5000000000"), "paymentsPerMonth": Decimal("2")}
-        assert payments_equal(stored, _PAYMENT)
-        assert not payments_equal(stored, _raised(_PAYMENT, 6_000_000_000))
-        assert payments_equal(None, None)
-        assert not payments_equal(None, _PAYMENT)
+        assert parse_payment(stored) == _PAYMENT_ARGS
+        assert parse_payment(stored) != parse_payment(_raised(_PAYMENT, 6_000_000_000))
 
     def test_one_time_amount_must_be_positive(self) -> None:
         assert validate_one_time_amount(5) == 5
@@ -131,6 +152,53 @@ class TestSmallRules:
         assert validate_label("  Employer A ") == "Employer A"
         with pytest.raises(ValueError, match="at most"):
             validate_label("x" * 101)
+
+
+class TestParseIncomeSourceArgs:
+    def test_create(self) -> None:
+        body = {"owners": ["p1", "p1"], "label": " A ", "frequency": "monthly", "initialPayment": _PAYMENT}
+        assert parse_create_income_source_args(body) == CreateIncomeSourceArgs(
+            owners=["p1"], label="A", frequency=PayFrequency.MONTHLY, initial_payment=_PAYMENT_ARGS
+        )
+
+    def test_update_keeps_each_absent_key(self) -> None:
+        assert parse_update_income_source_args({"frequency": "weekly"}) == UpdateIncomeSourceArgs(
+            label=Keep(), frequency=SetTo(PayFrequency.WEEKLY), owners=Keep()
+        )
+
+    def test_update_needs_a_key(self) -> None:
+        with pytest.raises(ValueError, match="at least one editable field is required"):
+            parse_update_income_source_args({"note": "x"})
+
+
+class TestParsePaymentChanges:
+    def test_null_payment_removes_the_pin_only_when_permitted(self) -> None:
+        body = {"payments": [{"incomeSourceId": "s1", "payment": None}]}
+        assert parse_payment_changes(body, allow_remove=True) == [PaymentChange(income_source_id="s1", payment=None)]
+        with pytest.raises(ValueError, match="must not be null"):
+            parse_payment_changes(body, allow_remove=False)
+
+    def test_payment_is_required(self) -> None:
+        with pytest.raises(ValueError, match="must have payment"):
+            parse_payment_changes({"payments": [{"incomeSourceId": "s1"}]}, allow_remove=True)
+
+    def test_broken_payment_names_its_index(self) -> None:
+        body = {"payments": [{"incomeSourceId": "s1", "payment": {**_PAYMENT, "gross": -1}}]}
+        with pytest.raises(ValueError, match=r"payments\[0\]: gross must not be negative"):
+            parse_payment_changes(body, allow_remove=True)
+
+
+class TestParseOneTimeLineArgs:
+    def test_each_body_shape(self) -> None:
+        assert parse_one_time_line_args({"label": "Bonus", "amount": 5}) == CreateOneTimeLineArgs("Bonus", 5)
+        assert parse_one_time_line_args({"lineId": "ONE#x", "label": "Bonus", "amount": 5}) == UpdateOneTimeLineArgs(
+            "ONE#x", "Bonus", 5
+        )
+        assert parse_one_time_line_args({"lineId": "ONE#x", "delete": True}) == DeleteOneTimeLineArgs("ONE#x")
+
+    def test_a_payment_line_id_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="lineId of a one-time line is required"):
+            parse_one_time_line_args({"lineId": "SRC#s1", "delete": True})
 
 
 # --- The tables ---
@@ -188,7 +256,7 @@ class TestIncomePlanCarryStore:
     def test_reads_payment_rows_only_and_strips_the_prefix(self) -> None:
         table, _ = _plan_table([_payment_row("2026-05", "s1"), _one_time_row("2026-05", "x", 9)])
         rows = IncomePlanDensifyAdapter(table).scan_stored_values()
-        assert rows == [("2026-05", "s1", _PAYMENT)]
+        assert rows == [("2026-05", "s1", _PAYMENT_ARGS)]
 
     def test_writes_nothing_for_none(self) -> None:
         table, mock = _plan_table([])
@@ -218,7 +286,9 @@ class TestIncomeSourceTable:
 
     def test_create_goes_to_the_end(self) -> None:
         table = _source_table([_source("a", sort_order=4)])
-        item = table.create_income_source(["p1"], "Employer A", "biweekly")
+        item = table.create_income_source(
+            CreateIncomeSourceArgs(["p1"], "Employer A", PayFrequency.BIWEEKLY, _PAYMENT_ARGS)
+        )
         assert item["sortOrder"] == 5
         assert item["active"] is True
 
@@ -300,7 +370,9 @@ def tables() -> Iterator[dict[str, MagicMock]]:
     ):
         source_table.get_income_source_by_id.return_value = _source("s1")
         profile_table.get_profile.return_value = {"personId": "p1"}
-        plan_table.put_payment.side_effect = lambda ym, sid, payment: _payment_row(ym, sid, payment)
+        plan_table.put_payment.side_effect = lambda ym, source_id, payment: _payment_row(
+            ym, source_id, payment.to_item()
+        )
         yield {
             "source": source_table,
             "plan": plan_table,
@@ -340,8 +412,10 @@ class TestIncomeSourceRoutes:
         result = handler(_event("POST", "/api/income-sources", body), None)
 
         assert result["statusCode"] == 201
-        tables["source"].create_income_source.assert_called_once_with(["p1"], "Employer A", "biweekly")
-        tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", _PAYMENT)
+        tables["source"].create_income_source.assert_called_once_with(
+            CreateIncomeSourceArgs(["p1"], "Employer A", PayFrequency.BIWEEKLY, _PAYMENT_ARGS)
+        )
+        tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", _PAYMENT_ARGS)
         audit = tables["audit"].write_entry.call_args.kwargs
         assert audit["action"] == "INCOME_CREATE"
         assert audit["category_id"] is None
@@ -400,7 +474,14 @@ class TestIncomeSourceRoutes:
         }
         result = handler(_event("POST", "/api/income-sources", body), None)
         assert result["statusCode"] == 201
-        tables["source"].create_income_source.assert_called_once_with(["p1", "p2"], "Joint interest", "monthly")
+        tables["source"].create_income_source.assert_called_once_with(
+            CreateIncomeSourceArgs(
+                ["p1", "p2"],
+                "Joint interest",
+                PayFrequency.MONTHLY,
+                Payment(payments_per_month=1, gross=50_000_000, deductions=()),
+            )
+        )
 
     def test_change_of_owners_checks_each_person(self, tables: dict[str, MagicMock]) -> None:
         tables["profile"].get_profile.return_value = None
@@ -412,7 +493,9 @@ class TestIncomeSourceRoutes:
         tables["source"].update_income_source.return_value = _source("s1")
         result = handler(_event("PUT", "/api/income-sources/s1", {"label": "Employer B"}), None)
         assert result["statusCode"] == 200
-        tables["source"].update_income_source.assert_called_once_with("s1", {"label": "Employer B"})
+        tables["source"].update_income_source.assert_called_once_with(
+            "s1", UpdateIncomeSourceArgs(label=SetTo("Employer B"), frequency=Keep(), owners=Keep())
+        )
         tables["audit"].write_entry.assert_not_called()
 
 
@@ -423,7 +506,7 @@ class TestIncomeReplace:
         body = {"payments": [{"incomeSourceId": "s1", "payment": raised}], "explanation": "raise"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", raised)
+        tables["plan"].put_payment.assert_called_once_with(_CURRENT, "s1", parse_payment(raised))
         assert _audit_actions(tables["audit"]) == ["INCOME_UPDATE"]
 
     def test_same_payment_is_a_no_op(self, tables: dict[str, MagicMock]) -> None:
@@ -472,7 +555,7 @@ class TestIncomePin:
         body = {"payments": [{"incomeSourceId": "s1", "payment": _PAYMENT}], "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/pin", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].put_payment.assert_called_once_with(_FUTURE, "s1", _PAYMENT)
+        tables["plan"].put_payment.assert_called_once_with(_FUTURE, "s1", _PAYMENT_ARGS)
         assert _audit_actions(tables["audit"]) == ["INCOME_PIN"]
         assert json.loads(result["body"])["warnings"]["pinMatchesCarriedValue"] == ["s1"]
 
@@ -508,11 +591,11 @@ class TestIncomePin:
 
 class TestOneTimeLines:
     def test_create_in_a_future_month(self, tables: dict[str, MagicMock]) -> None:
-        tables["plan"].put_one_time.return_value = _one_time_row(_FUTURE, "x", 1_000)
+        tables["plan"].create_one_time_line.return_value = _one_time_row(_FUTURE, "x", 1_000)
         body = {"label": "Bonus", "amount": 1_000, "explanation": "bonus"}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/one-time", body), None)
         assert result["statusCode"] == 201
-        tables["plan"].put_one_time.assert_called_once_with(_FUTURE, "Bonus", 1_000, line_id=None)
+        tables["plan"].create_one_time_line.assert_called_once_with(_FUTURE, CreateOneTimeLineArgs("Bonus", 1_000))
         audit = tables["audit"].write_entry.call_args.kwargs
         assert audit["action"] == "ONE_TIME_CREATE"
         assert audit["income_line_id"] == "ONE#x"
@@ -524,12 +607,27 @@ class TestOneTimeLines:
         result = handler(_event("POST", f"/api/income/{_CURRENT}/one-time", body), None)
         assert result["statusCode"] == 404
 
+    def test_update_writes_the_new_label_and_amount(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].get_line.return_value = _one_time_row(_CURRENT, "x", 1_000)
+        tables["plan"].update_one_time_line.return_value = _one_time_row(_CURRENT, "x", 2_000)
+        body = {"lineId": "ONE#x", "label": "Bonus", "amount": 2_000, "explanation": "bigger"}
+        result = handler(_event("POST", f"/api/income/{_CURRENT}/one-time", body), None)
+        assert result["statusCode"] == 200
+        tables["plan"].update_one_time_line.assert_called_once_with(
+            _CURRENT, UpdateOneTimeLineArgs("ONE#x", "Bonus", 2_000)
+        )
+        audit = tables["audit"].write_entry.call_args.kwargs
+        assert audit["action"] == "ONE_TIME_UPDATE"
+        assert audit["changes"] == {
+            "line": {"before": {"label": "Bonus", "amount": 1_000}, "after": {"label": "Bonus", "amount": 2_000}}
+        }
+
     def test_delete_keeps_the_label_in_the_audit_entry(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].get_line.return_value = _one_time_row(_CURRENT, "x", 1_000)
         body = {"lineId": "ONE#x", "delete": True, "explanation": "mistake"}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/one-time", body), None)
         assert result["statusCode"] == 200
-        tables["plan"].delete_line.assert_called_once_with(_CURRENT, "ONE#x")
+        tables["plan"].delete_one_time_line.assert_called_once_with(_CURRENT, "ONE#x")
         audit = tables["audit"].write_entry.call_args.kwargs
         assert audit["action"] == "ONE_TIME_DELETE"
         assert audit["changes"] == {"line": {"before": {"label": "Bonus", "amount": 1_000}, "after": None}}
@@ -543,7 +641,7 @@ class TestOneTimeLines:
         body = {"label": "Bonus", "amount": 1_000, "explanation": "x"}
         result = handler(_event("POST", f"/api/income/{_LOCKED}/one-time", body), None)
         assert result["statusCode"] == 409
-        tables["plan"].put_one_time.assert_not_called()
+        tables["plan"].create_one_time_line.assert_not_called()
 
     def test_zero_amount_returns_400(self, tables: dict[str, MagicMock]) -> None:
         body = {"label": "Bonus", "amount": 0, "explanation": "x"}

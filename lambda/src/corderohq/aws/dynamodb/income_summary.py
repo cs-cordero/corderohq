@@ -8,7 +8,7 @@ from corderohq.aws.dynamodb.income_source import IncomeSourceTable
 from corderohq.aws.dynamodb.util import BUDGET_TZ
 from corderohq.budget.densify import resolve_future
 from corderohq.budget.editability import EditabilityState, editability
-from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, monthly_net, net_amount
+from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, Payment
 
 
 def compute_income(
@@ -35,7 +35,7 @@ def compute_income(
     is_future = year_month > current_ym
 
     month_rows = income_plan.get_income_plan_for_month(year_month)
-    payment_by_source: dict[str, dict[str, Any]] = {}
+    payment_by_source: dict[str, Payment] = {}
     pinned_ids: set[str] = set()
     if is_future:
         store = IncomePlanDensifyAdapter(income_plan)
@@ -62,9 +62,9 @@ def compute_income(
             "label": source["label"],
             "owners": list(source.get("owners", [])),
             "active": bool(source.get("active", False)),
-            **payment,
-            "net": net_amount(payment),
-            "monthlyNet": monthly_net(payment),
+            **payment.to_item(),
+            "net": payment.net,
+            "monthlyNet": payment.monthly_net,
         }
         if is_future:
             entry["pinned"] = source_id in pinned_ids
