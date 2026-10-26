@@ -24,7 +24,7 @@
   payments per month, plus every one-time income line in that year-month.
 - **Left to assign** — for one year-month, the planned net income minus the sum of all budget
   targets. The goal is `$0`.
-- **Disposition** — the effect of a transaction on the budget: **Budget**, **Off-budget**, or
+- **Budget treatment** — the effect of a transaction on the budget: **Budget**, **Off-budget**, or
   **Skip** (Spec 45).
 - **Spending account** — an account that pays for expenses, such as a checking account or a credit
   card.
@@ -231,9 +231,9 @@
     external, or non-cash. An account that I use for an upload is spending or holding. Each
     transaction from an upload records its account.
 
-## Transaction Dispositions
+## Budget Treatments
 
-45. Each transaction has a disposition:
+45. Each transaction has a budget treatment:
     - **Budget** — a normal expense or refund. It needs a category. It counts in the actual
       expenditure of its category. This is the default. Every transaction that exists today is a
       Budget transaction.
@@ -244,11 +244,11 @@
     - **Skip** — money that is not an expense. Examples are a paycheck, a bonus, interest, a
       transfer between my own accounts, a credit card payment, and the payback from my employer. It
       has no category. It counts nowhere.
-46. The app saves every transaction with its disposition, including a Skip transaction.
+46. The app saves every transaction with its budget treatment, including a Skip transaction.
 47. I can add an optional short note to any transaction, such as "work trip" or "vacation fund".
-48. I can change the disposition of a transaction on the CSV review screen, and later in the
+48. I can change the budget treatment of a transaction on the CSV review screen, and later in the
     ledger. The lock rules of Spec 8 apply to the change.
-49. The ledger shows the disposition and the note of each transaction. It hides Skip transactions
+49. The ledger shows the budget treatment and the note of each transaction. It hides Skip transactions
     by default, and a filter shows them.
 50. On the Budget Summary, only Budget transactions count as expenditures. This also applies to
     the category rules of Spec 5.
@@ -257,12 +257,12 @@
     TOTAL line does not include it. A second line below it, **TOTAL + off-budget**, shows the TOTAL
     actual plus the Off-budget actual.
 
-## CSV Import: Dispositions and Data Sent to the LLM
+## CSV Import: Budget Treatments and Data Sent to the LLM
 
-52. The CSV import suggests a disposition for each row, from the direction of the money and the
+52. The CSV import suggests a budget treatment for each row, from the direction of the money and the
     cash flow roles of the accounts:
 
-    | From → to | Example | Suggested disposition |
+    | From → to | Example | Suggested budget treatment |
     |---|---|---|
     | outside → spending | a paycheck, interest | Skip |
     | outside → spending | a refund | Budget, in the category of the purchase |
@@ -283,7 +283,7 @@
 53. A credit card payment must be Skip, in the checking CSV and in the card CSV. If not, the app
     counts the purchases two times.
 54. The review screen shows Skip rows and Off-budget rows in a separate list. I can change the
-    disposition and the category of any row before I commit.
+    budget treatment and the category of any row before I commit.
 55. The review screen marks a row that looks like the other side of a transfer. The other side has
     the same amount, the opposite direction, a date within a few days, and a different account. It
     can be in the same upload or in a transaction that I committed before. I confirm or reject each
@@ -295,14 +295,14 @@
     - To map the columns, it sends the header row and a type for each column, such as date,
       number, or text. The code finds the types locally. It sends no real values.
     - The column mapping also finds the category column of the bank, if the CSV has one. The app
-      uses that column locally as a hint for the disposition and the category.
+      uses that column locally as a hint for the budget treatment and the category.
     - To give a category to each row, it sends each unique description one time only.
 
 ## Deferred
 
 These items are out of scope now. The design must not block them.
 
-- **Import rules.** I make a rule, such as "a description that contains X gets disposition Y and
+- **Import rules.** I make a rule, such as "a description that contains X gets budget treatment Y and
   category Z". The import tests each row against my rules before the LLM step. A row that matches
   never goes to the LLM. The rules live in DynamoDB, not in the code.
 - **Memory of past choices.** The import uses the category that I chose before for the same

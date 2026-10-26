@@ -16,13 +16,13 @@ with gross amount and deductions, and the app calculates the net amount. The top
 **left to assign**: the planned net income minus the budget targets. The goal is `$0`, so every
 dollar of net amount has a job. See **Income Plan and Left to Assign**.
 
-Each transaction has a **disposition**: Budget (a normal expense), Off-budget (such as work travel
+Each transaction has a **budget treatment**: Budget (a normal expense), Off-budget (such as work travel
 that an employer pays back), or Skip (such as a paycheck or a transfer). Only Budget rows are
-actuals. See **Transaction Dispositions**.
+actuals. See **Budget Treatments**.
 
 For a CSV import, the user chooses the account of the file. An LLM finds the columns from the
 header names, and gives a kind and a category to each unique description. The app then suggests a
-disposition from the direction of the money. See **LLM-Driven CSV Import**.
+budget treatment from the direction of the money. See **LLM-Driven CSV Import**.
 
 Each new feature goes in this same app, in a folder of its own.
 
@@ -49,8 +49,8 @@ lambda/src/corderohq/
         llm.py             The two LLM calls: the column mapping and the categorization
         local_checks.py    Column types, dates, amounts and their sign, the bank category
         fingerprints.py    The fingerprint of each row, to find a row that was saved before
-        directions.py      The direction table: a suggested disposition for each CSV row
-    budget/dispositions.py The Budget / Off-budget / Skip rules of a transaction
+        directions.py      The direction table: a suggested budget treatment for each CSV row
+    budget/treatment.py The Budget / Off-budget / Skip rules of a transaction
     budget/transactions.py The checks of a new or changed transaction, at the API boundary
     budget/income.py       Payment rules, net amount, and the IncomePlan row IDs
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
@@ -157,7 +157,7 @@ it.
 |                        |                    |            | (signed millionths;         |
 |                        |                    |            | positive = money out,       |
 |                        |                    |            | negative = money in),       |
-|                        |                    |            | disposition (BUDGET /       |
+|                        |                    |            | budgetTreatment (BUDGET /   |
 |                        |                    |            | OFF_BUDGET / SKIP; absent   |
 |                        |                    |            | means BUDGET), categoryId   |
 |                        |                    |            | (required for BUDGET,       |
@@ -402,8 +402,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/upload                 | Body {csvData, accountId,          |
 |        |                                          | flipSigns?}. Returns the parsed    |
-|        |                                          | rows with a suggested disposition  |
-|        |                                          | and category, fingerprints,        |
+|        |                                          | rows with a suggested budget       |
+|        |                                          | treatment and category,            |
+|        |                                          | fingerprints,                      |
 |        |                                          | duplicate flags, and per-row       |
 |        |                                          | issues and review reasons. Nothing |
 |        |                                          | is committed. See **LLM-Driven CSV |
@@ -416,8 +417,8 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | (skippedDuplicates).               |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/update                 | Update mutable fields (description,|
-|        |                                          | amount, disposition, categoryId,   |
-|        |                                          | accountId, note).                  |
+|        |                                          | amount, budgetTreatment,           |
+|        |                                          | categoryId, accountId, note).      |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/delete                 | Body {items: [{yearMonth, sortId}, |
 |        |                                          | ...]}. Batch delete.               |
@@ -1060,11 +1061,11 @@ does not return it. The budget page fetches `GET /api/income/{YYYY-MM}`, and cal
 live from the form while the user types. The value never blocks a save, and no transaction changes
 it. The frontend shows it in a different colour when it is not `$0`.
 
-## Transaction Dispositions
+## Budget Treatments
 
-Each transaction has a disposition (`budget/dispositions.py`):
+Each transaction has a budget treatment (`budget/treatment.py`):
 
-| Disposition | What | In the summary | Category |
+| Budget treatment | What | In the summary | Category |
 |---|---|---|---|
 | `BUDGET` (absent means this) | a normal expense or refund | in its category | required |
 | `OFF_BUDGET` | work travel that an employer pays back; a payment with money from a fund | in the Off-budget total only | optional |
@@ -1072,11 +1073,11 @@ Each transaction has a disposition (`budget/dispositions.py`):
 
 The rules for the fields of a transaction, on a create, an update, and a commit:
 
-- `disposition = BUDGET` needs a `categoryId`. `disposition = SKIP` has no `categoryId`: the server
+- `budgetTreatment = BUDGET` needs a `categoryId`. `budgetTreatment = SKIP` has no `categoryId`: the server
   removes one that the client sends.
 - `accountId`, if present, must be an account in the Account table.
 - `note`, if present, is at most 200 characters after a trim. An empty note is removed.
-- A change of the disposition, the category, or the note obeys the usual editability rules.
+- A change of the budget treatment, the category, or the note obeys the usual editability rules.
 
 The summary counts only BUDGET rows, in each category and in the membership rules. An OFF_BUDGET
 row with a category does not put that category on the summary. The `/replace` body rule reads
@@ -1093,7 +1094,7 @@ The Off-budget total is below the TOTAL, and not in it. If it were in the TOTAL,
 would always show an overspend that is not real. The summary page shows the Off-budget row and the
 "Total + off-budget" row below the Total row. The ledger hides SKIP rows by default.
 
-**No migration was necessary.** An absent `disposition` reads as BUDGET, and every older row has a
+**No migration was necessary.** An absent `budgetTreatment` reads as BUDGET, and every older row has a
 `categoryId`, so every older row stays valid. An older paycheck in an "Income" category stays a
 BUDGET row until the user changes it to SKIP. A locked month stays as it is, unless an admin uses
 the override.
@@ -1342,8 +1343,8 @@ SSM:
 3. **Give a kind and a category.** `categorize_transactions()` sends each unique description one
    time, with the active category names. It returns a `kind` (expense, refund, income,
    card_payment, own_transfer) and a category for each one, and maps them back to every row.
-4. **Suggest a disposition.** The import finds the other side of each row (see below). The
-   direction table then gives the disposition. A transfer between two own accounts counts one time
+4. **Suggest a budget treatment.** The import finds the other side of each row (see below). The
+   direction table then gives the budget treatment. A transfer between two own accounts counts one time
    at most, on the side where the money leaves a spending account.
 5. **Mark duplicates.** Each row gets a fingerprint (see below). A row whose fingerprint is in the
    table already is a duplicate.
@@ -1373,7 +1374,7 @@ An EXTERNAL or NON_CASH account, such as a mortgage, counts as the outside world
 
 ### The direction table
 
-| Upload role | Money | Other side | Suggested disposition | Mark for review? |
+| Upload role | Money | Other side | Suggested budget treatment | Mark for review? |
 |---|---|---|---|---|
 | SPENDING | out | outside | BUDGET, LLM category | only if no category |
 | SPENDING | out | SPENDING account (pair, last four) | SKIP | no |
@@ -1415,7 +1416,7 @@ fingerprint = sha256(accountId | transactionDate | amount | normalizedDescriptio
   "transactions": [
     {
       "transactionDate", "description", "amount", "categoryId", "categoryName", "accountId",
-      "disposition": "BUDGET" | "OFF_BUDGET" | "SKIP",
+      "budgetTreatment": "BUDGET" | "OFF_BUDGET" | "SKIP",
       "suggestedBy": "PAIR" | "LAST_FOUR" | "BANK" | "LLM" | "DEFAULT",
       "pairWith": { "yearMonth", "sortId" } | null,
       "fingerprint": "…",
@@ -1441,7 +1442,7 @@ its first 7 characters. A bank date format such as `03/15/2026` therefore gives 
 This is a known limit.
 
 The review screen shows three lists: the rows to look at first, the BUDGET rows, and the
-OFF_BUDGET and SKIP rows. A duplicate row starts unselected. The user can change the disposition,
+OFF_BUDGET and SKIP rows. A duplicate row starts unselected. The user can change the budget treatment,
 the category, and the note of each row before the commit.
 
 ### CSV commit semantics
@@ -1556,7 +1557,7 @@ The Python unit tests are in `lambda/tests/`. These files hold the budget tests:
 `test_personal_finance_handler.py`, `test_budget_auth.py`, `test_budget_categories.py`,
 `test_budget_category_groups.py`, `test_budget_budget.py`, `test_budget_densify.py`,
 `test_budget_editability.py`, `test_budget_transactions.py`, `test_budget_summary.py`,
-`test_budget_audit.py`, `test_budget_csv_import.py`, `test_budget_dispositions.py`,
+`test_budget_audit.py`, `test_budget_csv_import.py`, `test_budget_treatment.py`,
 `test_budget_income.py`, and `test_budget_directions.py`. The net worth tests are in
 `test_networth_*.py`. Every DynamoDB call and every Anthropic call is a mock (`MagicMock`). Run
 `uv run pytest` from `lambda/`.
@@ -1566,7 +1567,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 ## Key Design Decisions
 
 - **An enum for each fixed set of values** — A set of strings that the app stores or sends is a
-  `StrEnum`, such as `Disposition`, `EditabilityState`, `AuditAction`, `CashFlowRole`,
+  `StrEnum`, such as `BudgetTreatment`, `EditabilityState`, `AuditAction`, `CashFlowRole`,
   `IncomeLineType`, `PayFrequency`, `DeductionKind`, `TransactionKind`, `SuggestedBy`,
   `ReviewReason`, and `RowIssue`. A member is a `str`, so it compares equal to the stored string,
   and JSON and boto3 write its value. A set that never leaves the process is a plain `Enum`, such
@@ -1577,7 +1578,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
   payments every month, so extra money (a third paycheck, a bonus, an RSU or DCFSA payout) is not in
   the plan unless the user adds a one-time line. The app shows no surplus for it, and gives no
   warning. The app does not track actual income, so a paycheck deposit is SKIP, and there is no
-  "income" disposition.
+  "income" budget treatment.
 - **Gross amount and each deduction are recorded** — The user can then see why the net amount is
   the number that it is. The app does not model a change of the net amount during the year, such as
   the 401k limit or the Social Security wage limit. The user changes the payment by hand.
@@ -1593,7 +1594,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
   later as one more step before the LLM step.
 - **The income plan obeys the budget's month rules** — A locked month shows the same left to
   assign amount for ever. One generic densify step serves both tables.
-- **One disposition for "the budget must not count this"** — Off-budget covers work travel and
+- **One budget treatment for "the budget must not count this"** — Off-budget covers work travel and
   payments from a fund. Skip covers money that is not an expense. Only Budget rows are actuals.
 - **The boundary rule for the CSV import** — Money counts only when it crosses the boundary
   between the outside world, the spending accounts, and the holding accounts. When unsure, the

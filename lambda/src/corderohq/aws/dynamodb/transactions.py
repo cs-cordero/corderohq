@@ -66,7 +66,7 @@ class TransactionsTable:
         changes: dict[str, FieldChange[Any]] = {
             "description": args.description,
             "amount": args.amount,
-            "disposition": args.disposition,
+            "budgetTreatment": args.budget_treatment,
             "categoryId": args.category_id,
             "accountId": args.account_id,
             "note": args.note,

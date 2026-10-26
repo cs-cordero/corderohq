@@ -10,8 +10,8 @@ from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.transactions import TransactionsTable
 from corderohq.aws.dynamodb.util import BUDGET_TZ
 from corderohq.budget.densify import carry_map, value_at_or_before
-from corderohq.budget.dispositions import Disposition, disposition_of
 from corderohq.budget.editability import EditabilityState, editability
+from corderohq.budget.treatment import BudgetTreatment, budget_treatment_of
 
 
 def _month_end_utc(year_month: str) -> datetime:
@@ -99,11 +99,11 @@ def compute_summary(
     for transaction in transactions:
         raw_amount = transaction.get("amount")
         amount = Decimal("0") if raw_amount is None else Decimal(str(raw_amount))
-        disposition = disposition_of(transaction)
-        if disposition == Disposition.OFF_BUDGET:
+        budget_treatment = budget_treatment_of(transaction)
+        if budget_treatment == BudgetTreatment.OFF_BUDGET:
             off_budget_actual += amount
             continue
-        if disposition != Disposition.BUDGET:
+        if budget_treatment != BudgetTreatment.BUDGET:
             continue
         cat_id = transaction["categoryId"]
         budget_transaction_cat_ids.add(cat_id)

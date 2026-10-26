@@ -17,8 +17,8 @@ os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
 from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
-from corderohq.budget.dispositions import Classification, Disposition
 from corderohq.budget.transactions import UpdateTransactionArgs
+from corderohq.budget.treatment import BudgetTreatment, Classification
 from corderohq.common import Keep, Remove, SetTo
 from corderohq.personal_finance_handler import handler
 
@@ -2092,8 +2092,8 @@ class TestGetNetWorthHistory:
         mock_st.get_snapshot_for_month.assert_not_called()
 
 
-class TestTransactionDispositions:
-    """The disposition, the note, and the account on the transaction routes."""
+class TestTransactionBudgetTreatments:
+    """The budget treatment, the note, and the account on the transaction routes."""
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_create_skip_row_without_category(self, mock_tt: MagicMock) -> None:
@@ -2107,7 +2107,7 @@ class TestTransactionDispositions:
                     "transactionDate": "2026-06-15",
                     "description": "Payroll",
                     "amount": -5_000_000,
-                    "disposition": "SKIP",
+                    "budgetTreatment": "SKIP",
                     "categoryId": "cat1",
                     "note": " paycheck ",
                 },
@@ -2116,7 +2116,7 @@ class TestTransactionDispositions:
         )
         assert result["statusCode"] == 201
         new = mock_tt.create_transaction.call_args.args[0]
-        assert new.classification == Classification(Disposition.SKIP, None)
+        assert new.classification == Classification(BudgetTreatment.SKIP, None)
         assert new.note == "paycheck"
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
@@ -2138,7 +2138,7 @@ class TestTransactionDispositions:
         mock_tt.create_transaction.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
-    def test_create_with_unknown_disposition_returns_400(self, mock_tt: MagicMock) -> None:
+    def test_create_with_unknown_budget_treatment_returns_400(self, mock_tt: MagicMock) -> None:
         result = handler(
             _make_event(
                 "POST",
@@ -2149,7 +2149,7 @@ class TestTransactionDispositions:
                     "description": "Coffee",
                     "amount": 5_000_000,
                     "categoryId": "cat1",
-                    "disposition": "EXPENSED",
+                    "budgetTreatment": "EXPENSED",
                 },
             ),
             None,
@@ -2180,14 +2180,14 @@ class TestTransactionDispositions:
         mock_tt.create_transaction.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
-    def test_update_passes_disposition_and_note(self, mock_tt: MagicMock) -> None:
+    def test_update_passes_budget_treatment_and_note(self, mock_tt: MagicMock) -> None:
         mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "categoryId": "cat1"}
         mock_tt.update_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s"}
         result = handler(
             _make_event(
                 "POST",
                 "/api/transactions/update",
-                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "disposition": "OFF_BUDGET", "note": "trip"},
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "OFF_BUDGET", "note": "trip"},
             ),
             None,
         )
@@ -2198,7 +2198,7 @@ class TestTransactionDispositions:
             UpdateTransactionArgs(
                 description=Keep(),
                 amount=Keep(),
-                disposition=SetTo(Disposition.OFF_BUDGET),
+                budget_treatment=SetTo(BudgetTreatment.OFF_BUDGET),
                 category_id=SetTo("cat1"),
                 account_id=Remove(),
                 note=SetTo("trip"),
@@ -2207,12 +2207,12 @@ class TestTransactionDispositions:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_update_rule_failure_returns_400(self, mock_tt: MagicMock) -> None:
-        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "disposition": "SKIP"}
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "SKIP"}
         result = handler(
             _make_event(
                 "POST",
                 "/api/transactions/update",
-                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "disposition": "BUDGET"},
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "BUDGET"},
             ),
             None,
         )
@@ -2237,7 +2237,7 @@ class TestTransactionDispositions:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
-    def test_commit_stores_dispositions(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
+    def test_commit_stores_budget_treatments(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
         mock_tt.batch_create_transaction.return_value = []
         result = handler(
@@ -2251,13 +2251,13 @@ class TestTransactionDispositions:
                             "description": "Payroll",
                             "amount": -5_000_000,
                             "categoryId": "",
-                            "disposition": "SKIP",
+                            "budgetTreatment": "SKIP",
                         },
                         {
                             "transactionDate": f"{_EDITABLE_MONTH}-11",
                             "description": "Hotel",
                             "amount": 9_000_000,
-                            "disposition": "OFF_BUDGET",
+                            "budgetTreatment": "OFF_BUDGET",
                             "note": "work trip",
                         },
                         {
@@ -2278,12 +2278,12 @@ class TestTransactionDispositions:
             "transactionDate": f"{_EDITABLE_MONTH}-10",
             "description": "Payroll",
             "amount": -5_000_000,
-            "disposition": "SKIP",
+            "budgetTreatment": "SKIP",
         }
-        assert items[1]["disposition"] == "OFF_BUDGET"
+        assert items[1]["budgetTreatment"] == "OFF_BUDGET"
         assert items[1]["note"] == "work trip"
         assert "categoryId" not in items[1]
-        assert items[2]["disposition"] == "BUDGET"
+        assert items[2]["budgetTreatment"] == "BUDGET"
         assert items[2]["categoryId"] == "cat1"
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
@@ -2301,14 +2301,14 @@ class TestTransactionDispositions:
                             "transactionDate": f"{_EDITABLE_MONTH}-11",
                             "description": "Unknown category",
                             "amount": 1,
-                            "disposition": "OFF_BUDGET",
+                            "budgetTreatment": "OFF_BUDGET",
                             "categoryId": "unknown",
                         },
                         {
                             "transactionDate": f"{_EDITABLE_MONTH}-12",
                             "description": "No category is fine",
                             "amount": 1,
-                            "disposition": "OFF_BUDGET",
+                            "budgetTreatment": "OFF_BUDGET",
                         },
                     ],
                 },
@@ -2322,7 +2322,7 @@ class TestTransactionDispositions:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
-    def test_commit_with_unknown_disposition_returns_400(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
+    def test_commit_with_unknown_budget_treatment_returns_400(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
         result = handler(
             _make_event(
                 "POST",
@@ -2334,7 +2334,7 @@ class TestTransactionDispositions:
                             "description": "x",
                             "amount": 1,
                             "categoryId": "cat1",
-                            "disposition": "IGNORED",
+                            "budgetTreatment": "IGNORED",
                         }
                     ]
                 },
@@ -2355,8 +2355,8 @@ class TestTransactionDispositions:
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
         ]
         mock_tt.list_transactions_for_month.return_value = [
-            {"yearMonth": _EDITABLE_MONTH, "amount": -5_000_000, "disposition": "SKIP"},
-            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 1_000, "disposition": "OFF_BUDGET"},
+            {"yearMonth": _EDITABLE_MONTH, "amount": -5_000_000, "budgetTreatment": "SKIP"},
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 1_000, "budgetTreatment": "OFF_BUDGET"},
         ]
         mock_audit.write_entry.return_value = {}
 

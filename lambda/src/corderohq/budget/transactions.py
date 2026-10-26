@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, fields
 from typing import Any
 
-from corderohq.budget.dispositions import Classification, Disposition, parse_classification
+from corderohq.budget.treatment import BudgetTreatment, Classification, parse_classification
 from corderohq.common import FieldChange, Keep, Remove, SetTo, parse_optional_str
 
 NOTE_MAX_LENGTH = 200
@@ -30,7 +30,7 @@ class NewTransaction:
             "transactionDate": self.transaction_date,
             "description": self.description,
             "amount": self.amount,
-            "disposition": self.classification.disposition,
+            "budgetTreatment": self.classification.budget_treatment,
         }
         if self.classification.category_id is not None:
             item["categoryId"] = self.classification.category_id
@@ -47,7 +47,7 @@ class UpdateTransactionArgs:
 
     description: Keep | SetTo[str]
     amount: Keep | SetTo[int]
-    disposition: Keep | SetTo[Disposition]
+    budget_treatment: Keep | SetTo[BudgetTreatment]
     category_id: FieldChange[str]
     account_id: FieldChange[str]
     note: FieldChange[str]
@@ -75,7 +75,9 @@ def parse_new_transaction(
         transaction_date=transaction_date.strip(),
         description=_parse_description(payload.get("description")),
         amount=_parse_amount(payload.get("amount")),
-        classification=parse_classification(payload.get("disposition"), payload.get("categoryId"), require_category),
+        classification=parse_classification(
+            payload.get("budgetTreatment"), payload.get("categoryId"), require_category
+        ),
         account_id=parse_optional_str(payload.get("accountId"), "accountId"),
         note=_parse_note(payload.get("note")),
     )
@@ -84,7 +86,7 @@ def parse_new_transaction(
 def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[str, Any]) -> UpdateTransactionArgs:
     """Convert the body of an update request into checked changes. Raise ValueError for bad input.
 
-    `existing` is the stored transaction. A change to the disposition or the category is checked
+    `existing` is the stored transaction. A change to the budget treatment or the category is checked
     together with the stored value of the other one. The account and the note change on their own.
     It does not check that the account exists.
     """
@@ -97,14 +99,14 @@ def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[
     if "amount" in payload:
         amount = SetTo(_parse_amount(payload["amount"]))
 
-    disposition: Keep | SetTo[Disposition] = Keep()
+    budget_treatment: Keep | SetTo[BudgetTreatment] = Keep()
     category_id: FieldChange[str] = Keep()
-    if "disposition" in payload or "categoryId" in payload:
+    if "budgetTreatment" in payload or "categoryId" in payload:
         classification = parse_classification(
-            payload["disposition"] if "disposition" in payload else existing.get("disposition"),
+            payload["budgetTreatment"] if "budgetTreatment" in payload else existing.get("budgetTreatment"),
             payload["categoryId"] if "categoryId" in payload else existing.get("categoryId"),
         )
-        disposition = SetTo(classification.disposition)
+        budget_treatment = SetTo(classification.budget_treatment)
         category_id = _set_or_remove(classification.category_id)
 
     account_id: FieldChange[str] = Keep()
@@ -115,7 +117,7 @@ def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[
     if "note" in payload:
         note = _set_or_remove(_parse_note(payload["note"]))
 
-    return UpdateTransactionArgs(description, amount, disposition, category_id, account_id, note)
+    return UpdateTransactionArgs(description, amount, budget_treatment, category_id, account_id, note)
 
 
 def _parse_description(value: Any) -> str:

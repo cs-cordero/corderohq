@@ -288,7 +288,7 @@ class TestHistoricalNameResolution:
         assert result["categories"][0]["historicalName"] is None
 
 
-class TestDispositions:
+class TestBudgetTreatments:
     """Only BUDGET rows are actuals. OFF_BUDGET rows have their own total."""
 
     def test_off_budget_and_skip_rows_do_not_change_a_category(self) -> None:
@@ -297,10 +297,10 @@ class TestDispositions:
         txn_mock.query.return_value = {
             "Items": [
                 {"categoryId": "cat1", "amount": 300_000},
-                {"categoryId": "cat1", "amount": 400_000, "disposition": "BUDGET"},
-                {"categoryId": "cat1", "amount": 5_000_000, "disposition": "OFF_BUDGET"},
-                {"amount": 2_000_000, "disposition": "OFF_BUDGET"},
-                {"amount": -9_000_000, "disposition": "SKIP"},
+                {"categoryId": "cat1", "amount": 400_000, "budgetTreatment": "BUDGET"},
+                {"categoryId": "cat1", "amount": 5_000_000, "budgetTreatment": "OFF_BUDGET"},
+                {"amount": 2_000_000, "budgetTreatment": "OFF_BUDGET"},
+                {"amount": -9_000_000, "budgetTreatment": "SKIP"},
             ]
         }
         cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
@@ -327,7 +327,7 @@ class TestDispositions:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
         budget_mock.query.return_value = {"Items": []}
         txn_mock.query.return_value = {
-            "Items": [{"categoryId": "dead_cat", "amount": 5_000_000, "disposition": "OFF_BUDGET"}]
+            "Items": [{"categoryId": "dead_cat", "amount": 5_000_000, "budgetTreatment": "OFF_BUDGET"}]
         }
         cat_mock.scan.return_value = {"Items": [_cat("dead_cat", active=False)]}
 
@@ -341,8 +341,8 @@ class TestDispositions:
         budget_mock.query.return_value = {"Items": []}
         txn_mock.query.return_value = {
             "Items": [
-                {"categoryId": "cat1", "amount": 1_000_000, "disposition": "OFF_BUDGET"},
-                {"amount": 1_000_000, "disposition": "SKIP"},
+                {"categoryId": "cat1", "amount": 1_000_000, "budgetTreatment": "OFF_BUDGET"},
+                {"amount": 1_000_000, "budgetTreatment": "SKIP"},
                 {"categoryId": "cat2", "amount": 0},
             ]
         }

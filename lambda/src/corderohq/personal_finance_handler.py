@@ -25,9 +25,9 @@ from corderohq.aws.dynamodb import (
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
-from corderohq.budget.dispositions import Classification, Disposition, disposition_of, parse_classification
 from corderohq.budget.editability import EditabilityState, editability
 from corderohq.budget.transactions import NewTransaction, parse_new_transaction, parse_update_transaction_args
+from corderohq.budget.treatment import BudgetTreatment, Classification, budget_treatment_of, parse_classification
 from corderohq.common import Keep, Remove, SetTo
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
@@ -695,7 +695,9 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
     txns = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
-    txn_cat_ids = {t["categoryId"] for t in txns if disposition_of(t) == Disposition.BUDGET and t.get("amount") != 0}
+    txn_cat_ids = {
+        t["categoryId"] for t in txns if budget_treatment_of(t) == BudgetTreatment.BUDGET and t.get("amount") != 0
+    }
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
     body_cat_ids = {t["categoryId"] for t in targets}
@@ -943,7 +945,7 @@ def _validate_commit_rows(
         issues: list[RowIssue] = []
         category_id = classification.category_id
         category_unknown = category_id is not None and category_id not in valid_category_ids
-        if (classification.disposition == Disposition.BUDGET and category_id is None) or category_unknown:
+        if (classification.budget_treatment == BudgetTreatment.BUDGET and category_id is None) or category_unknown:
             issues.append(RowIssue.MISSING_CATEGORY)
         year_month = transaction_date[:7]
         if YEAR_MONTH_PATTERN.match(year_month):
@@ -957,9 +959,9 @@ def _validate_commit_rows(
 def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     """Save all rows of a CSV import, or none of them.
 
-    The body is `{rows: [{transactionDate, description, amount, categoryId?, disposition?, accountId?, note?}, ...],
-    override?}`. `categoryId` is necessary only for a BUDGET row. If any row has an issue, return a 409 with the issues
-    of all rows, and save nothing. A second call with the same body saves the rows again, as duplicates.
+    The body is `{rows: [{transactionDate, description, amount, categoryId?, budgetTreatment?, accountId?, note?},
+    ...], override?}`. `categoryId` is necessary only for a BUDGET row. If any row has an issue, return a 409 with the
+    issues of all rows, and save nothing. A second call with the same body saves the rows again, as duplicates.
     """
 
     body = _parse_json_body(event)

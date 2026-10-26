@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from corderohq.aws.dynamodb import TransactionsTable
-from corderohq.budget.dispositions import Classification, Disposition
 from corderohq.budget.transactions import NewTransaction, UpdateTransactionArgs
+from corderohq.budget.treatment import BudgetTreatment, Classification
 from corderohq.common import Keep, Remove, SetTo
 
 
@@ -51,20 +51,21 @@ def _new(description: str, classification: Classification, **fields: Any) -> New
 
 class TestCreate:
     def test_creates_transaction_with_sort_id(self, table: TransactionsTable, mock: MagicMock) -> None:
-        result = table.create_transaction(_new("Grocery store", Classification(Disposition.BUDGET, "cat1")))
+        result = table.create_transaction(_new("Grocery store", Classification(BudgetTreatment.BUDGET, "cat1")))
         assert result["yearMonth"] == "2026-03"
         assert result["sortId"].startswith("2026-03-15#")
         assert result["description"] == "Grocery store"
-        assert result["disposition"] == "BUDGET"
+        assert result["budgetTreatment"] == "BUDGET"
         assert result["categoryId"] == "cat1"
         assert "accountId" not in result and "note" not in result
         assert "createdAt" in result
         assert mock.put_item.call_args.kwargs["Item"] == result
 
     def test_skip_row_has_no_category(self, table: TransactionsTable) -> None:
-        new = _new("Payroll", Classification(Disposition.SKIP, None), amount=-100, account_id="acct1", note="paycheck")
+        skip = Classification(BudgetTreatment.SKIP, None)
+        new = _new("Payroll", skip, amount=-100, account_id="acct1", note="paycheck")
         result = table.create_transaction(new)
-        assert result["disposition"] == "SKIP"
+        assert result["budgetTreatment"] == "SKIP"
         assert "categoryId" not in result
         assert result["accountId"] == "acct1"
         assert result["note"] == "paycheck"
@@ -74,11 +75,11 @@ class TestBatchCreate:
     def test_writes_each_row(self, table: TransactionsTable, mock: MagicMock) -> None:
         writer = mock.batch_writer.return_value.__enter__.return_value
         rows = [
-            _new("Hotel", Classification(Disposition.OFF_BUDGET, None), note="work trip"),
-            _new("Groceries", Classification(Disposition.BUDGET, "cat1"), transaction_date="2026-03-16"),
+            _new("Hotel", Classification(BudgetTreatment.OFF_BUDGET, None), note="work trip"),
+            _new("Groceries", Classification(BudgetTreatment.BUDGET, "cat1"), transaction_date="2026-03-16"),
         ]
         result = table.batch_create_transaction(rows)
-        assert result[0]["disposition"] == "OFF_BUDGET"
+        assert result[0]["budgetTreatment"] == "OFF_BUDGET"
         assert result[0]["note"] == "work trip"
         assert "categoryId" not in result[0]
         assert result[1]["categoryId"] == "cat1"
@@ -90,7 +91,7 @@ def _changes(**changes: Any) -> UpdateTransactionArgs:
     fields: dict[str, Any] = {
         "description": Keep(),
         "amount": Keep(),
-        "disposition": Keep(),
+        "budgetTreatment": Keep(),
         "category_id": Keep(),
         "account_id": Keep(),
         "note": Keep(),
@@ -114,17 +115,17 @@ class TestUpdate:
         assert kwargs["UpdateExpression"] == "SET #description = :description, #amount = :amount"
         assert kwargs["ExpressionAttributeValues"] == {":description": "New", ":amount": 5}
 
-    def test_sets_and_removes_the_disposition_fields(self, table: TransactionsTable, mock: MagicMock) -> None:
+    def test_sets_and_removes_the_budget_treatment_fields(self, table: TransactionsTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {}}
         args = _changes(
-            disposition=SetTo(Disposition.SKIP), category_id=Remove(), account_id=Remove(), note=SetTo("old")
+            budget_treatment=SetTo(BudgetTreatment.SKIP), category_id=Remove(), account_id=Remove(), note=SetTo("old")
         )
         table.update_transaction("2026-03", "s", args)
         kwargs = mock.update_item.call_args.kwargs
         assert kwargs["UpdateExpression"] == (
-            "SET #disposition = :disposition, #note = :note REMOVE #categoryId, #accountId"
+            "SET #budgetTreatment = :budgetTreatment, #note = :note REMOVE #categoryId, #accountId"
         )
-        assert kwargs["ExpressionAttributeValues"] == {":disposition": "SKIP", ":note": "old"}
+        assert kwargs["ExpressionAttributeValues"] == {":budgetTreatment": "SKIP", ":note": "old"}
 
     def test_a_change_of_nothing_is_an_error(self, table: TransactionsTable, mock: MagicMock) -> None:
         with pytest.raises(ValueError, match="changes nothing"):
