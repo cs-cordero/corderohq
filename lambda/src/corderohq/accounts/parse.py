@@ -9,16 +9,13 @@ from corderohq.accounts.types import (
     BudgetRole,
     ChosenClassAccount,
     CreateAccountArgs,
-    FieldChange,
     FixedClassAccount,
-    Keep,
     LoanAccount,
     LoanTerms,
     NewAccount,
-    Remove,
-    SetTo,
     UpdateAccountArgs,
 )
+from corderohq.field_changes import FieldChange, Keep, Remove, SetTo
 from corderohq.util import YEAR_MONTH_PATTERN
 
 _LOAN_TERMS_FIELDS = ("interestRate", "monthlyPayment", "payoffYearMonth")

@@ -11,15 +11,13 @@ from corderohq.accounts import (
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
-    Keep,
     LoanAccount,
     LoanTerms,
     NewAccount,
-    Remove,
-    SetTo,
     UpdateAccountArgs,
 )
 from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
+from corderohq.field_changes import Keep, Remove, SetTo
 
 
 # Same split-fixture trick as test_budget_categories: share one MagicMock as

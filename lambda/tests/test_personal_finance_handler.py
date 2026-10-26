@@ -16,7 +16,10 @@ os.environ.setdefault("NETWORTH_SNAPSHOT_TABLE_NAME", "test-NetWorthSnapshot")
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
-from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount, Keep, SetTo
+from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
+from corderohq.budget.dispositions import Disposition
+from corderohq.budget.transactions import UpdateTransactionArgs
+from corderohq.field_changes import Keep, Remove, SetTo
 from corderohq.personal_finance_handler import handler
 
 # Stable "now" used across editability-sensitive tests: June 15, 2026 noon UTC.
@@ -1046,6 +1049,7 @@ class TestPostTransaction:
 class TestUpdateTransaction:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_updates_transaction(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "2026-06-15#abc"}
         mock_tt.update_transaction.return_value = {
             "yearMonth": _EDITABLE_MONTH,
             "sortId": "2026-06-15#abc",
@@ -1067,7 +1071,7 @@ class TestUpdateTransaction:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_returns_404_when_not_found(self, mock_tt: MagicMock) -> None:
-        mock_tt.update_transaction.return_value = None
+        mock_tt.get_transaction.return_value = None
         result = handler(
             _make_event(
                 "POST",
@@ -2178,6 +2182,7 @@ class TestTransactionDispositions:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_update_passes_disposition_and_note(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "categoryId": "cat1"}
         mock_tt.update_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s"}
         result = handler(
             _make_event(
@@ -2189,12 +2194,21 @@ class TestTransactionDispositions:
         )
         assert result["statusCode"] == 200
         mock_tt.update_transaction.assert_called_once_with(
-            _EDITABLE_MONTH, "s", {"disposition": "OFF_BUDGET", "note": "trip"}
+            _EDITABLE_MONTH,
+            "s",
+            UpdateTransactionArgs(
+                description=Keep(),
+                amount=Keep(),
+                disposition=SetTo(Disposition.OFF_BUDGET),
+                category_id=SetTo("cat1"),
+                account_id=Remove(),
+                note=SetTo("trip"),
+            ),
         )
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_update_rule_failure_returns_400(self, mock_tt: MagicMock) -> None:
-        mock_tt.update_transaction.side_effect = ValueError("categoryId is required for a BUDGET transaction")
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "disposition": "SKIP"}
         result = handler(
             _make_event(
                 "POST",
@@ -2204,6 +2218,23 @@ class TestTransactionDispositions:
             None,
         )
         assert result["statusCode"] == 400
+        mock_tt.update_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_update_with_unknown_account_returns_400(self, mock_tt: MagicMock, mock_at: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "categoryId": "cat1"}
+        mock_at.get_account_by_id.return_value = None
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/update",
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "accountId": "nope"},
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.update_transaction.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")

@@ -6,8 +6,10 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
-from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition, resolve_disposition_fields
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
+from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition
+from corderohq.budget.transactions import UpdateTransactionArgs
+from corderohq.field_changes import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,52 +101,32 @@ class TransactionsTable:
         _LOGGER.info("Batch created %d transactions", len(items))
         return items
 
-    def update_transaction(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Update the mutable fields of a transaction. Returns the updated item, or None if not found.
-
-        The mutable fields are description, amount, and the disposition attributes. A change to a
-        disposition attribute is checked together with the stored row, and a disposition attribute
-        that no longer applies is removed. Raise ValueError if a disposition rule fails.
-        """
+    def get_transaction(self, year_month: str, sort_id: str) -> dict[str, Any] | None:
+        """Return one transaction, or None if it does not exist."""
 
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
-        if "Item" not in response:
-            return None
-        existing = response["Item"]
+        return response.get("Item")
 
-        set_values: dict[str, Any] = {field: updates[field] for field in ("description", "amount") if field in updates}
-        remove_names: list[str] = []
-        if any(name in updates for name in DISPOSITION_ATTRIBUTES):
-            fields = resolve_disposition_fields(updates, base=existing)
-            set_values.update(fields.stored_values())
-            remove_names = fields.absent_attributes()
+    def update_transaction(self, year_month: str, sort_id: str, args: UpdateTransactionArgs) -> dict[str, Any]:
+        """Apply the checked changes to a transaction, and return the updated item.
 
-        if not set_values and not remove_names:
-            return existing
+        The caller reads the transaction first, and parses the changes against it. Raise ValueError if
+        the changes change nothing.
+        """
 
-        attr_names: dict[str, str] = {}
-        attr_values: dict[str, Any] = {}
-        set_parts: list[str] = []
-        for field, value in set_values.items():
-            attr_names[f"#{field}"] = field
-            attr_values[f":{field}"] = value
-            set_parts.append(f"#{field} = :{field}")
-        for field in remove_names:
-            attr_names[f"#{field}"] = field
-
-        expression = "SET " + ", ".join(set_parts)
-        if remove_names:
-            expression += " REMOVE " + ", ".join(f"#{field}" for field in remove_names)
-
-        result = self._table.update_item(
-            Key={"yearMonth": year_month, "sortId": sort_id},
-            UpdateExpression=expression,
-            ExpressionAttributeNames=attr_names,
-            ExpressionAttributeValues=attr_values,
-            ReturnValues="ALL_NEW",
+        changes: dict[str, FieldChange[Any]] = {
+            "description": args.description,
+            "amount": args.amount,
+            "disposition": args.disposition,
+            "categoryId": args.category_id,
+            "accountId": args.account_id,
+            "note": args.note,
+        }
+        response = self._table.update_item(
+            Key={"yearMonth": year_month, "sortId": sort_id}, ReturnValues="ALL_NEW", **update_expression(changes)
         )
         _LOGGER.info("Updated transaction %s/%s", year_month, sort_id)
-        return result["Attributes"]
+        return response["Attributes"]
 
     def delete_transaction(self, year_month: str, sort_id: str) -> bool:
         """Delete a transaction. Returns True if deleted, False if not found."""

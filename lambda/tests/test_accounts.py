@@ -9,11 +9,8 @@ from corderohq.accounts import (
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
-    Keep,
     LoanAccount,
     LoanTerms,
-    Remove,
-    SetTo,
     UpdateAccountArgs,
     budget_role_of,
     get_metadata_for_account_type,
@@ -30,6 +27,7 @@ from corderohq.accounts import (
     validate_owners,
     validate_target_year,
 )
+from corderohq.field_changes import Keep, Remove, SetTo
 
 
 class TestEnumValues:

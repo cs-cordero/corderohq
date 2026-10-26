@@ -8,13 +8,7 @@ from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import (
-    Keep,
-    SetTo,
-    parse_create_account_args,
-    parse_update_account_args,
-    validate_asset_class,
-)
+from corderohq.accounts import parse_create_account_args, parse_update_account_args, validate_asset_class
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -38,6 +32,8 @@ from corderohq.budget.dispositions import (
     resolve_disposition_fields,
 )
 from corderohq.budget.editability import EditabilityState, editability
+from corderohq.budget.transactions import parse_update_transaction_args
+from corderohq.field_changes import Keep, Remove, SetTo
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -1174,24 +1170,24 @@ def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if err:
         return err
 
-    updates: dict[str, Any] = {}
-    for field in ("description", "amount", *DISPOSITION_ATTRIBUTES):
-        if field in body:
-            updates[field] = body[field]
-
-    account_id = updates.get("accountId")
-    if isinstance(account_id, str) and account_id.strip():
-        err = _check_account_exists(account_id.strip())
-        if err:
-            return err
-
+    existing = _TRANSACTIONS_TABLE.get_transaction(year_month, sort_id)
+    if existing is None:
+        return _response(404, "Transaction not found")
     try:
-        item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, updates)
+        args = parse_update_transaction_args(body, existing)
     except ValueError as e:
         return _response(400, str(e))
-    if item is None:
-        return _response(404, "Transaction not found")
+    match args.account_id:
+        case SetTo(value=account_id):
+            err = _check_account_exists(account_id)
+            if err:
+                return err
+        case Keep() | Remove():
+            pass
+    if args.changes_nothing():
+        return _json_response(200, json.dumps(existing, default=_json_default))
 
+    item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, args)
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
