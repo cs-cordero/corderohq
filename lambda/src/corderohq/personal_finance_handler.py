@@ -297,7 +297,7 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     # A new category appears in the current month at once, so that a summary of the kind
     # Spec 1 describes shows it. A walk-back from a later month then finds initialTarget,
     # until the user pins a different amount. See "Category lifecycle" in the architecture.
-    _BUDGET_TABLE.put_single(_year_month_of(now), item["categoryId"], initial_target)
+    _BUDGET_TABLE.set_single_budget_target(_year_month_of(now), item["categoryId"], initial_target)
 
     return _json_response(201, json.dumps(item, default=_json_default))
 
@@ -380,9 +380,9 @@ def _deactivate_category(
     # Delete the pin rows and write the audit entries before the active flag changes. The
     # audit trail then holds the amounts that were there before.
     for month in affected_months:
-        existing = _BUDGET_TABLE.get_targets(month)
+        existing = _BUDGET_TABLE.get_budget_targets(month)
         old_amount = next((t["amount"] for t in existing if t["categoryId"] == category_id), None)
-        _BUDGET_TABLE.delete_single(month, category_id)
+        _BUDGET_TABLE.delete_single_budget_target(month, category_id)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
             category_id=category_id,
@@ -632,7 +632,7 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     if year_month <= current_ym:
         # Dense month (past, grace, current). Stored rows are authoritative;
         # no walk-back needed.
-        return _json_response(200, json.dumps(_BUDGET_TABLE.get_targets(year_month), default=_json_default))
+        return _json_response(200, json.dumps(_BUDGET_TABLE.get_budget_targets(year_month), default=_json_default))
 
     # Future month: resolve effective values via per-category walk-back,
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
@@ -689,7 +689,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             ),
         )
 
-    existing = _BUDGET_TABLE.get_targets(year_month)
+    existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
     txns = _TRANSACTIONS_TABLE.list_for_month(year_month)
     txn_cat_ids = {t["categoryId"] for t in txns if t.get("amount") != 0}
@@ -712,7 +712,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
         )
 
     old_by_category = {t["categoryId"]: t["amount"] for t in existing}
-    items = _BUDGET_TABLE.put_targets(year_month, targets)
+    items = _BUDGET_TABLE.set_all_budget_targets(year_month, targets)
 
     new_by_category = {t["categoryId"]: t["amount"] for t in items}
     for cat_id, new_amount in new_by_category.items():
@@ -799,7 +799,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
 
     # Snapshot table state before any writes so walk-back warnings are computed
     # against the pre-write world.
-    rows_before = _BUDGET_TABLE.scan_all()
+    rows_before = _BUDGET_TABLE.scan()
     by_key_before: dict[tuple[str, str], Any] = {(r["yearMonth"], r["categoryId"]): r["amount"] for r in rows_before}
 
     pin_matches_carried: list[str] = []
@@ -812,7 +812,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         if new_amount is None:
             if old_amount is None:
                 continue
-            _BUDGET_TABLE.delete_single(year_month, cat_id)
+            _BUDGET_TABLE.delete_single_budget_target(year_month, cat_id)
             _AUDIT_LOG_TABLE.write_entry(
                 effective_year_month=year_month,
                 category_id=cat_id,
@@ -824,7 +824,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         else:
             if old_amount == new_amount:
                 continue
-            _BUDGET_TABLE.put_single(year_month, cat_id, new_amount)
+            _BUDGET_TABLE.set_single_budget_target(year_month, cat_id, new_amount)
             # Warning: would walk-back have resolved to this same value without the pin?
             sans_pin = {k: v for k, v in by_key_before.items() if k != (year_month, cat_id)}
             if walk_back_for(sans_pin, year_month, cat_id) == new_amount:
@@ -839,7 +839,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             )
 
     # Re-scan for fresh state, then compute downstream pins + resolved view.
-    rows_after = _BUDGET_TABLE.scan_all()
+    rows_after = _BUDGET_TABLE.scan()
     touched_cat_ids = {t["categoryId"] for t in targets}
     downstream_pins = sorted(
         (

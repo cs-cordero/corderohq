@@ -83,7 +83,7 @@ def compute_summary(
             if raw is not None:
                 budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))
     else:
-        for target in budget.get_targets(year_month):
+        for target in budget.get_budget_targets(year_month):
             raw = target.get("amount")
             budget_by_category[target["categoryId"]] = Decimal("0") if raw is None else Decimal(str(raw))
 

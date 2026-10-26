@@ -15,7 +15,7 @@ class BudgetTable:
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
-    def get_targets(self, year_month: str) -> list[dict[str, Any]]:
+    def get_budget_targets(self, year_month: str) -> list[dict[str, Any]]:
         """Get all budget targets for a given month (YYYY-MM)."""
 
         response = self._table.query(
@@ -24,10 +24,10 @@ class BudgetTable:
         )
         return response["Items"]
 
-    def put_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def set_all_budget_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Set the budget targets for one month. This writes over every target in that month."""
 
-        existing = self.get_targets(year_month)
+        existing = self.get_budget_targets(year_month)
         with self._table.batch_writer() as batch:
             for item in existing:
                 batch.delete_item(Key={"yearMonth": year_month, "categoryId": item["categoryId"]})
@@ -46,7 +46,7 @@ class BudgetTable:
         _LOGGER.info("Set %d targets for %s", len(items), year_month)
         return items
 
-    def scan_all(self) -> list[dict[str, Any]]:
+    def scan(self) -> list[dict[str, Any]]:
         """Return every row in the table."""
 
         items: list[dict[str, Any]] = []
@@ -55,15 +55,15 @@ class BudgetTable:
             items.extend(response.get("Items", []))
         return items
 
-    def put_single(self, year_month: str, category_id: str, amount: Any) -> None:
+    def set_single_budget_target(self, year_month: str, category_id: str, amount: Any) -> None:
         """Write one budget row."""
 
         self._table.put_item(
             Item={"yearMonth": year_month, "categoryId": category_id, "amount": amount},
         )
 
-    def delete_single(self, year_month: str, category_id: str) -> None:
-        """Delete one budget row. /pin calls this when it clears a pin, with amount=null."""
+    def delete_single_budget_target(self, year_month: str, category_id: str) -> None:
+        """Delete one budget row."""
 
         self._table.delete_item(Key={"yearMonth": year_month, "categoryId": category_id})
 
@@ -141,9 +141,9 @@ class BudgetCarryStore:
     def scan_carry_rows(self) -> list[CarryRow]:
         """Return every Budget row as `(yearMonth, categoryId, amount)`."""
 
-        return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan_all()]
+        return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan()]
 
     def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
         """Write one Budget row."""
 
-        self._budget_table.put_single(year_month, key, value)
+        self._budget_table.set_single_budget_target(year_month, key, value)

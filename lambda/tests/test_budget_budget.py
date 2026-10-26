@@ -1,5 +1,3 @@
-"""Tests for BudgetTable."""
-
 from unittest.mock import MagicMock
 
 from corderohq.aws.dynamodb import BudgetTable
@@ -12,6 +10,7 @@ def _make_table() -> tuple[BudgetTable, MagicMock]:
     going through `table._table.*` — which ty rejects because the class
     annotates `_table` with the real boto3 Table type.
     """
+
     bt = BudgetTable.__new__(BudgetTable)
     mock = MagicMock()
     bt._table = mock
@@ -26,14 +25,14 @@ class TestGetTargets:
                 {"yearMonth": "2026-03", "categoryId": "cat1", "amount": 500000000},
             ]
         }
-        result = table.get_targets("2026-03")
+        result = table.get_budget_targets("2026-03")
         assert len(result) == 1
         assert result[0]["categoryId"] == "cat1"
 
     def test_returns_empty_for_no_targets(self) -> None:
         table, mock = _make_table()
         mock.query.return_value = {"Items": []}
-        result = table.get_targets("2026-03")
+        result = table.get_budget_targets("2026-03")
         assert result == []
 
 
@@ -45,7 +44,7 @@ class TestPutTargets:
         mock.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
         mock.query.return_value = {"Items": [{"yearMonth": "2026-03", "categoryId": "old_cat", "amount": 100}]}
 
-        result = table.put_targets("2026-03", [{"categoryId": "new_cat", "amount": 200}])
+        result = table.set_all_budget_targets("2026-03", [{"categoryId": "new_cat", "amount": 200}])
 
         assert len(result) == 1
         assert result[0]["categoryId"] == "new_cat"
@@ -59,18 +58,18 @@ class TestScanAll:
             {"Items": [{"yearMonth": "2026-03", "categoryId": "a", "amount": 100}], "LastEvaluatedKey": {"k": "v"}},
             {"Items": [{"yearMonth": "2026-04", "categoryId": "b", "amount": 200}]},
         ]
-        result = table.scan_all()
+        result = table.scan()
         assert len(result) == 2
         assert mock.scan.call_count == 2
 
     def test_returns_empty_for_empty_table(self) -> None:
         table, mock = _make_table()
         mock.scan.return_value = {"Items": []}
-        assert table.scan_all() == []
+        assert table.scan() == []
 
 
 class TestPutSingle:
     def test_writes_one_row(self) -> None:
         table, mock = _make_table()
-        table.put_single("2026-03", "cat1", 500)
+        table.set_single_budget_target("2026-03", "cat1", 500)
         mock.put_item.assert_called_once_with(Item={"yearMonth": "2026-03", "categoryId": "cat1", "amount": 500})

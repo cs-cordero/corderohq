@@ -45,7 +45,7 @@ def _skip_hydration() -> "object":
 
     Densification has its own test module (test_budget_densify.py); most handler
     tests don't care about densify writes and would otherwise need to mock
-    `_BUDGET_TABLE.scan_all` + `_CATEGORY_TABLE.get_all_categories` everywhere. Tests that
+    `_BUDGET_TABLE.scan` + `_CATEGORY_TABLE.get_all_categories` everywhere. Tests that
     DO want to exercise the hydration path can re-patch this within their scope.
     """
 
@@ -116,7 +116,7 @@ class TestPostCategory:
 
         assert result["statusCode"] == 201
         mock_ct.create_category.assert_called_once_with("Groceries", "g1")
-        mock_bt.put_single.assert_called_once_with(_EDITABLE_MONTH, "cat1", 50_000_000)
+        mock_bt.set_single_budget_target.assert_called_once_with(_EDITABLE_MONTH, "cat1", 50_000_000)
 
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
@@ -139,7 +139,7 @@ class TestPostCategory:
             None,
         )
         assert result["statusCode"] == 201
-        mock_bt.put_single.assert_called_once_with(_EDITABLE_MONTH, "cat1", 0)
+        mock_bt.set_single_budget_target.assert_called_once_with(_EDITABLE_MONTH, "cat1", 0)
 
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
@@ -376,7 +376,7 @@ class TestDeactivateCategory:
         body = json.loads(result["body"])
         assert body["affectedMonths"] == ["2026-09", "2026-12"]
         mock_ct.deactivate.assert_not_called()
-        mock_bt.delete_single.assert_not_called()
+        mock_bt.delete_single_budget_target.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
@@ -392,7 +392,7 @@ class TestDeactivateCategory:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries", "active": True}
         mock_ct.deactivate.return_value = {"categoryId": "cat1", "name": "Groceries", "active": False}
         mock_bt.find_future_months_with_category.return_value = ["2026-09", "2026-12"]
-        mock_bt.get_targets.side_effect = [
+        mock_bt.get_budget_targets.side_effect = [
             [{"categoryId": "cat1", "amount": 800}],
             [{"categoryId": "cat1", "amount": 1200}],
         ]
@@ -410,7 +410,7 @@ class TestDeactivateCategory:
         # One UNPIN audit entry per dropped pin row.
         assert mock_audit.write_entry.call_count == 2
         # Pin rows are deleted from the Budget table.
-        assert mock_bt.delete_single.call_count == 2
+        assert mock_bt.delete_single_budget_target.call_count == 2
         # Category is then deactivated last.
         mock_ct.deactivate.assert_called_once_with("cat1")
 
@@ -599,8 +599,8 @@ class TestGetBudget:
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     def test_dense_month_returns_stored_rows_directly(self, mock_bt: MagicMock, mock_ct: MagicMock) -> None:
         # _EDITABLE_MONTH == current ym → dense, no walk-back.
-        mock_bt.scan_all.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
-        mock_bt.get_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.scan.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(_make_event("GET", f"/api/budget/{_EDITABLE_MONTH}"), None)
@@ -615,7 +615,7 @@ class TestGetBudget:
         self, mock_bt: MagicMock, mock_ct: MagicMock
     ) -> None:
         # Current = 2026-06, asking for 2026-09 (future). No pin at 09 → walk back to 06.
-        mock_bt.scan_all.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.scan.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(_make_event("GET", "/api/budget/2026-09"), None)
@@ -637,8 +637,10 @@ class TestPostBudgetReplace:
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     def test_sets_targets_and_writes_audit(self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock) -> None:
-        mock_bt.get_targets.return_value = []
-        mock_bt.put_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = []
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
         mock_tt.list_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
@@ -664,8 +666,10 @@ class TestPostBudgetReplace:
     def test_emits_update_audit_when_amount_changes(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
     ) -> None:
-        mock_bt.get_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
-        mock_bt.put_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 750}]
+        mock_bt.get_budget_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 750}
+        ]
         mock_tt.list_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
@@ -690,8 +694,10 @@ class TestPostBudgetReplace:
     def test_skips_audit_for_unchanged_amount(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
     ) -> None:
-        mock_bt.get_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
-        mock_bt.put_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
         mock_tt.list_for_month.return_value = []
 
         handler(
@@ -711,7 +717,7 @@ class TestPostBudgetReplace:
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     def test_returns_409_when_body_missing_existing_category(self, mock_bt: MagicMock, mock_tt: MagicMock) -> None:
         # cat2 has an existing row but isn't in the body → body-completeness violation.
-        mock_bt.get_targets.return_value = [
+        mock_bt.get_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500},
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 300},
         ]
@@ -731,7 +737,7 @@ class TestPostBudgetReplace:
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["missingCategoryIds"] == ["cat2"]
-        mock_bt.put_targets.assert_not_called()
+        mock_bt.set_all_budget_targets.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
@@ -739,7 +745,7 @@ class TestPostBudgetReplace:
         self, mock_bt: MagicMock, mock_tt: MagicMock
     ) -> None:
         # cat2 has a transaction but no existing row → still required in body.
-        mock_bt.get_targets.return_value = []
+        mock_bt.get_budget_targets.return_value = []
         mock_tt.list_for_month.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 5000000},
         ]
@@ -765,8 +771,10 @@ class TestPostBudgetReplace:
     def test_zero_amount_transaction_not_required_in_body(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
     ) -> None:
-        mock_bt.get_targets.return_value = []
-        mock_bt.put_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = []
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
         mock_tt.list_for_month.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 0},
         ]
@@ -826,8 +834,10 @@ class TestPostBudgetReplace:
         # The audit row's `user` is a {sub, email, username} snapshot drawn from
         # the JWT claims at request time — not just an email string. See the
         # "Audit user identity" section in docs/personal-finance-architecture.md.
-        mock_bt.get_targets.return_value = []
-        mock_bt.put_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = []
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
         mock_tt.list_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
@@ -1151,7 +1161,7 @@ class TestPostBudgetPin:
         mock_tt: MagicMock,
     ) -> None:
         # No existing pin; current=2026-06, pin 2026-09 cat1=500.
-        mock_bt.scan_all.return_value = []
+        mock_bt.scan.return_value = []
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
@@ -1166,7 +1176,7 @@ class TestPostBudgetPin:
             None,
         )
         assert result["statusCode"] == 200
-        mock_bt.put_single.assert_called_once_with(_FUTURE_MONTH, "cat1", 500)
+        mock_bt.set_single_budget_target.assert_called_once_with(_FUTURE_MONTH, "cat1", 500)
 
         audit_kwargs = mock_audit.write_entry.call_args.kwargs
         assert audit_kwargs["action"] == "PIN"
@@ -1183,7 +1193,7 @@ class TestPostBudgetPin:
         mock_audit: MagicMock,
         mock_tt: MagicMock,
     ) -> None:
-        mock_bt.scan_all.return_value = [
+        mock_bt.scan.return_value = [
             {"yearMonth": _FUTURE_MONTH, "categoryId": "cat1", "amount": 800},
         ]
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
@@ -1200,7 +1210,7 @@ class TestPostBudgetPin:
             None,
         )
 
-        mock_bt.delete_single.assert_called_once_with(_FUTURE_MONTH, "cat1")
+        mock_bt.delete_single_budget_target.assert_called_once_with(_FUTURE_MONTH, "cat1")
         kwargs = mock_audit.write_entry.call_args.kwargs
         assert kwargs["action"] == "UNPIN"
         assert kwargs["changes"] == {"amount": {"before": 800, "after": None}}
@@ -1217,7 +1227,7 @@ class TestPostBudgetPin:
         mock_tt: MagicMock,
     ) -> None:
         # Re-submitting the same pin value should not write or audit.
-        mock_bt.scan_all.return_value = [
+        mock_bt.scan.return_value = [
             {"yearMonth": _FUTURE_MONTH, "categoryId": "cat1", "amount": 500},
         ]
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
@@ -1233,7 +1243,7 @@ class TestPostBudgetPin:
             ),
             None,
         )
-        mock_bt.put_single.assert_not_called()
+        mock_bt.set_single_budget_target.assert_not_called()
         mock_audit.write_entry.assert_not_called()
 
     def test_rejects_dense_month(self) -> None:
@@ -1265,7 +1275,7 @@ class TestPostBudgetPin:
         mock_tt: MagicMock,
     ) -> None:
         # Current=06 with cat1=500. Pinning 2026-09=500 → walk-back without the new pin yields 500.
-        mock_bt.scan_all.return_value = [
+        mock_bt.scan.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500},
         ]
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
@@ -1302,7 +1312,7 @@ class TestPostBudgetPin:
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500},
             {"yearMonth": "2026-12", "categoryId": "cat1", "amount": 999},
         ]
-        mock_bt.scan_all.return_value = downstream_state
+        mock_bt.scan.return_value = downstream_state
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
@@ -1345,7 +1355,7 @@ class TestEditabilityEnforcement:
         body = json.loads(result["body"])
         assert body["yearMonth"] == _LOCKED_MONTH
         assert body["state"] == "LOCKED"
-        mock_bt.put_targets.assert_not_called()
+        mock_bt.set_all_budget_targets.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     def test_replace_override_without_admin_returns_403(self, mock_bt: MagicMock) -> None:
@@ -1362,7 +1372,7 @@ class TestEditabilityEnforcement:
             None,
         )
         assert result["statusCode"] == 403
-        mock_bt.put_targets.assert_not_called()
+        mock_bt.set_all_budget_targets.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
@@ -1370,8 +1380,10 @@ class TestEditabilityEnforcement:
     def test_replace_override_with_admin_succeeds_and_audit_flagged(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
     ) -> None:
-        mock_bt.get_targets.return_value = []
-        mock_bt.put_targets.return_value = [{"yearMonth": _LOCKED_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = []
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _LOCKED_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
         mock_tt.list_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
@@ -1399,8 +1411,10 @@ class TestEditabilityEnforcement:
     def test_replace_editable_month_audit_override_is_false(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
     ) -> None:
-        mock_bt.get_targets.return_value = []
-        mock_bt.put_targets.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
+        mock_bt.get_budget_targets.return_value = []
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
         mock_tt.list_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
