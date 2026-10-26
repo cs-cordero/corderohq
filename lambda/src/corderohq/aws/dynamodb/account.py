@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Any, assert_never
 
 from ulid import ULID
@@ -12,7 +11,6 @@ from corderohq.accounts import (
     CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
-    LoanTerms,
     account_type_meta,
     parse_loan_terms,
     validate_asset_classes,
@@ -22,16 +20,6 @@ from corderohq.accounts import (
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
 
 _LOGGER = logging.getLogger(__name__)
-
-
-def _loan_terms_item(terms: LoanTerms) -> dict[str, Any]:
-    """Return the stored form of loan terms. `interestRate` is a Decimal, because DynamoDB rejects floats."""
-
-    return {
-        "interestRate": Decimal(str(terms.interest_rate)),
-        "monthlyPayment": terms.monthly_payment,
-        "payoffYearMonth": terms.payoff_year_month,
-    }
 
 
 class AccountTable:
@@ -77,7 +65,7 @@ class AccountTable:
             "liability": True,
         }
         if account.loan_terms is not None:
-            fields["loanTerms"] = _loan_terms_item(account.loan_terms)
+            fields["loanTerms"] = account.loan_terms.to_item()
         return fields
 
     def __init__(self, table_name: str) -> None:
@@ -195,7 +183,7 @@ class AccountTable:
                 terms = parse_loan_terms(updates["loanTerms"], amortizing=meta.amortizing)
                 if terms is not None:  # always true for a non-None input; narrows the type
                     set_parts.append("loanTerms = :lt")
-                    values[":lt"] = _loan_terms_item(terms)
+                    values[":lt"] = terms.to_item()
         if "notes" in updates:
             if updates["notes"] is None:
                 remove_parts.append("notes")

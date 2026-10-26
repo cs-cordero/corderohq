@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 
 class AccountType(StrEnum):
@@ -85,6 +86,16 @@ class LoanTerms:
     interest_rate: float  # a decimal in [0, 1), such as 0.04875 for 4.875%
     monthly_payment: int  # millionths of a dollar
     payoff_year_month: str  # YYYY-MM
+
+    def to_item(self) -> dict[str, Any]:
+        """Converts an instance of LoanTerms to how it is stored in DynamoDB."""
+
+        return {
+            # DynamoDB rejects floats.
+            "interestRate": Decimal(str(self.interest_rate)),
+            "monthlyPayment": self.monthly_payment,
+            "payoffYearMonth": self.payoff_year_month,
+        }
 
 
 @dataclass(frozen=True)
