@@ -7,18 +7,17 @@ import pytest
 from corderohq.accounts import (
     AccountType,
     AssetClass,
+    CashFlowRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
-    Keep,
     LoanAccount,
     LoanTerms,
     NewAccount,
-    Remove,
-    SetTo,
     UpdateAccountArgs,
 )
-from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
+from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable, get_cash_flow_role
+from corderohq.common import Keep, Remove, SetTo
 
 
 # Same split-fixture trick as test_budget_categories: share one MagicMock as
@@ -111,6 +110,37 @@ def _create(accounts: AccountTable, account: NewAccount, name: str = "Chase Chec
     return accounts.create_account(args)
 
 
+class TestGetCashFlowRole:
+    @pytest.mark.parametrize(
+        ("account_type", "expected"),
+        [
+            ("checking", "SPENDING"),
+            ("credit_card", "SPENDING"),
+            ("savings", "HOLDING"),
+            ("brokerage", "HOLDING"),
+            ("529", "HOLDING"),
+            ("530a", "HOLDING"),
+            ("401k", "HOLDING"),
+            ("hsa", "HOLDING"),
+            ("other_asset", "HOLDING"),
+            ("mortgage", "EXTERNAL"),
+            ("other_liability", "EXTERNAL"),
+            ("real_estate", "NON_CASH"),
+            ("vehicle", "NON_CASH"),
+        ],
+    )
+    def test_default_for_each_type(self, account_type: str, expected: str) -> None:
+        assert get_cash_flow_role({"accountType": account_type}) == expected
+
+    @pytest.mark.parametrize("account_type", list(AccountType))
+    def test_every_account_type_has_a_default(self, account_type: AccountType) -> None:
+        assert get_cash_flow_role({"accountType": account_type.value}) in CashFlowRole
+
+    def test_explicit_role_wins(self) -> None:
+        assert get_cash_flow_role({"accountType": "other_liability", "cashFlowRole": "SPENDING"}) == "SPENDING"
+        assert get_cash_flow_role({"accountType": "savings", "cashFlowRole": "SPENDING"}) == "SPENDING"
+
+
 class TestAccountTableCreate:
     def test_creates_fixed_class_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.scan.return_value = {"Items": []}
@@ -137,7 +167,7 @@ class TestAccountTableCreate:
         account = LoanAccount(AccountType.MORTGAGE, LoanTerms(0.045, 2_500_000_000, "2045-06"))
         result = _create(accounts, account, name="Mortgage", owners=["p1", "p2"], notes="30-year fixed")
         assert result["liability"] is True
-        assert result["assetClasses"] == ["other"]
+        assert result["assetClasses"] == ["debt"]
         assert result["owners"] == ["p1", "p2"]
         # interestRate is stored as Decimal (DynamoDB rejects floats); the rest is unchanged.
         assert result["loanTerms"]["interestRate"] == Decimal("0.045")
@@ -175,6 +205,8 @@ def _update_args(**changes: Any) -> UpdateAccountArgs:
         "asset_classes": Keep(),
         "target_year": Keep(),
         "loan_terms": Keep(),
+        "cash_flow_role": Keep(),
+        "account_number_last_four": Keep(),
     }
     return UpdateAccountArgs(**(fields | changes))
 
@@ -211,6 +243,16 @@ class TestAccountTableUpdate:
         assert expression.startswith("SET updatedAt = :updatedAt REMOVE ")
         for attribute in ("#notes", "#targetYear", "#loanTerms"):
             assert attribute in expression
+
+    def test_sets_and_removes_the_budget_fields(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
+        args = _update_args(cash_flow_role=SetTo(CashFlowRole.SPENDING), account_number_last_four=Remove())
+        accounts.update_account("a1", args)
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == (
+            "SET updatedAt = :updatedAt, #cashFlowRole = :cashFlowRole REMOVE #lastFour"
+        )
+        assert kwargs["ExpressionAttributeValues"][":cashFlowRole"] == "SPENDING"
 
     def test_with_no_changes_sets_only_the_time(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}

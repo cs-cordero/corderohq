@@ -1,5 +1,3 @@
-"""Tests for compute_summary (Spec 5 membership rules + historical names)."""
-
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
@@ -15,6 +13,7 @@ def _make_tables() -> tuple[
     MagicMock,
 ]:
     """Return (budget, transactions, category, budget_mock, txn_mock, cat_mock)."""
+
     bt = BudgetTable.__new__(BudgetTable)
     budget_mock = MagicMock()
     bt._table = budget_mock
@@ -287,3 +286,69 @@ class TestHistoricalNameResolution:
         # The rename is BEFORE the EDT-aware month-end (2024-04-01T03:59:59.999999Z),
         # so the current name was in effect during 2024-03.
         assert result["categories"][0]["historicalName"] is None
+
+
+class TestBudgetTreatments:
+    """Only BUDGET_IMPACTING rows are actuals. OFF_BUDGET rows have their own total."""
+
+    def test_off_budget_and_skip_rows_do_not_change_a_category(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 1_000_000}]}
+        txn_mock.query.return_value = {
+            "Items": [
+                {"categoryId": "cat1", "amount": 300_000},
+                {"categoryId": "cat1", "amount": 400_000, "budgetTreatment": "BUDGET_IMPACTING"},
+                {"categoryId": "cat1", "amount": 5_000_000, "budgetTreatment": "OFF_BUDGET"},
+                {"amount": 2_000_000, "budgetTreatment": "OFF_BUDGET"},
+                {"amount": -9_000_000, "budgetTreatment": "SKIP"},
+            ]
+        }
+        cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-06", _NOW)
+
+        assert result["categories"][0]["actual"] == 700_000
+        assert result["totals"] == {"budgeted": 1_000_000, "actual": 700_000, "delta": 300_000}
+        assert result["offBudget"] == {"actual": 7_000_000}
+        assert result["totalsWithOffBudget"] == {"budgeted": 1_000_000, "actual": 7_700_000}
+
+    def test_no_off_budget_rows_gives_zero(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 1_000_000}]}
+        txn_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 300_000}]}
+        cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-06", _NOW)
+
+        assert result["offBudget"] == {"actual": 0}
+        assert result["totalsWithOffBudget"] == {"budgeted": 1_000_000, "actual": 300_000}
+
+    def test_editable_month_ignores_off_budget_row_of_inactive_category(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": []}
+        txn_mock.query.return_value = {
+            "Items": [{"categoryId": "dead_cat", "amount": 5_000_000, "budgetTreatment": "OFF_BUDGET"}]
+        }
+        cat_mock.scan.return_value = {"Items": [_cat("dead_cat", active=False)]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-06", _NOW)
+
+        assert result["categories"] == []
+        assert result["offBudget"] == {"actual": 5_000_000}
+
+    def test_locked_month_ignores_off_budget_and_skip_rows_for_membership(self) -> None:
+        budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
+        budget_mock.query.return_value = {"Items": []}
+        txn_mock.query.return_value = {
+            "Items": [
+                {"categoryId": "cat1", "amount": 1_000_000, "budgetTreatment": "OFF_BUDGET"},
+                {"amount": 1_000_000, "budgetTreatment": "SKIP"},
+                {"categoryId": "cat2", "amount": 0},
+            ]
+        }
+        cat_mock.scan.return_value = {"Items": [_cat("cat1"), _cat("cat2")]}
+
+        result = compute_summary(budget, transactions, category_table, "2026-01", _NOW)
+
+        assert result["state"] == "LOCKED"
+        assert [c["categoryId"] for c in result["categories"]] == ["cat2"]

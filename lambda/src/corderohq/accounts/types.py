@@ -5,6 +5,8 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, NamedTuple
 
+from corderohq.common import FieldChange, Keep, SetTo
+
 
 class AccountType(StrEnum):
     CHECKING = "checking"
@@ -22,6 +24,7 @@ class AccountType(StrEnum):
     VEHICLE = "vehicle"
     OTHER_ASSET = "other_asset"
     OTHER_LIABILITY = "other_liability"
+    CREDIT_CARD = "credit_card"
 
 
 class AssetClass(StrEnum):
@@ -34,6 +37,7 @@ class AssetClass(StrEnum):
     REAL_ESTATE = "real_estate"
     TARGET_DATE = "target_date"
     OTHER = "other"
+    DEBT = "debt"
 
 
 class AccountTypeMeta(NamedTuple):
@@ -65,11 +69,10 @@ _ACCOUNT_TYPE_META: dict[AccountType, AccountTypeMeta] = {
         is_liability=False, fixed_asset_class=AssetClass.REAL_ESTATE, amortizing=False
     ),
     AccountType.VEHICLE: AccountTypeMeta(is_liability=False, fixed_asset_class=AssetClass.OTHER, amortizing=False),
-    AccountType.MORTGAGE: AccountTypeMeta(is_liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True),
+    AccountType.MORTGAGE: AccountTypeMeta(is_liability=True, fixed_asset_class=AssetClass.DEBT, amortizing=True),
     AccountType.OTHER_ASSET: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.OTHER_LIABILITY: AccountTypeMeta(
-        is_liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True
-    ),
+    AccountType.OTHER_LIABILITY: AccountTypeMeta(is_liability=True, fixed_asset_class=AssetClass.DEBT, amortizing=True),
+    AccountType.CREDIT_CARD: AccountTypeMeta(is_liability=True, fixed_asset_class=AssetClass.DEBT, amortizing=False),
 }
 
 
@@ -77,6 +80,28 @@ def get_metadata_for_account_type(account_type: str) -> AccountTypeMeta:
     """Return the rules for an account type. Raise ValueError if the type is unknown."""
 
     return _ACCOUNT_TYPE_META[AccountType(account_type)]
+
+
+class CashFlowRole(StrEnum):
+    """Determines how money for an account is expected to move in that account.
+
+    Every financial account is assigned a CashFlowRole. It is ultimately metadata for some of the
+    auto-categorization systems. When money moves between SPENDING or HOLDING (in either direction),
+    it is expected to be impacting some kind of budget category rule. For example, Checking accounts
+    by default have a SPENDING role. A Brokerage account, by default has a HOLDING role. When money
+    moves from Checking to the Brokerage, we treat it as a contribution, which typically will show up
+    in the Budget.
+
+    This is pure metadata. Transactions between accounts are always overridable to handle cases that
+    are not well handled. But when, for example, a CSV imports multiple transactions and the system
+    can detect that money is just being transferred between checking accounts and not actually being
+    spent, we can categorize that better as not actually impacting the budget.
+    """
+
+    SPENDING = "SPENDING"  # checking, a credit card: expenses come from here
+    HOLDING = "HOLDING"  # a savings fund, a brokerage, an IRA: money sits here
+    EXTERNAL = "EXTERNAL"  # a mortgage, a loan: money that goes here leaves the household
+    NON_CASH = "NON_CASH"  # a house, a car: it holds value, but no money moves in or out
 
 
 @dataclass(frozen=True)
@@ -171,26 +196,6 @@ class CreateAccountArgs:
 
 
 @dataclass(frozen=True)
-class Keep:
-    """A change that leaves a field as it is."""
-
-
-@dataclass(frozen=True)
-class SetTo[T]:
-    """A change that sets a field to `value`."""
-
-    value: T
-
-
-@dataclass(frozen=True)
-class Remove:
-    """A change that removes an optional field."""
-
-
-type FieldChange[T] = Keep | SetTo[T] | Remove
-
-
-@dataclass(frozen=True)
 class UpdateAccountArgs:
     """The checked changes to an account. Each field that the request did not name is Keep()."""
 
@@ -202,3 +207,5 @@ class UpdateAccountArgs:
     asset_classes: Keep | SetTo[list[AssetClass]]
     target_year: FieldChange[int]
     loan_terms: FieldChange[LoanTerms]
+    cash_flow_role: FieldChange[CashFlowRole]
+    account_number_last_four: FieldChange[list[str]]

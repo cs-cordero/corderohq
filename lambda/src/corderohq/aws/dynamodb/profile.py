@@ -96,7 +96,7 @@ class ProfileTable:
     def delete_profile(self, person_id: str) -> None:
         """Delete a person for ever.
 
-        The caller makes sure that no account names the person as an owner.
+        It does not check whether an account still names the person as an owner.
         """
 
         self._table.delete_item(Key={"householdId": HOUSEHOLD_PK, "personId": person_id})

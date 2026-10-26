@@ -5,27 +5,28 @@ import pytest
 from corderohq.accounts import (
     AccountType,
     AssetClass,
+    CashFlowRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
-    Keep,
     LoanAccount,
     LoanTerms,
-    Remove,
-    SetTo,
     UpdateAccountArgs,
     get_metadata_for_account_type,
     parse_create_account_args,
     parse_loan_terms,
     parse_update_account_args,
     resolve_target_year,
+    validate_account_number_last_four,
     validate_account_type,
     validate_asset_class,
     validate_asset_classes,
+    validate_cash_flow_role,
     validate_loan_terms,
     validate_owners,
     validate_target_year,
 )
+from corderohq.common import Keep, Remove, SetTo
 
 
 class TestEnumValues:
@@ -47,6 +48,7 @@ class TestEnumValues:
             "vehicle",
             "other_asset",
             "other_liability",
+            "credit_card",
         }
 
     def test_asset_class_covers_design_values(self) -> None:
@@ -61,6 +63,7 @@ class TestEnumValues:
             "real_estate",
             "target_date",
             "other",
+            "debt",
         }
 
     def test_numeric_valued_members_are_addressable(self) -> None:
@@ -265,6 +268,8 @@ class TestParseUpdateAccountArgs:
             asset_classes=Keep(),
             target_year=Keep(),
             loan_terms=Keep(),
+            cash_flow_role=Keep(),
+            account_number_last_four=Keep(),
         )
 
     def test_needs_an_editable_key(self) -> None:
@@ -345,6 +350,53 @@ class TestParseUpdateAccountArgs:
         # The frontend sends `targetYear: null` when the classes do not hold target_date.
         args = parse_update_account_args({"targetYear": None}, _stored("checking", assetClasses=["cash"]))
         assert args.target_year == Keep()
+
+
+class TestLiabilities:
+    def test_credit_card_is_a_debt_liability_with_no_loan_terms(self) -> None:
+        args = parse_create_account_args(_body("credit_card"))
+        assert args.account == FixedClassAccount(AccountType.CREDIT_CARD)
+        meta = get_metadata_for_account_type(AccountType.CREDIT_CARD)
+        assert meta.is_liability
+        assert meta.fixed_asset_class == AssetClass.DEBT
+        with pytest.raises(ValueError, match="loanTerms is not allowed for a credit_card account"):
+            parse_create_account_args(_body("credit_card", loanTerms=_LOAN_TERMS))
+
+    @pytest.mark.parametrize("account_type", list(AccountType))
+    def test_every_liability_type_has_the_debt_class(self, account_type: AccountType) -> None:
+        meta = get_metadata_for_account_type(account_type)
+        assert meta.is_liability == (meta.fixed_asset_class == AssetClass.DEBT)
+
+    def test_asset_account_cannot_choose_debt(self) -> None:
+        with pytest.raises(ValueError, match="cannot include 'debt'"):
+            parse_create_account_args(_body("brokerage", assetClasses=["cash", "debt"]))
+
+
+class TestCashFlowRole:
+    def test_validate_cash_flow_role(self) -> None:
+        assert validate_cash_flow_role("HOLDING") == "HOLDING"
+        assert validate_cash_flow_role(None) is None
+        with pytest.raises(ValueError, match="cashFlowRole must be one of"):
+            validate_cash_flow_role("spending")
+
+    def test_update_sets_and_removes_the_budget_fields(self) -> None:
+        args = parse_update_account_args({"cashFlowRole": "SPENDING", "lastFour": ["1234"]}, _stored("other_liability"))
+        assert args.cash_flow_role == SetTo(CashFlowRole.SPENDING)
+        assert args.account_number_last_four == SetTo(["1234"])
+        args = parse_update_account_args({"cashFlowRole": None, "lastFour": []}, _stored("other_liability"))
+        assert args.cash_flow_role == Remove()
+        assert args.account_number_last_four == Remove()
+
+
+class TestLastFour:
+    def test_accepts_and_dedupes(self) -> None:
+        assert validate_account_number_last_four(["1234", "5678", "1234"]) == ["1234", "5678"]
+        assert validate_account_number_last_four([]) == []
+
+    @pytest.mark.parametrize("bad", ["1234", ["123"], ["12345"], ["12a4"], [1234]])
+    def test_rejects_bad_values(self, bad: object) -> None:
+        with pytest.raises(ValueError, match="lastFour"):
+            validate_account_number_last_four(bad)
 
 
 class TestParseLoanTerms:

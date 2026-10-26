@@ -16,7 +16,10 @@ os.environ.setdefault("NETWORTH_SNAPSHOT_TABLE_NAME", "test-NetWorthSnapshot")
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
-from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount, Keep, SetTo
+from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
+from corderohq.budget.transaction_args import UpdateTransactionArgs
+from corderohq.budget.treatment import BudgetTreatment, Classification
+from corderohq.common import Keep, SetTo
 from corderohq.personal_finance_handler import handler
 
 # Stable "now" used across editability-sensitive tests: June 15, 2026 noon UTC.
@@ -1046,6 +1049,7 @@ class TestPostTransaction:
 class TestUpdateTransaction:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_updates_transaction(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "2026-06-15#abc"}
         mock_tt.update_transaction.return_value = {
             "yearMonth": _EDITABLE_MONTH,
             "sortId": "2026-06-15#abc",
@@ -1067,7 +1071,7 @@ class TestUpdateTransaction:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_returns_404_when_not_found(self, mock_tt: MagicMock) -> None:
-        mock_tt.update_transaction.return_value = None
+        mock_tt.get_transaction.return_value = None
         result = handler(
             _make_event(
                 "POST",
@@ -2086,3 +2090,282 @@ class TestGetNetWorthHistory:
         assert body["totals"]["2026-05"]["netWorth"] == 1000
         # /history must not be parsed as a {YYYY-MM} — the month handler never runs.
         mock_st.get_snapshot_for_month.assert_not_called()
+
+
+class TestTransactionBudgetTreatments:
+    """The budget treatment, the note, and the account on the transaction routes."""
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_create_skip_row_without_category(self, mock_tt: MagicMock) -> None:
+        mock_tt.create_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s"}
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions",
+                body={
+                    "yearMonth": _EDITABLE_MONTH,
+                    "transactionDate": "2026-06-15",
+                    "description": "Payroll",
+                    "amount": -5_000_000,
+                    "budgetTreatment": "SKIP",
+                    "categoryId": "cat1",
+                    "note": " paycheck ",
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 201
+        new = mock_tt.create_transaction.call_args.args[0]
+        assert new.classification == Classification(BudgetTreatment.SKIP, None)
+        assert new.note == "paycheck"
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_create_budget_row_without_category_returns_400(self, mock_tt: MagicMock) -> None:
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions",
+                body={
+                    "yearMonth": _EDITABLE_MONTH,
+                    "transactionDate": "2026-06-15",
+                    "description": "Coffee",
+                    "amount": 5_000_000,
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.create_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_create_with_unknown_budget_treatment_returns_400(self, mock_tt: MagicMock) -> None:
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions",
+                body={
+                    "yearMonth": _EDITABLE_MONTH,
+                    "transactionDate": "2026-06-15",
+                    "description": "Coffee",
+                    "amount": 5_000_000,
+                    "categoryId": "cat1",
+                    "budgetTreatment": "EXPENSED",
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.create_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_create_with_unknown_account_returns_400(self, mock_tt: MagicMock, mock_at: MagicMock) -> None:
+        mock_at.get_account_by_id.return_value = None
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions",
+                body={
+                    "yearMonth": _EDITABLE_MONTH,
+                    "transactionDate": "2026-06-15",
+                    "description": "Coffee",
+                    "amount": 5_000_000,
+                    "categoryId": "cat1",
+                    "accountId": "nope",
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.create_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_update_passes_budget_treatment_and_note(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "categoryId": "cat1"}
+        mock_tt.update_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s"}
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/update",
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "OFF_BUDGET", "note": "trip"},
+            ),
+            None,
+        )
+        assert result["statusCode"] == 200
+        mock_tt.update_transaction.assert_called_once_with(
+            _EDITABLE_MONTH,
+            "s",
+            UpdateTransactionArgs(
+                description=Keep(),
+                amount=Keep(),
+                budget_treatment=SetTo(BudgetTreatment.OFF_BUDGET),
+                category_id=SetTo("cat1"),
+                account_id=Keep(),
+                note=SetTo("trip"),
+            ),
+        )
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_update_rule_failure_returns_400(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "SKIP"}
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/update",
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "BUDGET_IMPACTING"},
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.update_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_update_with_unknown_account_returns_400(self, mock_tt: MagicMock, mock_at: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "s", "categoryId": "cat1"}
+        mock_at.get_account_by_id.return_value = None
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/update",
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "accountId": "nope"},
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.update_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
+    def test_commit_stores_budget_treatments(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
+        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_tt.batch_create_transaction.return_value = []
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/commit",
+                body={
+                    "rows": [
+                        {
+                            "transactionDate": f"{_EDITABLE_MONTH}-10",
+                            "description": "Payroll",
+                            "amount": -5_000_000,
+                            "categoryId": "",
+                            "budgetTreatment": "SKIP",
+                        },
+                        {
+                            "transactionDate": f"{_EDITABLE_MONTH}-11",
+                            "description": "Hotel",
+                            "amount": 9_000_000,
+                            "budgetTreatment": "OFF_BUDGET",
+                            "note": "work trip",
+                        },
+                        {
+                            "transactionDate": f"{_EDITABLE_MONTH}-12",
+                            "description": "Groceries",
+                            "amount": 1_000_000,
+                            "categoryId": "cat1",
+                        },
+                    ],
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 200
+        items = [new.to_item() for new in mock_tt.batch_create_transaction.call_args.args[0]]
+        assert items[0] == {
+            "yearMonth": _EDITABLE_MONTH,
+            "transactionDate": f"{_EDITABLE_MONTH}-10",
+            "description": "Payroll",
+            "amount": -5_000_000,
+            "budgetTreatment": "SKIP",
+        }
+        assert items[1]["budgetTreatment"] == "OFF_BUDGET"
+        assert items[1]["note"] == "work trip"
+        assert "categoryId" not in items[1]
+        assert items[2]["budgetTreatment"] == "BUDGET_IMPACTING"
+        assert items[2]["categoryId"] == "cat1"
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
+    def test_commit_flags_missing_and_unknown_categories(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
+        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/commit",
+                body={
+                    "rows": [
+                        {"transactionDate": f"{_EDITABLE_MONTH}-10", "description": "No category", "amount": 1},
+                        {
+                            "transactionDate": f"{_EDITABLE_MONTH}-11",
+                            "description": "Unknown category",
+                            "amount": 1,
+                            "budgetTreatment": "OFF_BUDGET",
+                            "categoryId": "unknown",
+                        },
+                        {
+                            "transactionDate": f"{_EDITABLE_MONTH}-12",
+                            "description": "No category is fine",
+                            "amount": 1,
+                            "budgetTreatment": "OFF_BUDGET",
+                        },
+                    ],
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 409
+        issues_by_index = {v["index"]: v["issues"] for v in json.loads(result["body"])["validations"]}
+        assert issues_by_index == {0: ["missing_category"], 1: ["missing_category"], 2: []}
+        mock_tt.batch_create_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
+    def test_commit_with_unknown_budget_treatment_returns_400(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
+        result = handler(
+            _make_event(
+                "POST",
+                "/api/transactions/commit",
+                body={
+                    "rows": [
+                        {
+                            "transactionDate": f"{_EDITABLE_MONTH}-10",
+                            "description": "x",
+                            "amount": 1,
+                            "categoryId": "cat1",
+                            "budgetTreatment": "IGNORED",
+                        }
+                    ]
+                },
+            ),
+            None,
+        )
+        assert result["statusCode"] == 400
+        mock_tt.batch_create_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_replace_does_not_require_categories_of_non_budget_rows(
+        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
+    ) -> None:
+        mock_bt.get_budget_targets.return_value = []
+        mock_bt.set_all_budget_targets.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
+        ]
+        mock_tt.list_transactions_for_month.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "amount": -5_000_000, "budgetTreatment": "SKIP"},
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 1_000, "budgetTreatment": "OFF_BUDGET"},
+        ]
+        mock_audit.write_entry.return_value = {}
+
+        result = handler(
+            _make_event(
+                "POST",
+                f"/api/budget/{_EDITABLE_MONTH}/replace",
+                body={"targets": [{"categoryId": "cat1", "amount": 500}], "explanation": "x"},
+            ),
+            None,
+        )
+        assert result["statusCode"] == 200

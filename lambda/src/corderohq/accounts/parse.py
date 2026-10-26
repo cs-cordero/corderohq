@@ -6,18 +6,16 @@ from typing import Any, assert_never
 from corderohq.accounts.types import (
     AccountType,
     AssetClass,
+    CashFlowRole,
     ChosenClassAccount,
     CreateAccountArgs,
-    FieldChange,
     FixedClassAccount,
-    Keep,
     LoanAccount,
     LoanTerms,
     NewAccount,
-    Remove,
-    SetTo,
     UpdateAccountArgs,
 )
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 from corderohq.util import YEAR_MONTH_PATTERN
 
 _LOAN_TERMS_FIELDS = ("interestRate", "monthlyPayment", "payoffYearMonth")
@@ -30,6 +28,8 @@ _EDITABLE_ACCOUNT_KEYS = (
     "loanTerms",
     "notes",
     "sortOrder",
+    "cashFlowRole",
+    "lastFour",
 )
 _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
 _ASSET_CLASS_VALUES = frozenset(c.value for c in AssetClass)
@@ -39,13 +39,19 @@ def parse_create_account_args(payload: Mapping[str, Any]) -> CreateAccountArgs:
     """Convert the body of a create request into checked arguments. Raise ValueError for bad input.
 
     The account type decides which other keys the body can hold. A type with a fixed asset class
-    ignores `assetClasses`. The caller checks that each owner exists.
+    ignores `assetClasses`. It does not check that each owner exists.
     """
 
     account_type = AccountType(validate_account_type(payload.get("accountType")))
     account: NewAccount
     match account_type:
-        case AccountType.CHECKING | AccountType.SAVINGS | AccountType.REAL_ESTATE | AccountType.VEHICLE:
+        case (
+            AccountType.CHECKING
+            | AccountType.SAVINGS
+            | AccountType.REAL_ESTATE
+            | AccountType.VEHICLE
+            | AccountType.CREDIT_CARD
+        ):
             _reject_keys(payload, account_type, "targetYear", "loanTerms")
             account = FixedClassAccount(account_type)
         case (
@@ -93,7 +99,7 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
     `existing` is the stored account. Its type decides which keys the body can change. Its asset
     classes decide the target year rule when the body does not change them. An absent key changes
     nothing. A null `notes`, `loanTerms`, or `targetYear` removes that field. The type of an
-    account cannot change. The caller checks that each owner exists.
+    account cannot change. It does not check that each owner exists.
     """
 
     if not any(key in payload for key in _EDITABLE_ACCOUNT_KEYS):
@@ -103,7 +109,13 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
     asset_classes: Keep | SetTo[list[AssetClass]] = Keep()
     loan_terms: FieldChange[LoanTerms] = Keep()
     match account_type:
-        case AccountType.CHECKING | AccountType.SAVINGS | AccountType.REAL_ESTATE | AccountType.VEHICLE:
+        case (
+            AccountType.CHECKING
+            | AccountType.SAVINGS
+            | AccountType.REAL_ESTATE
+            | AccountType.VEHICLE
+            | AccountType.CREDIT_CARD
+        ):
             _reject_keys(payload, account_type, "assetClasses", "loanTerms")
         case (
             AccountType.BROKERAGE
@@ -136,7 +148,27 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
         asset_classes=asset_classes,
         target_year=_resolve_target_year_change(payload, existing, asset_classes),
         loan_terms=loan_terms,
+        cash_flow_role=_parse_cash_flow_role_change(payload),
+        account_number_last_four=_parse_account_number_last_four_change(payload),
     )
+
+
+def _parse_cash_flow_role_change(payload: Mapping[str, Any]) -> FieldChange[CashFlowRole]:
+    """Return the change to `cashFlowRole`. A null value removes it, and the type default applies."""
+
+    if "cashFlowRole" not in payload:
+        return Keep()
+    role = validate_cash_flow_role(payload["cashFlowRole"])
+    return Remove() if role is None else SetTo(role)
+
+
+def _parse_account_number_last_four_change(payload: Mapping[str, Any]) -> FieldChange[list[str]]:
+    """Return the change to `lastFour`. An empty list removes it."""
+
+    if "lastFour" not in payload:
+        return Keep()
+    account_number_last_four = validate_account_number_last_four(payload["lastFour"])
+    return SetTo(account_number_last_four) if account_number_last_four else Remove()
 
 
 def _parse_name_change(payload: Mapping[str, Any]) -> Keep | SetTo[str]:
@@ -248,7 +280,8 @@ def validate_asset_class(value: Any) -> str:
 def validate_asset_classes(value: Any) -> list[str]:
     """Check an `assetClasses` list, and return it without duplicates, in the order given.
 
-    The list must not be empty, and each entry must be an AssetClass value. Raise ValueError for bad input.
+    The list must not be empty, and each entry must be an AssetClass value. Only a liability type
+    has `debt`, as its fixed class, so the list cannot hold it. Raise ValueError for bad input.
     """
 
     if not isinstance(value, list) or not value:
@@ -257,6 +290,8 @@ def validate_asset_classes(value: Any) -> list[str]:
     result: list[str] = []
     for entry in value:
         validate_asset_class(entry)
+        if entry == AssetClass.DEBT:
+            raise ValueError("assetClasses cannot include 'debt'; only a liability type has it")
         if entry not in seen:
             seen.add(entry)
             result.append(entry)
@@ -309,10 +344,38 @@ def validate_loan_terms(loan_terms: Any, amortizing: bool) -> dict[str, Any] | N
     }
 
 
+def validate_cash_flow_role(value: Any) -> CashFlowRole | None:
+    """Return the cash flow role, or None for a null value. Raise ValueError for an unknown role."""
+
+    if value is None:
+        return None
+    try:
+        return CashFlowRole(value)
+    except ValueError:
+        raise ValueError(f"cashFlowRole must be one of {[r.value for r in CashFlowRole]} or null") from None
+
+
+def validate_account_number_last_four(value: Any) -> list[str]:
+    """Return the "last four digits" of an account, without duplicates, in the order given.
+
+    Each entry must be a string of exactly 4 digits. Raise ValueError for bad input.
+    """
+
+    if not isinstance(value, list):
+        raise ValueError("lastFour must be a list of 4-digit strings")
+    result: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str) or len(entry) != 4 or not entry.isdigit():
+            raise ValueError("each lastFour entry must be a string of exactly 4 digits")
+        if entry not in result:
+            result.append(entry)
+    return result
+
+
 def validate_owners(value: Any) -> list[str]:
     """Check an `owners` list, and return it without duplicates, in the order given.
 
-    The list must not be empty, and each entry must be a non-empty personId. The caller checks that each person exists.
+    The list must not be empty, and each entry must be a non-empty personId. It does not check that each person exists.
     Raise ValueError for bad input.
     """
 

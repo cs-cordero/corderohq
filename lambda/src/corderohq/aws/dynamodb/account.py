@@ -1,56 +1,48 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, assert_never
 
 from ulid import ULID
 
-from corderohq.accounts import (
-    CreateAccountArgs,
-    FieldChange,
-    Keep,
-    Remove,
-    SetTo,
-    UpdateAccountArgs,
-)
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items
+from corderohq.accounts import AccountType, CashFlowRole, CreateAccountArgs, UpdateAccountArgs
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items, update_expression
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _update_expression(changes: dict[str, FieldChange[Any]]) -> dict[str, Any]:
-    """Return the UpdateExpression and its names and values for a set of field changes.
+def get_cash_flow_role(account: Mapping[str, Any]) -> CashFlowRole:
+    """Return the cash flow role of a stored account: its own `cashFlowRole`, else the default for its type."""
 
-    Each attribute name goes through ExpressionAttributeNames, so a reserved word such as `name`
-    is safe. `updatedAt` is always set.
-    """
-
-    set_parts = ["updatedAt = :updatedAt"]
-    remove_parts: list[str] = []
-    names: dict[str, str] = {}
-    values: dict[str, Any] = {":updatedAt": datetime.now(tz=UTC).isoformat()}
-    for attribute, change in changes.items():
-        match change:
-            case Keep():
-                continue
-            case SetTo(value=value):
-                names[f"#{attribute}"] = attribute
-                values[f":{attribute}"] = value
-                set_parts.append(f"#{attribute} = :{attribute}")
-            case Remove():
-                names[f"#{attribute}"] = attribute
-                remove_parts.append(f"#{attribute}")
-            case _:
-                assert_never(change)
-
-    expression = "SET " + ", ".join(set_parts)
-    if remove_parts:
-        expression += " REMOVE " + ", ".join(remove_parts)
-    params: dict[str, Any] = {"UpdateExpression": expression, "ExpressionAttributeValues": values}
-    if names:
-        params["ExpressionAttributeNames"] = names
-    return params
+    explicit = account.get("cashFlowRole")
+    if isinstance(explicit, str) and explicit in CashFlowRole:
+        return CashFlowRole(explicit)
+    account_type = AccountType(account["accountType"])
+    match account_type:
+        case AccountType.CHECKING | AccountType.CREDIT_CARD:
+            return CashFlowRole.SPENDING
+        case (
+            AccountType.SAVINGS
+            | AccountType.BROKERAGE
+            | AccountType.RETIREMENT_401K
+            | AccountType.RETIREMENT_403B
+            | AccountType.ROTH_IRA
+            | AccountType.TRADITIONAL_IRA
+            | AccountType.HSA
+            | AccountType.PLAN_529
+            | AccountType.PLAN_530A
+            | AccountType.OTHER_ASSET
+        ):
+            return CashFlowRole.HOLDING
+        case AccountType.MORTGAGE | AccountType.OTHER_LIABILITY:
+            return CashFlowRole.EXTERNAL
+        case AccountType.REAL_ESTATE | AccountType.VEHICLE:
+            return CashFlowRole.NON_CASH
+        case _:
+            assert_never(account_type)
 
 
 class AccountTable:
@@ -110,8 +102,7 @@ class AccountTable:
     def update_account(self, account_id: str, args: UpdateAccountArgs) -> dict[str, Any]:
         """Apply the checked changes to an account, and return the updated item.
 
-        Raise ValueError for a duplicate name. The caller reads the account first, and parses the
-        changes against it.
+        Raise ValueError for a duplicate name.
         """
 
         match args.name:
@@ -137,9 +128,13 @@ class AccountTable:
             "assetClasses": args.asset_classes,
             "targetYear": args.target_year,
             "loanTerms": loan_terms,
+            "cashFlowRole": args.cash_flow_role,
+            "lastFour": args.account_number_last_four,
         }
         response = self._table.update_item(
-            Key={"accountId": account_id}, ReturnValues="ALL_NEW", **_update_expression(changes)
+            Key={"accountId": account_id},
+            ReturnValues="ALL_NEW",
+            **update_expression(changes, always_set={"updatedAt": datetime.now(tz=UTC).isoformat()}),
         )
         return response["Attributes"]
 

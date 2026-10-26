@@ -1,18 +1,35 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
+from corderohq.budget.transaction_args import CreateTransactionArgs, UpdateTransactionArgs
+from corderohq.budget.treatment import BudgetTreatment
+from corderohq.common import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
 
 
+def get_budget_treatment(transaction: Mapping[str, Any]) -> BudgetTreatment:
+    """Return the budget treatment of a stored transaction. An absent value means BUDGET_IMPACTING."""
+
+    value = transaction.get("budgetTreatment")
+    return BudgetTreatment(value) if value else BudgetTreatment.BUDGET_IMPACTING
+
+
 class TransactionsTable:
     """Actual transactions data. These data are applied against budget categories."""
+
+    @staticmethod
+    def _new_item(new: CreateTransactionArgs, created_at: str) -> dict[str, Any]:
+        """Return the stored item of a new transaction. The sort key sorts by date, and a ULID makes it unique."""
+
+        return {**new.to_item(), "sortId": f"{new.transaction_date}#{ULID()}", "createdAt": created_at}
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -24,97 +41,50 @@ class TransactionsTable:
             self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
 
-    def create_transaction(
-        self,
-        year_month: str,
-        transaction_date: str,
-        description: str,
-        amount: int,
-        category_id: str,
-    ) -> dict[str, Any]:
+    def create_transaction(self, new: CreateTransactionArgs) -> dict[str, Any]:
         """Create a single transaction. Returns the created item."""
 
-        description = description.strip()
-        if not description:
-            raise ValueError("Transaction description must not be empty")
-
-        now = datetime.now(tz=UTC).isoformat()
-        sort_id = f"{transaction_date}#{ULID()}"
-
-        item: dict[str, Any] = {
-            "yearMonth": year_month,
-            "sortId": sort_id,
-            "transactionDate": transaction_date,
-            "description": description,
-            "amount": amount,
-            "categoryId": category_id,
-            "createdAt": now,
-        }
-
+        item = self._new_item(new, datetime.now(tz=UTC).isoformat())
         self._table.put_item(Item=item)
-        _LOGGER.info("Created transaction %s in %s", sort_id, year_month)
+        _LOGGER.info("Created transaction %s in %s", item["sortId"], item["yearMonth"])
         return item
 
-    def batch_create_transaction(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Create multiple transactions in a batch. Returns the created items.
-
-        Each dict must have yearMonth, transactionDate, description, amount, and categoryId.
-        """
+    def batch_create_transaction(self, rows: list[CreateTransactionArgs]) -> list[dict[str, Any]]:
+        """Create multiple transactions in a batch. Returns the created items."""
 
         now = datetime.now(tz=UTC).isoformat()
-        items: list[dict[str, Any]] = []
-
+        items = [self._new_item(new, now) for new in rows]
         with self._table.batch_writer() as batch:
-            for txn in transactions:
-                sort_id = f"{txn['transactionDate']}#{ULID()}"
-                item: dict[str, Any] = {
-                    "yearMonth": txn["yearMonth"],
-                    "sortId": sort_id,
-                    "transactionDate": txn["transactionDate"],
-                    "description": txn["description"].strip(),
-                    "amount": txn["amount"],
-                    "categoryId": txn["categoryId"],
-                    "createdAt": now,
-                }
+            for item in items:
                 batch.put_item(Item=item)
-                items.append(item)
-
         _LOGGER.info("Batch created %d transactions", len(items))
         return items
 
-    def update_transaction(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Update the mutable fields of a transaction. Returns the updated item, or None if not found.
-
-        The mutable fields are description, amount, and categoryId.
-        """
+    def get_transaction(self, year_month: str, sort_id: str) -> dict[str, Any] | None:
+        """Return one transaction, or None if it does not exist."""
 
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
-        if "Item" not in response:
-            return None
+        return response.get("Item")
 
-        update_parts: list[str] = []
-        attr_values: dict[str, Any] = {}
-        attr_names: dict[str, str] = {}
+    def update_transaction(self, year_month: str, sort_id: str, args: UpdateTransactionArgs) -> dict[str, Any]:
+        """Apply the checked changes to a transaction, and return the updated item.
 
-        for field in ("description", "amount", "categoryId"):
-            if field in updates:
-                placeholder = f":{field}"
-                update_parts.append(f"#{field} = {placeholder}")
-                attr_values[placeholder] = updates[field]
-                attr_names[f"#{field}"] = field
+        Raise ValueError if the changes change nothing.
+        """
 
-        if not update_parts:
-            return response["Item"]
-
-        result = self._table.update_item(
-            Key={"yearMonth": year_month, "sortId": sort_id},
-            UpdateExpression="SET " + ", ".join(update_parts),
-            ExpressionAttributeNames=attr_names,
-            ExpressionAttributeValues=attr_values,
-            ReturnValues="ALL_NEW",
+        changes: dict[str, FieldChange[Any]] = {
+            "description": args.description,
+            "amount": args.amount,
+            "budgetTreatment": args.budget_treatment,
+            "categoryId": args.category_id,
+            "accountId": args.account_id,
+            "note": args.note,
+        }
+        response = self._table.update_item(
+            Key={"yearMonth": year_month, "sortId": sort_id}, ReturnValues="ALL_NEW", **update_expression(changes)
         )
         _LOGGER.info("Updated transaction %s/%s", year_month, sort_id)
-        return result["Attributes"]
+        return response["Attributes"]
 
     def delete_transaction(self, year_month: str, sort_id: str) -> bool:
         """Delete a transaction. Returns True if deleted, False if not found."""
