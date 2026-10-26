@@ -424,7 +424,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
         return _response(404, "Category not found")
 
     budget_rows = _BUDGET_TABLE.get_rows_for_category(category_id)
-    txn_count = _TRANSACTIONS_TABLE.count_rows_for_category(category_id)
+    txn_rows = _TRANSACTIONS_TABLE.get_rows_for_category(category_id)
 
     # A locked month is a past month with a Budget row for this category, where
     # year_month is at or before current_ym less the grace period. A month in grace is still
@@ -440,7 +440,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
                 "category": item,
                 "deletionPreview": {
                     "budgetRows": len(budget_rows),
-                    "transactions": txn_count,
+                    "transactions": len(txn_rows),
                     "lockedMonthsAffected": locked_months,
                 },
             },
@@ -474,7 +474,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
         return _response(400, f"confirmName must match the current category name exactly ('{item['name']}')")
 
     budget_rows_deleted = _BUDGET_TABLE.delete_all_for_category(category_id)
-    txn_rows_deleted = _TRANSACTIONS_TABLE.delete_all_for_category(category_id)
+    txn_rows_deleted = _TRANSACTIONS_TABLE.delete_all_transactions_for_category(category_id)
     _CATEGORY_TABLE.delete_category(category_id)
 
     # Write the audit entry last. The cascade then either finished in full, or it left
@@ -690,7 +690,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
 
     existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
-    txns = _TRANSACTIONS_TABLE.list_for_month(year_month)
+    txns = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
     txn_cat_ids = {t["categoryId"] for t in txns if t.get("amount") != 0}
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
@@ -875,7 +875,7 @@ def _get_transactions(event: dict[str, Any]) -> dict[str, Any]:
     if not month or not YEAR_MONTH_PATTERN.match(month):
         return _response(400, "query parameter 'month' is required (YYYY-MM)")
 
-    txns = _TRANSACTIONS_TABLE.list_for_month(month)
+    txns = _TRANSACTIONS_TABLE.list_transactions_for_month(month)
     return _json_response(200, json.dumps(txns, default=_json_default))
 
 
@@ -897,7 +897,7 @@ def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
         return err
 
     try:
-        item = _TRANSACTIONS_TABLE.create(
+        item = _TRANSACTIONS_TABLE.create_transaction(
             year_month=body["yearMonth"],
             transaction_date=body["transactionDate"],
             description=body["description"],
@@ -993,7 +993,7 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
                 "categoryId": row["categoryId"],
             }
         )
-    created = _TRANSACTIONS_TABLE.batch_create(items_to_create)
+    created = _TRANSACTIONS_TABLE.batch_create_transaction(items_to_create)
 
     return _json_response(200, json.dumps({"count": len(created), "transactions": created}, default=_json_default))
 
@@ -1126,7 +1126,7 @@ def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
         if field in body:
             updates[field] = body[field]
 
-    item = _TRANSACTIONS_TABLE.update(year_month, sort_id, updates)
+    item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, updates)
     if item is None:
         return _response(404, "Transaction not found")
 
@@ -1153,7 +1153,7 @@ def _delete_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if err:
         return err
 
-    deleted = _TRANSACTIONS_TABLE.batch_delete(items)
+    deleted = _TRANSACTIONS_TABLE.batch_delete_transaction(items)
     return _json_response(200, json.dumps({"deleted": deleted}))
 
 

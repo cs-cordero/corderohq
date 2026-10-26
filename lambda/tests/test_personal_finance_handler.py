@@ -488,7 +488,7 @@ class TestHardDeleteCategory:
         assert result["statusCode"] == 400
         # Make sure no destructive call was issued.
         mock_bt.delete_all_for_category.assert_not_called()
-        mock_tt.delete_all_for_category.assert_not_called()
+        mock_tt.delete_all_transactions_for_category.assert_not_called()
         mock_ct.delete_category.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
@@ -504,7 +504,7 @@ class TestHardDeleteCategory:
     ) -> None:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries"}
         mock_bt.delete_all_for_category.return_value = 14
-        mock_tt.delete_all_for_category.return_value = 32
+        mock_tt.delete_all_transactions_for_category.return_value = 32
 
         result = handler(
             _make_event(
@@ -527,7 +527,7 @@ class TestHardDeleteCategory:
 
         # Cascade order: budget → transactions → category → audit.
         mock_bt.delete_all_for_category.assert_called_once_with("cat1")
-        mock_tt.delete_all_for_category.assert_called_once_with("cat1")
+        mock_tt.delete_all_transactions_for_category.assert_called_once_with("cat1")
         mock_ct.delete_category.assert_called_once_with("cat1")
         kwargs = mock_audit.write_entry.call_args.kwargs
         assert kwargs["action"] == "CATEGORY_HARD_DELETE"
@@ -574,7 +574,7 @@ class TestGetCategoryDeletionPreview:
         mock_tt: MagicMock,
     ) -> None:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries"}
-        mock_tt.count_rows_for_category.return_value = 17
+        mock_tt.get_rows_for_category.return_value = [{"yearMonth": "2026-03", "sortId": f"s{i}"} for i in range(17)]
         # Both 2026-03 and 2026-05 are LOCKED relative to _FROZEN_NOW (2026-06-15): grace for
         # 2026-05 ended on 2026-06-08. 2026-06 is the current month, and 2026-07 is in the future.
         mock_bt.get_rows_for_category.return_value = [
@@ -645,7 +645,7 @@ class TestPostBudgetReplace:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
         result = handler(
@@ -674,7 +674,7 @@ class TestPostBudgetReplace:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 750}
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
         handler(
@@ -702,7 +702,7 @@ class TestPostBudgetReplace:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
 
         handler(
             _make_event(
@@ -725,7 +725,7 @@ class TestPostBudgetReplace:
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500},
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 300},
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
 
         result = handler(
             _make_event(
@@ -750,7 +750,7 @@ class TestPostBudgetReplace:
     ) -> None:
         # cat2 has a transaction but no existing row → still required in body.
         mock_bt.get_budget_targets.return_value = []
-        mock_tt.list_for_month.return_value = [
+        mock_tt.list_transactions_for_month.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 5000000},
         ]
 
@@ -779,7 +779,7 @@ class TestPostBudgetReplace:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
         ]
-        mock_tt.list_for_month.return_value = [
+        mock_tt.list_transactions_for_month.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat2", "amount": 0},
         ]
         mock_audit.write_entry.return_value = {}
@@ -842,7 +842,7 @@ class TestPostBudgetReplace:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
         event = _make_event(
@@ -870,7 +870,7 @@ class TestPostBudgetReplace:
 class TestGetTransactions:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_returns_transactions_for_month(self, mock_tt: MagicMock) -> None:
-        mock_tt.list_for_month.return_value = [{"yearMonth": _EDITABLE_MONTH, "description": "Coffee"}]
+        mock_tt.list_transactions_for_month.return_value = [{"yearMonth": _EDITABLE_MONTH, "description": "Coffee"}]
         result = handler(_make_event("GET", "/api/transactions", query={"month": _EDITABLE_MONTH}), None)
         assert result["statusCode"] == 200
 
@@ -886,7 +886,7 @@ class TestPostTransactionsCommit:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     def test_happy_path_batch_creates(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
-        mock_tt.batch_create.return_value = [
+        mock_tt.batch_create_transaction.return_value = [
             {
                 "yearMonth": _EDITABLE_MONTH,
                 "sortId": "2026-06-15#a",
@@ -918,7 +918,7 @@ class TestPostTransactionsCommit:
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["count"] == 1
-        mock_tt.batch_create.assert_called_once()
+        mock_tt.batch_create_transaction.assert_called_once()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
@@ -966,13 +966,13 @@ class TestPostTransactionsCommit:
         assert issues_by_index[0] == []
         assert "missing_category" in issues_by_index[1]
         assert "locked_month" in issues_by_index[2]
-        mock_tt.batch_create.assert_not_called()
+        mock_tt.batch_create_transaction.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     def test_override_with_admin_bypasses_locked_month_check(self, mock_ct: MagicMock, mock_tt: MagicMock) -> None:
         mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
-        mock_tt.batch_create.return_value = [
+        mock_tt.batch_create_transaction.return_value = [
             {
                 "yearMonth": _LOCKED_MONTH,
                 "sortId": "x",
@@ -1004,7 +1004,7 @@ class TestPostTransactionsCommit:
         )
 
         assert result["statusCode"] == 200
-        mock_tt.batch_create.assert_called_once()
+        mock_tt.batch_create_transaction.assert_called_once()
 
     def test_missing_rows_returns_400(self) -> None:
         result = handler(_make_event("POST", "/api/transactions/commit", body={}), None)
@@ -1014,7 +1014,7 @@ class TestPostTransactionsCommit:
 class TestPostTransaction:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_creates_transaction(self, mock_tt: MagicMock) -> None:
-        mock_tt.create.return_value = {
+        mock_tt.create_transaction.return_value = {
             "yearMonth": _EDITABLE_MONTH,
             "sortId": "2026-06-15#abc",
             "description": "Coffee",
@@ -1046,7 +1046,7 @@ class TestPostTransaction:
 class TestUpdateTransaction:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_updates_transaction(self, mock_tt: MagicMock) -> None:
-        mock_tt.update.return_value = {
+        mock_tt.update_transaction.return_value = {
             "yearMonth": _EDITABLE_MONTH,
             "sortId": "2026-06-15#abc",
             "description": "Updated",
@@ -1067,7 +1067,7 @@ class TestUpdateTransaction:
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_returns_404_when_not_found(self, mock_tt: MagicMock) -> None:
-        mock_tt.update.return_value = None
+        mock_tt.update_transaction.return_value = None
         result = handler(
             _make_event(
                 "POST",
@@ -1093,7 +1093,7 @@ class TestUpdateTransaction:
 class TestDeleteTransactions:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_batch_deletes_transactions(self, mock_tt: MagicMock) -> None:
-        mock_tt.batch_delete.return_value = 2
+        mock_tt.batch_delete_transaction.return_value = 2
         result = handler(
             _make_event(
                 "POST",
@@ -1388,7 +1388,7 @@ class TestEditabilityEnforcement:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _LOCKED_MONTH, "categoryId": "cat1", "amount": 500}
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
         result = handler(
@@ -1419,7 +1419,7 @@ class TestEditabilityEnforcement:
         mock_bt.set_all_budget_targets.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}
         ]
-        mock_tt.list_for_month.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
         mock_audit.write_entry.return_value = {}
 
         handler(
@@ -1455,11 +1455,11 @@ class TestEditabilityEnforcement:
             None,
         )
         assert result["statusCode"] == 409
-        mock_tt.create.assert_not_called()
+        mock_tt.create_transaction.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_post_transaction_override_with_admin_succeeds(self, mock_tt: MagicMock) -> None:
-        mock_tt.create.return_value = {"yearMonth": _LOCKED_MONTH, "sortId": "2026-03-15#abc"}
+        mock_tt.create_transaction.return_value = {"yearMonth": _LOCKED_MONTH, "sortId": "2026-03-15#abc"}
         result = handler(
             _make_event(
                 "POST",
@@ -1495,7 +1495,7 @@ class TestEditabilityEnforcement:
             None,
         )
         assert result["statusCode"] == 409
-        mock_tt.update.assert_not_called()
+        mock_tt.update_transaction.assert_not_called()
 
     # --- _delete_transaction (batch) ---
 
@@ -1521,11 +1521,11 @@ class TestEditabilityEnforcement:
         offending = body["items"]
         assert len(offending) == 2
         assert {item["index"] for item in offending} == {0, 2}
-        mock_tt.batch_delete.assert_not_called()
+        mock_tt.batch_delete_transaction.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     def test_delete_transactions_override_with_admin_succeeds(self, mock_tt: MagicMock) -> None:
-        mock_tt.batch_delete.return_value = 1
+        mock_tt.batch_delete_transaction.return_value = 1
         result = handler(
             _make_event(
                 "POST",
@@ -1554,7 +1554,7 @@ class TestEditabilityEnforcement:
             None,
         )
         assert result["statusCode"] == 403
-        mock_tt.batch_delete.assert_not_called()
+        mock_tt.batch_delete_transaction.assert_not_called()
 
 
 class TestNotFound:

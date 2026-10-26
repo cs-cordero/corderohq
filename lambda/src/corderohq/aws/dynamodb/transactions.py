@@ -6,25 +6,25 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_pages
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class TransactionsTable:
-    """Transaction storage and querying."""
+    """Actual transactions data. These data are applied against budget categories."""
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
-    def list_for_month(self, year_month: str) -> list[dict[str, Any]]:
+    def list_transactions_for_month(self, year_month: str) -> list[dict[str, Any]]:
         """Return every transaction for one month (YYYY-MM), sorted by sortId."""
 
         return query_all_items(
             self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
 
-    def create(
+    def create_transaction(
         self,
         year_month: str,
         transaction_date: str,
@@ -55,7 +55,7 @@ class TransactionsTable:
         _LOGGER.info("Created transaction %s in %s", sort_id, year_month)
         return item
 
-    def batch_create(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def batch_create_transaction(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Create multiple transactions in a batch. Returns the created items.
 
         Each dict must have yearMonth, transactionDate, description, amount, and categoryId.
@@ -82,7 +82,7 @@ class TransactionsTable:
         _LOGGER.info("Batch created %d transactions", len(items))
         return items
 
-    def update(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    def update_transaction(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Update the mutable fields of a transaction. Returns the updated item, or None if not found.
 
         The mutable fields are description, amount, and categoryId.
@@ -116,7 +116,7 @@ class TransactionsTable:
         _LOGGER.info("Updated transaction %s/%s", year_month, sort_id)
         return result["Attributes"]
 
-    def delete(self, year_month: str, sort_id: str) -> bool:
+    def delete_transaction(self, year_month: str, sort_id: str) -> bool:
         """Delete a transaction. Returns True if deleted, False if not found."""
 
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
@@ -127,7 +127,7 @@ class TransactionsTable:
         _LOGGER.info("Deleted transaction %s/%s", year_month, sort_id)
         return True
 
-    def batch_delete(self, items: list[dict[str, str]]) -> int:
+    def batch_delete_transaction(self, items: list[dict[str, str]]) -> int:
         """Delete multiple transactions. Return the number of deleted items.
 
         Each item must have the keys `yearMonth` and `sortId`.
@@ -141,33 +141,23 @@ class TransactionsTable:
         _LOGGER.info("Batch deleted %d transactions", count)
         return count
 
-    def count_rows_for_category(self, category_id: str) -> int:
-        """Count each Transactions row that names this categoryId. The hard-delete preview calls this."""
+    def get_rows_for_category(self, category_id: str) -> list[dict[str, Any]]:
+        """Return the key of every transaction that names this categoryId, in all months."""
 
-        count = 0
-        params: dict[str, Any] = {
-            "FilterExpression": "categoryId = :cid",
-            "ExpressionAttributeValues": {":cid": category_id},
-            "Select": "COUNT",
-        }
-        for response in scan_pages(self._table, **params):
-            count += response.get("Count", 0)
-        return count
+        return scan_all_items(
+            self._table,
+            FilterExpression="categoryId = :cid",
+            ExpressionAttributeValues={":cid": category_id},
+            ProjectionExpression="yearMonth, sortId",
+        )
 
-    def delete_all_for_category(self, category_id: str) -> int:
+    def delete_all_transactions_for_category(self, category_id: str) -> int:
         """Delete every transaction that names this categoryId. Return the number of deleted items."""
 
-        keys: list[dict[str, str]] = []
-        params: dict[str, Any] = {
-            "FilterExpression": "categoryId = :cid",
-            "ExpressionAttributeValues": {":cid": category_id},
-            "ProjectionExpression": "yearMonth, sortId",
-        }
-        for response in scan_pages(self._table, **params):
-            keys.extend(
-                {"yearMonth": str(item["yearMonth"]), "sortId": str(item["sortId"])} for item in response["Items"]
-            )
-
+        keys = [
+            {"yearMonth": str(row["yearMonth"]), "sortId": str(row["sortId"])}
+            for row in self.get_rows_for_category(category_id)
+        ]
         if not keys:
             return 0
         with self._table.batch_writer() as batch:

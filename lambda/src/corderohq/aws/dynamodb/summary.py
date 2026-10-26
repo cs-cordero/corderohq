@@ -58,7 +58,7 @@ def compute_summary(
     its category smaller.
     """
 
-    txns = transactions.list_for_month(year_month)
+    txns = transactions.list_transactions_for_month(year_month)
     categories_all = category_table.get_all_categories()
     category_by_id = {c["categoryId"]: c for c in categories_all}
 
