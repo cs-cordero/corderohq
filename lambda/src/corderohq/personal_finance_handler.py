@@ -12,7 +12,7 @@ from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
     BudgetAuditLogTable,
-    BudgetCarryStore,
+    BudgetDensifyAdapter,
     BudgetTable,
     CategoryGroupTable,
     CategoryTable,
@@ -113,7 +113,7 @@ def _ensure_hydrated(now: datetime) -> None:
     """
 
     densify(
-        BudgetCarryStore(_BUDGET_TABLE),
+        BudgetDensifyAdapter(_BUDGET_TABLE),
         active_category_ids(_CATEGORY_TABLE.get_all_categories()),
         _year_month_of(now),
         cold_start_value=0,
@@ -359,7 +359,8 @@ def _deactivate_category(
         return _response(404, "Category not found")
 
     current_month = _year_month_of(now)
-    affected_months = _BUDGET_TABLE.find_future_months_with_category(category_id, current_month)
+    rows = _BUDGET_TABLE.get_rows_for_category(category_id)
+    affected_months = sorted({row["yearMonth"] for row in rows if row["yearMonth"] > current_month})
 
     if affected_months and not confirm:
         # Return affectedMonths, so that the UI can show a confirmation box. Change nothing yet.
@@ -423,14 +424,14 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
     if item is None:
         return _response(404, "Category not found")
 
-    budget_count = _BUDGET_TABLE.count_rows_for_category(category_id)
+    budget_rows = _BUDGET_TABLE.get_rows_for_category(category_id)
     txn_count = _TRANSACTIONS_TABLE.count_rows_for_category(category_id)
 
     # A locked month is a past month with a Budget row for this category, where
     # year_month is at or before current_ym less the grace period. A month in grace is still
     # open to change, so we count it as not locked. This matches the editability function.
     current_ym = _year_month_of(now)
-    past_months = _BUDGET_TABLE.find_past_months_with_category(category_id, current_ym)
+    past_months = sorted({row["yearMonth"] for row in budget_rows if row["yearMonth"] < current_ym})
     locked_months = [ym for ym in past_months if editability(ym, now) == EditabilityState.LOCKED]
 
     return _json_response(
@@ -439,7 +440,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
             {
                 "category": item,
                 "deletionPreview": {
-                    "budgetRows": budget_count,
+                    "budgetRows": len(budget_rows),
                     "transactions": txn_count,
                     "lockedMonthsAffected": locked_months,
                 },
@@ -638,7 +639,7 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
     # carried values.
     targets = resolve_future_targets(
-        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
+        BudgetDensifyAdapter(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
     )
     return _json_response(200, json.dumps(targets, default=_json_default))
 
@@ -851,7 +852,7 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     )
 
     resolved = resolve_future_targets(
-        BudgetCarryStore(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
+        BudgetDensifyAdapter(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
     )
 
     return _json_response(

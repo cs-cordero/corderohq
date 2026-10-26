@@ -355,7 +355,7 @@ class TestDeactivateCategory:
     def test_deactivates_when_no_future_pins(self, mock_ct: MagicMock, mock_bt: MagicMock) -> None:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries", "active": True}
         mock_ct.deactivate.return_value = {"categoryId": "cat1", "name": "Groceries", "active": False}
-        mock_bt.find_future_months_with_category.return_value = []
+        mock_bt.get_rows_for_category.return_value = [{"yearMonth": "2026-05", "categoryId": "cat1"}]
 
         result = handler(_make_event("POST", "/api/categories/cat1/deactivate", body={}), None)
 
@@ -368,7 +368,9 @@ class TestDeactivateCategory:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     def test_returns_409_when_future_pins_and_no_confirm(self, mock_ct: MagicMock, mock_bt: MagicMock) -> None:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries", "active": True}
-        mock_bt.find_future_months_with_category.return_value = ["2026-09", "2026-12"]
+        mock_bt.get_rows_for_category.return_value = [
+            {"yearMonth": month, "categoryId": "cat1"} for month in ("2026-05", "2026-06", "2026-09", "2026-12")
+        ]
 
         result = handler(_make_event("POST", "/api/categories/cat1/deactivate", body={}), None)
 
@@ -391,7 +393,9 @@ class TestDeactivateCategory:
     ) -> None:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries", "active": True}
         mock_ct.deactivate.return_value = {"categoryId": "cat1", "name": "Groceries", "active": False}
-        mock_bt.find_future_months_with_category.return_value = ["2026-09", "2026-12"]
+        mock_bt.get_rows_for_category.return_value = [
+            {"yearMonth": month, "categoryId": "cat1"} for month in ("2026-05", "2026-06", "2026-09", "2026-12")
+        ]
         mock_bt.get_budget_targets.side_effect = [
             [{"categoryId": "cat1", "amount": 800}],
             [{"categoryId": "cat1", "amount": 1200}],
@@ -570,12 +574,12 @@ class TestGetCategoryDeletionPreview:
         mock_tt: MagicMock,
     ) -> None:
         mock_ct.get_category_by_id.return_value = {"categoryId": "cat1", "name": "Groceries"}
-        mock_bt.count_rows_for_category.return_value = 8
         mock_tt.count_rows_for_category.return_value = 17
-        # Both 2026-03 and 2026-05 are LOCKED relative to _FROZEN_NOW (2026-06-15):
-        # grace for 2026-05 ended on 2026-06-08, well before the frozen now. The handler
-        # filters past_months by editability() == "LOCKED" — both should survive.
-        mock_bt.find_past_months_with_category.return_value = ["2026-03", "2026-05"]
+        # Both 2026-03 and 2026-05 are LOCKED relative to _FROZEN_NOW (2026-06-15): grace for
+        # 2026-05 ended on 2026-06-08. 2026-06 is the current month, and 2026-07 is in the future.
+        mock_bt.get_rows_for_category.return_value = [
+            {"yearMonth": month, "categoryId": "cat1"} for month in ("2026-03", "2026-05", "2026-06", "2026-07")
+        ]
 
         result = handler(
             _make_event(
@@ -589,7 +593,7 @@ class TestGetCategoryDeletionPreview:
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body["deletionPreview"]["budgetRows"] == 8
+        assert body["deletionPreview"]["budgetRows"] == 4
         assert body["deletionPreview"]["transactions"] == 17
         assert body["deletionPreview"]["lockedMonthsAffected"] == ["2026-03", "2026-05"]
 

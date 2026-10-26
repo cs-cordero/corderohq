@@ -897,7 +897,7 @@ A Budget row and a payment row of the income plan can each hold **two values**:
 - **What a month shows:** its this-month-only value if it has one, else its carried value, else
   the carried value from the walk back (`effective_value()` in `budget/densify.py`).
 - **The densify step and the walk back read carried values only.** The carry stores
-  (`BudgetCarryStore`, `IncomePlanCarryStore`) give them through `scan_carry_rows()`, and give the
+  (`BudgetDensifyAdapter`, `IncomePlanDensifyAdapter`) give them through `scan_carry_rows()`, and give the
   this-month-only values through `scan_only_rows()`. When the densify step fills the carried value
   of a month, `put_carry_row()` keeps a this-month-only value that the row already has.
 - **A future month can hold a row with only a this-month-only value,** and no carried value. Such a
@@ -944,9 +944,9 @@ A Budget row and a payment row of the income plan can each hold **two values**:
 `DenseSparseStore`, where each row is `(yearMonth, key, value)`, and each caller passes the
 active keys:
 
-- `BudgetCarryStore(budget_table)`: the key is a `categoryId`, and the value is the amount.
+- `BudgetDensifyAdapter(budget_table)`: the key is a `categoryId`, and the value is the amount.
   The cold-start value is `0`.
-- `IncomePlanCarryStore(income_plan_table)`: the key is an `incomeSourceId`, and the value is the
+- `IncomePlanDensifyAdapter(income_plan_table)`: the key is an `incomeSourceId`, and the value is the
   payment. It reads only the `SRC#` rows, so a one-time line never carries forward. The
   cold-start value is `None`, and the store writes no row for `None`: an income source always gets
   its first payment row when it is made.

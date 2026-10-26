@@ -1,5 +1,5 @@
 from corderohq.aws.dynamodb.account import AccountTable
-from corderohq.aws.dynamodb.budget import BudgetCarryStore, BudgetTable
+from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
 from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable
 from corderohq.aws.dynamodb.category import CategoryTable, active_category_ids
 from corderohq.aws.dynamodb.category_group import CategoryGroupTable
@@ -13,7 +13,7 @@ __all__ = [
     "AccountTable",
     "AuditAction",
     "BudgetAuditLogTable",
-    "BudgetCarryStore",
+    "BudgetDensifyAdapter",
     "BudgetTable",
     "CategoryGroupTable",
     "CategoryTable",

@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from corderohq.aws.dynamodb import (
-    BudgetCarryStore,
+    BudgetDensifyAdapter,
     BudgetTable,
     CategoryTable,
     active_category_ids,
@@ -32,7 +32,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     LOGGER.info(json.dumps({"event": "scheduled_densify_start", "currentYearMonth": current_ym}))
     try:
         rows_written = densify(
-            BudgetCarryStore(_BUDGET_TABLE),
+            BudgetDensifyAdapter(_BUDGET_TABLE),
             active_category_ids(_CATEGORY_TABLE.get_all_categories()),
             current_ym,
             cold_start_value=0,

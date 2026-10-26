@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from corderohq.aws.dynamodb.budget import BudgetCarryStore, BudgetTable
+from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
 from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.transactions import TransactionsTable
 from corderohq.aws.dynamodb.util import BUDGET_TZ
@@ -76,7 +76,7 @@ def compute_summary(
     # month is resolved per category" rule.
     budget_by_category: dict[str, Decimal] = {}
     if is_future:
-        by_key = carry_map(BudgetCarryStore(budget).scan_carry_rows())
+        by_key = carry_map(BudgetDensifyAdapter(budget).scan_carry_rows())
         for cat in categories_all:
             cat_id = cat["categoryId"]
             raw = value_at_or_before(by_key, year_month, cat_id)

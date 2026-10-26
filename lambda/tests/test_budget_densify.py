@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from corderohq.aws.dynamodb import BudgetCarryStore, BudgetTable, CategoryTable, active_category_ids
+from corderohq.aws.dynamodb import BudgetDensifyAdapter, BudgetTable, CategoryTable, active_category_ids
 from corderohq.budget.densify import (
     ResolvedValue,
     densify,
@@ -30,14 +30,16 @@ def _densify(budget: BudgetTable, cats: CategoryTable, current_ym: str) -> int:
     """Call `densify` the same way as the handler and the scheduled Lambda."""
 
     return densify(
-        BudgetCarryStore(budget), active_category_ids(cats.get_all_categories()), current_ym, cold_start_value=0
+        BudgetDensifyAdapter(budget), active_category_ids(cats.get_all_categories()), current_ym, cold_start_value=0
     )
 
 
 def _resolve(budget: BudgetTable, cats: CategoryTable, year_month: str) -> list[dict[str, object]]:
     """Call `resolve_future_targets` the same way as the handler."""
 
-    return resolve_future_targets(BudgetCarryStore(budget), active_category_ids(cats.get_all_categories()), year_month)
+    return resolve_future_targets(
+        BudgetDensifyAdapter(budget), active_category_ids(cats.get_all_categories()), year_month
+    )
 
 
 def _cat(category_id: str, active: bool = True) -> dict[str, object]:
