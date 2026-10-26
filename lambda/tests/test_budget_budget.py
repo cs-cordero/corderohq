@@ -100,4 +100,3 @@ class TestRowsForCategory:
         mock.scan.return_value = {"Items": []}
         assert table.delete_all_for_category("cat1") == 0
         mock.batch_writer.assert_not_called()
-

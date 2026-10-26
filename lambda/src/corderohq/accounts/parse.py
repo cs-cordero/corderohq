@@ -15,7 +15,6 @@ from corderohq.accounts.types import (
 )
 from corderohq.util import YEAR_MONTH_PATTERN
 
-
 _LOAN_TERMS_FIELDS = ("interestRate", "monthlyPayment", "payoffYearMonth")
 _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
 _ASSET_CLASS_VALUES = frozenset(c.value for c in AssetClass)

@@ -1,3 +1,4 @@
+from typing import Any
 from unittest.mock import MagicMock
 
 from corderohq.aws.dynamodb import BudgetDensifyAdapter, BudgetTable, CategoryTable
@@ -22,7 +23,15 @@ def _make_category_table(categories: list[dict[str, object]]) -> tuple[CategoryT
     ct = CategoryTable.__new__(CategoryTable)
     mock = MagicMock()
     ct._table = mock
-    mock.scan.return_value = {"Items": categories}
+
+    def scan(**params: Any) -> dict[str, Any]:
+        # Apply the `active` filter of get_active_categories(), the same as DynamoDB does.
+        if params.get("FilterExpression") == "active = :val":
+            wanted = params["ExpressionAttributeValues"][":val"]
+            return {"Items": [c for c in categories if c.get("active") == wanted]}
+        return {"Items": categories}
+
+    mock.scan.side_effect = scan
     return ct, mock
 
 
