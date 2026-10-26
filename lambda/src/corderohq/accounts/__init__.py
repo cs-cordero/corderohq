@@ -24,7 +24,6 @@ from corderohq.accounts.types import (
     LoanTerms,
     NewAccount,
     UpdateAccountArgs,
-    cash_flow_role_of,
     get_metadata_for_account_type,
 )
 
@@ -40,7 +39,6 @@ __all__ = [
     "LoanTerms",
     "NewAccount",
     "UpdateAccountArgs",
-    "cash_flow_role_of",
     "get_metadata_for_account_type",
     "parse_create_account_args",
     "parse_loan_terms",

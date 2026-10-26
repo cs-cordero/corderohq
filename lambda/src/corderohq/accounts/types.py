@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
@@ -84,32 +83,23 @@ def get_metadata_for_account_type(account_type: str) -> AccountTypeMeta:
 
 
 class CashFlowRole(StrEnum):
-    """Whether an account is where expenses are paid from, or where money is kept."""
+    """Determines how money for an account is expected to move in that account.
+
+    Every financial account is assigned a CashFlowRole. It is ultimately metadata for some of the
+    auto-categorization systems. When money moves between SPENDING or HOLDING (in either direction),
+    it is expected to be impacting some kind of budget category rule. For example, Checking accounts
+    by default have a SPENDING role. A Brokerage account, by default has a HOLDING role. When money
+    moves from Checking to the Brokerage, we treat it as a contribution, which typically will show up
+    in the Budget.
+
+    This is pure metadata. Transactions between accounts are always overridable to handle cases that
+    are not well handled. But when, for example, a CSV imports multiple transactions and the system
+    can detect that money is just being transferred between checking accounts and not actually being
+    spent, we can categorize that better as not actually impacting the budget.
+    """
 
     SPENDING = "SPENDING"  # checking, a credit card: expenses come from here
     HOLDING = "HOLDING"  # a savings fund, a brokerage, a 529: money sits here
-
-
-_DEFAULT_CASH_FLOW_ROLE: dict[AccountType, CashFlowRole] = {
-    AccountType.CHECKING: CashFlowRole.SPENDING,
-    AccountType.CREDIT_CARD: CashFlowRole.SPENDING,
-    AccountType.SAVINGS: CashFlowRole.HOLDING,
-    AccountType.BROKERAGE: CashFlowRole.HOLDING,
-    AccountType.PLAN_529: CashFlowRole.HOLDING,
-    AccountType.PLAN_530A: CashFlowRole.HOLDING,
-}
-
-
-def cash_flow_role_of(account: Mapping[str, Any]) -> CashFlowRole | None:
-    """Return the cash flow role of a stored account: its own `cashFlowRole`, else the default for its type."""
-
-    explicit = account.get("cashFlowRole")
-    if isinstance(explicit, str) and explicit in CashFlowRole:
-        return CashFlowRole(explicit)
-    account_type = account.get("accountType")
-    if isinstance(account_type, str) and account_type in AccountType:
-        return _DEFAULT_CASH_FLOW_ROLE.get(AccountType(account_type))
-    return None
 
 
 @dataclass(frozen=True)

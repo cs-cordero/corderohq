@@ -1,4 +1,4 @@
-from corderohq.aws.dynamodb.account import AccountTable
+from corderohq.aws.dynamodb.account import AccountTable, get_cash_flow_role
 from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
 from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable
 from corderohq.aws.dynamodb.category import CategoryTable
@@ -22,4 +22,5 @@ __all__ = [
     "TransactionsTable",
     "compute_summary",
     "current_year_month",
+    "get_cash_flow_role",
 ]

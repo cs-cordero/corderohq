@@ -12,7 +12,6 @@ from corderohq.accounts import (
     LoanAccount,
     LoanTerms,
     UpdateAccountArgs,
-    cash_flow_role_of,
     get_metadata_for_account_type,
     parse_create_account_args,
     parse_loan_terms,
@@ -374,27 +373,6 @@ class TestLiabilities:
 
 
 class TestCashFlowRole:
-    @pytest.mark.parametrize(
-        ("account_type", "expected"),
-        [
-            ("checking", "SPENDING"),
-            ("credit_card", "SPENDING"),
-            ("savings", "HOLDING"),
-            ("brokerage", "HOLDING"),
-            ("529", "HOLDING"),
-            ("530a", "HOLDING"),
-            ("401k", None),
-            ("mortgage", None),
-            ("other_liability", None),
-        ],
-    )
-    def test_default_for_each_type(self, account_type: str, expected: str | None) -> None:
-        assert cash_flow_role_of({"accountType": account_type}) == expected
-
-    def test_explicit_role_wins(self) -> None:
-        assert cash_flow_role_of({"accountType": "other_liability", "cashFlowRole": "SPENDING"}) == "SPENDING"
-        assert cash_flow_role_of({"accountType": "savings", "cashFlowRole": "SPENDING"}) == "SPENDING"
-
     def test_validate_cash_flow_role(self) -> None:
         assert validate_cash_flow_role("HOLDING") == "HOLDING"
         assert validate_cash_flow_role(None) is None

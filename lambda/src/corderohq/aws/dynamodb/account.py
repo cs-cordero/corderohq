@@ -1,16 +1,39 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from ulid import ULID
 
-from corderohq.accounts import CreateAccountArgs, UpdateAccountArgs
+from corderohq.accounts import AccountType, CashFlowRole, CreateAccountArgs, UpdateAccountArgs
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items, update_expression
 from corderohq.common import FieldChange, Keep, Remove, SetTo
 
 _LOGGER = logging.getLogger(__name__)
+
+
+_DEFAULT_CASH_FLOW_ROLE: dict[AccountType, CashFlowRole] = {
+    AccountType.CHECKING: CashFlowRole.SPENDING,
+    AccountType.CREDIT_CARD: CashFlowRole.SPENDING,
+    AccountType.SAVINGS: CashFlowRole.HOLDING,
+    AccountType.BROKERAGE: CashFlowRole.HOLDING,
+    AccountType.PLAN_529: CashFlowRole.HOLDING,
+    AccountType.PLAN_530A: CashFlowRole.HOLDING,
+}
+
+
+def get_cash_flow_role(account: Mapping[str, Any]) -> CashFlowRole | None:
+    """Return the cash flow role of a stored account: its own `cashFlowRole`, else the default for its type."""
+
+    explicit = account.get("cashFlowRole")
+    if isinstance(explicit, str) and explicit in CashFlowRole:
+        return CashFlowRole(explicit)
+    account_type = account.get("accountType")
+    if isinstance(account_type, str) and account_type in AccountType:
+        return _DEFAULT_CASH_FLOW_ROLE.get(AccountType(account_type))
+    return None
 
 
 class AccountTable:

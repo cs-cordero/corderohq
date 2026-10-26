@@ -16,7 +16,7 @@ from corderohq.accounts import (
     NewAccount,
     UpdateAccountArgs,
 )
-from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
+from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable, get_cash_flow_role
 from corderohq.common import Keep, Remove, SetTo
 
 
@@ -108,6 +108,29 @@ def _create(accounts: AccountTable, account: NewAccount, name: str = "Chase Chec
         account=account,
     )
     return accounts.create_account(args)
+
+
+class TestGetCashFlowRole:
+    @pytest.mark.parametrize(
+        ("account_type", "expected"),
+        [
+            ("checking", "SPENDING"),
+            ("credit_card", "SPENDING"),
+            ("savings", "HOLDING"),
+            ("brokerage", "HOLDING"),
+            ("529", "HOLDING"),
+            ("530a", "HOLDING"),
+            ("401k", None),
+            ("mortgage", None),
+            ("other_liability", None),
+        ],
+    )
+    def test_default_for_each_type(self, account_type: str, expected: str | None) -> None:
+        assert get_cash_flow_role({"accountType": account_type}) == expected
+
+    def test_explicit_role_wins(self) -> None:
+        assert get_cash_flow_role({"accountType": "other_liability", "cashFlowRole": "SPENDING"}) == "SPENDING"
+        assert get_cash_flow_role({"accountType": "savings", "cashFlowRole": "SPENDING"}) == "SPENDING"
 
 
 class TestAccountTableCreate:
