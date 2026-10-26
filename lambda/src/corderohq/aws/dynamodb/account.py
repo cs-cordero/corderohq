@@ -114,12 +114,20 @@ class AccountTable:
         changes against it.
         """
 
-        if isinstance(args.name, SetTo) and self._name_exists(args.name.value, exclude_id=account_id):
-            raise ValueError(f"An account named '{args.name.value}' already exists")
+        match args.name:
+            case SetTo(value=name):
+                if self._name_exists(name, exclude_id=account_id):
+                    raise ValueError(f"An account named '{name}' already exists")
+            case Keep():
+                pass
 
         # Store loan terms in their DynamoDB form.
-        terms = args.loan_terms
-        loan_terms = SetTo(terms.value.to_item()) if isinstance(terms, SetTo) else terms
+        loan_terms: FieldChange[dict[str, Any]]
+        match args.loan_terms:
+            case SetTo(value=terms):
+                loan_terms = SetTo(terms.to_item())
+            case Keep() | Remove() as unchanged:
+                loan_terms = unchanged
         changes: dict[str, FieldChange[Any]] = {
             "name": args.name,
             "owners": args.owners,

@@ -7,7 +7,13 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import SetTo, parse_create_account_args, parse_update_account_args, validate_asset_class
+from corderohq.accounts import (
+    Keep,
+    SetTo,
+    parse_create_account_args,
+    parse_update_account_args,
+    validate_asset_class,
+)
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -1314,10 +1320,13 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
         args = parse_update_account_args(body, existing)
     except ValueError as e:
         return _response(400, str(e))
-    if isinstance(args.owners, SetTo):
-        err = _check_owners_exist(args.owners.value)
-        if err:
-            return err
+    match args.owners:
+        case SetTo(value=owners):
+            err = _check_owners_exist(owners)
+            if err:
+                return err
+        case Keep():
+            pass
 
     try:
         item = _ACCOUNT_TABLE.update_account(account_id, args)

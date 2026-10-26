@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
-from corderohq.budget.densify import StoredValue, DenseSparseStore
+from corderohq.budget.densify import DenseSparseStore, StoredValue
 
 _LOGGER = logging.getLogger(__name__)
 

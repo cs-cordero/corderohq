@@ -193,7 +193,12 @@ def _resolve_target_year_change(
     it, a year in the body is an error, and a stored year is removed.
     """
 
-    classes = asset_classes.value if isinstance(asset_classes, SetTo) else existing.get("assetClasses", [])
+    classes: Sequence[str]
+    match asset_classes:
+        case SetTo(value=new_classes):
+            classes = new_classes
+        case Keep():
+            classes = existing.get("assetClasses", [])
     if AssetClass.TARGET_DATE in classes:
         year = payload["targetYear"] if "targetYear" in payload else existing.get("targetYear")
         if year is None:
