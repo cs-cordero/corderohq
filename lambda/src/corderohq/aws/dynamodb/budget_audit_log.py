@@ -18,11 +18,21 @@ _AUDIT_PARTITION = "AUDIT"
 class AuditAction(StrEnum):
     """The action of an audit log entry."""
 
+    # Budget targets
     CREATE = "CREATE"
     UPDATE = "UPDATE"
     PIN = "PIN"
     UNPIN = "UNPIN"
     CATEGORY_HARD_DELETE = "CATEGORY_HARD_DELETE"
+    # The payments of the income plan
+    INCOME_CREATE = "INCOME_CREATE"
+    INCOME_UPDATE = "INCOME_UPDATE"
+    INCOME_PIN = "INCOME_PIN"
+    INCOME_UNPIN = "INCOME_UNPIN"
+    # The one-time income lines
+    ONE_TIME_CREATE = "ONE_TIME_CREATE"
+    ONE_TIME_UPDATE = "ONE_TIME_UPDATE"
+    ONE_TIME_DELETE = "ONE_TIME_DELETE"
 
 
 class BudgetAuditLogTable:
@@ -34,17 +44,22 @@ class BudgetAuditLogTable:
     def write_entry(
         self,
         effective_year_month: str | None,
-        category_id: str,
+        category_id: str | None,
         action: AuditAction,
         explanation: str,
         user: dict[str, str],
         changes: dict[str, Any],
         override: bool = False,
+        income_source_id: str | None = None,
+        income_line_id: str | None = None,
     ) -> dict[str, Any]:
         """Write one audit log entry, and return it.
 
         `user` holds the `sub`, `email`, and `username` claims of the request. `effective_year_month` is None for an
         action that applies to no single month, such as CATEGORY_HARD_DELETE.
+
+        A budget entry has a `category_id`. An income plan entry has an `income_line_id`, and a payment
+        entry also has an `income_source_id`. An ID that is None is not stored.
         """
 
         now = datetime.now(tz=UTC)
@@ -54,20 +69,25 @@ class BudgetAuditLogTable:
             "sortId": str(ULID()),
             "changedAt": now.isoformat(),
             "effectiveYearMonth": effective_year_month,
-            "categoryId": category_id,
             "action": action,
             "explanation": explanation,
             "user": user,
             "override": override,
             "changes": changes,
         }
+        if category_id is not None:
+            item["categoryId"] = category_id
+        if income_source_id is not None:
+            item["incomeSourceId"] = income_source_id
+        if income_line_id is not None:
+            item["incomeLineId"] = income_line_id
 
         self._table.put_item(Item=item)
         _LOGGER.info(
             "Audit: %s on %s/%s by %s%s",
             action,
             effective_year_month,
-            category_id,
+            category_id or income_line_id,
             user.get("email", user.get("sub", "?")),
             " (override)" if override else "",
         )

@@ -3,12 +3,18 @@ import csv
 import io
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import parse_create_account_args, parse_update_account_args, validate_asset_class
+from corderohq.accounts import (
+    parse_create_account_args,
+    parse_update_account_args,
+    validate_asset_class,
+    validate_owners,
+)
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -17,16 +23,31 @@ from corderohq.aws.dynamodb import (
     BudgetTable,
     CategoryGroupTable,
     CategoryTable,
+    IncomePlanDensifyAdapter,
+    IncomePlanTable,
+    IncomeSourceTable,
     NetWorthSnapshotTable,
     ProfileTable,
     TransactionsTable,
+    compute_income,
     compute_summary,
     get_budget_treatment,
+    get_payment,
 )
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
-from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
+from corderohq.budget.densify import carry_map, densify, resolve_future_targets, walk_back_for
 from corderohq.budget.editability import EditabilityState, editability
+from corderohq.budget.income import (
+    ONE_TIME_LINE_PREFIX,
+    IncomeLineType,
+    payment_line_id,
+    payments_equal,
+    validate_frequency,
+    validate_label,
+    validate_one_time_amount,
+    validate_payment,
+)
 from corderohq.budget.transaction_args import (
     CreateTransactionArgs,
     parse_create_transaction_args,
@@ -43,6 +64,8 @@ _CATEGORY_GROUP_TABLE = CategoryGroupTable(get_env_var("CATEGORY_GROUP_TABLE_NAM
 _CATEGORY_TABLE = CategoryTable(get_env_var("CATEGORY_TABLE_NAME"))
 _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
 _TRANSACTIONS_TABLE = TransactionsTable(get_env_var("TRANSACTIONS_TABLE_NAME"))
+_INCOME_SOURCE_TABLE = IncomeSourceTable(get_env_var("INCOME_SOURCE_TABLE_NAME"))
+_INCOME_PLAN_TABLE = IncomePlanTable(get_env_var("INCOME_PLAN_TABLE_NAME"))
 _AUDIT_LOG_TABLE = BudgetAuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
 _PROFILE_TABLE = ProfileTable(get_env_var("PROFILE_TABLE_NAME"))
 _ACCOUNT_TABLE = AccountTable(get_env_var("ACCOUNT_TABLE_NAME"))
@@ -120,11 +143,20 @@ def _ensure_hydrated(now: datetime) -> None:
     Call this before any work that needs the dense rows of past and current months.
     """
 
+    current_ym = _year_month_of(now)
     densify(
         BudgetDensifyAdapter(_BUDGET_TABLE),
         [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()],
-        _year_month_of(now),
+        current_ym,
         cold_start_value=0,
+    )
+    # An income source always gets its first payment row when it is made, so a source with no
+    # history cannot happen. If it does, the store writes no row for the `None` value.
+    densify(
+        IncomePlanDensifyAdapter(_INCOME_PLAN_TABLE),
+        [s["incomeSourceId"] for s in _INCOME_SOURCE_TABLE.get_active_income_sources()],
+        current_ym,
+        cold_start_value=None,
     )
 
 
@@ -204,6 +236,37 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _put_transaction(event, now)
         elif path == "/api/transactions/delete" and method == "POST":
             return _delete_transaction(event, now)
+
+        # Income sources
+        elif path == "/api/income-sources" and method == "GET":
+            return _get_income_sources(event)
+        elif path == "/api/income-sources" and method == "POST":
+            return _post_income_source(event, user, now)
+        elif path == "/api/income-sources/reorder" and method == "POST":
+            return _post_income_sources_reorder(event)
+        elif path.startswith("/api/income-sources/") and path.endswith("/deactivate") and method == "POST":
+            income_source_id = path.split("/")[-2]
+            return _deactivate_income_source(event, income_source_id, user, now)
+        elif path.startswith("/api/income-sources/") and path.endswith("/reactivate") and method == "POST":
+            income_source_id = path.split("/")[-2]
+            return _reactivate_income_source(income_source_id)
+        elif path.startswith("/api/income-sources/") and method == "PUT":
+            income_source_id = path.split("/")[-1]
+            return _put_income_source(event, income_source_id)
+
+        # The income plan of a month
+        elif path.startswith("/api/income/") and method == "GET":
+            year_month = path.split("/")[-1]
+            return _get_income(year_month, now)
+        elif path.startswith("/api/income/") and path.endswith("/replace") and method == "POST":
+            year_month = path.split("/")[-2]
+            return _post_income_replace(event, year_month, user, now)
+        elif path.startswith("/api/income/") and path.endswith("/pin") and method == "POST":
+            year_month = path.split("/")[-2]
+            return _post_income_pin(event, year_month, user, now)
+        elif path.startswith("/api/income/") and path.endswith("/one-time") and method == "POST":
+            year_month = path.split("/")[-2]
+            return _post_one_time(event, year_month, user, now)
 
         # Summary
         elif path == "/api/summary" and method == "GET":
@@ -880,6 +943,480 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     )
 
 
+# --- Income sources and the income plan ---
+
+
+def _get_income_sources(event: dict[str, Any]) -> dict[str, Any]:
+    include_inactive = (event.get("queryStringParameters") or {}).get("include_inactive") == "true"
+    sources = _INCOME_SOURCE_TABLE.get_all_income_sources()
+    if not include_inactive:
+        sources = [s for s in sources if s.get("active", False)]
+    return _json_response(200, json.dumps(sources, default=_json_default))
+
+
+def _post_income_source(event: dict[str, Any], user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Create an income source, and write its first payment row in the current month.
+
+    Body: `{owners, label, frequency, initialPayment, explanation}`. `owners` is one or more personIds, the same as on
+    an account. The first payment makes one INCOME_CREATE audit entry.
+    """
+
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+    try:
+        owners = validate_owners(body.get("owners"))
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_owners_exist(owners)
+    if err:
+        return err
+    try:
+        label = validate_label(body.get("label"))
+        frequency = validate_frequency(body.get("frequency"))
+        payment = validate_payment(body.get("initialPayment"))
+    except ValueError as e:
+        return _response(400, str(e))
+
+    # Densify first. The first payment row then goes into a current month that is dense.
+    _ensure_hydrated(now)
+
+    current_ym = _year_month_of(now)
+    source = _INCOME_SOURCE_TABLE.create_income_source(owners, label, frequency)
+    row = _INCOME_PLAN_TABLE.put_payment(current_ym, source["incomeSourceId"], payment)
+    _AUDIT_LOG_TABLE.write_entry(
+        effective_year_month=current_ym,
+        category_id=None,
+        action=AuditAction.INCOME_CREATE,
+        explanation=explanation,
+        user=user,
+        changes={"payment": {"before": None, "after": payment}, "label": label},
+        income_source_id=source["incomeSourceId"],
+        income_line_id=row["lineId"],
+    )
+    return _json_response(201, json.dumps(source, default=_json_default))
+
+
+def _put_income_source(event: dict[str, Any], income_source_id: str) -> dict[str, Any]:
+    """Change the label, the frequency, or the owners. This has no editability check, and no audit entry."""
+
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    updates: dict[str, Any] = {}
+    try:
+        if "label" in body:
+            updates["label"] = validate_label(body["label"])
+        if "frequency" in body:
+            updates["frequency"] = validate_frequency(body["frequency"])
+    except ValueError as e:
+        return _response(400, str(e))
+    if "owners" in body:
+        try:
+            owners = validate_owners(body["owners"])
+        except ValueError as e:
+            return _response(400, str(e))
+        err = _check_owners_exist(owners)
+        if err:
+            return err
+        updates["owners"] = owners
+    if not updates:
+        return _response(400, "label, frequency, or owners is required")
+    item = _INCOME_SOURCE_TABLE.update_income_source(income_source_id, updates)
+    if item is None:
+        return _response(404, "Income source not found")
+    return _json_response(200, json.dumps(item, default=_json_default))
+
+
+def _post_income_sources_reorder(event: dict[str, Any]) -> dict[str, Any]:
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    order = body.get("order")
+    if not isinstance(order, list) or not all(isinstance(i, str) for i in order):
+        return _response(400, "'order' must be a list of incomeSourceId strings")
+    _INCOME_SOURCE_TABLE.reorder(order)
+    return _json_response(200, json.dumps(_INCOME_SOURCE_TABLE.get_all_income_sources(), default=_json_default))
+
+
+def _deactivate_income_source(
+    event: dict[str, Any], income_source_id: str, user: dict[str, str], now: datetime
+) -> dict[str, Any]:
+    """Set an income source to inactive. On a confirmation, delete its future pin rows.
+
+    The same two steps as a category: without `confirm: true`, a source with future pins gets a
+    409 that lists them. With `confirm: true`, each pin is deleted with one INCOME_UNPIN entry.
+    The past rows stay, so a locked month keeps its plan.
+    """
+
+    body = _parse_json_body(event) or {}
+    confirm = bool(body.get("confirm", False))
+    explanation = (body.get("explanation") or "").strip()
+
+    if _INCOME_SOURCE_TABLE.get_income_source_by_id(income_source_id) is None:
+        return _response(404, "Income source not found")
+
+    affected_months = _INCOME_PLAN_TABLE.find_future_months_with_source(income_source_id, _year_month_of(now))
+    if affected_months and not confirm:
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "Income source has future pin rows; confirm to drop them",
+                    "incomeSourceId": income_source_id,
+                    "affectedMonths": affected_months,
+                }
+            ),
+        )
+    if affected_months and not explanation:
+        return _response(400, "explanation is required when dropping future pin rows")
+
+    for month in affected_months:
+        line_id = payment_line_id(income_source_id)
+        old_row = _INCOME_PLAN_TABLE.get_line(month, line_id)
+        _INCOME_PLAN_TABLE.delete_payment(month, income_source_id)
+        _AUDIT_LOG_TABLE.write_entry(
+            effective_year_month=month,
+            category_id=None,
+            action=AuditAction.INCOME_UNPIN,
+            explanation=explanation,
+            user=user,
+            changes={"payment": {"before": get_payment(old_row) if old_row else None, "after": None}},
+            income_source_id=income_source_id,
+            income_line_id=line_id,
+        )
+
+    item = _INCOME_SOURCE_TABLE.set_active(income_source_id, False)
+    return _json_response(
+        200, json.dumps({"incomeSource": item, "affectedMonths": affected_months}, default=_json_default)
+    )
+
+
+def _reactivate_income_source(income_source_id: str) -> dict[str, Any]:
+    """Make an income source active again. The pins that the deactivation dropped do not come back."""
+
+    item = _INCOME_SOURCE_TABLE.set_active(income_source_id, True)
+    if item is None:
+        return _response(404, "Income source not found")
+    return _json_response(200, json.dumps(item, default=_json_default))
+
+
+def _income_month_response(year_month: str, now: datetime) -> dict[str, Any]:
+    return compute_income(_INCOME_PLAN_TABLE, _INCOME_SOURCE_TABLE, year_month, now)
+
+
+def _get_income(year_month: str, now: datetime) -> dict[str, Any]:
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    _ensure_hydrated(now)
+    return _json_response(200, json.dumps(_income_month_response(year_month, now), default=_json_default))
+
+
+@dataclass(frozen=True)
+class _PaymentChange:
+    """One entry of `body.payments`."""
+
+    income_source_id: str
+    payment: dict[str, Any] | None  # None removes the pin
+
+
+def _parse_payment_rows(body: dict[str, Any], dense: bool) -> tuple[list[_PaymentChange], dict[str, Any] | None]:
+    """Read and check `body.payments`: a list of `{incomeSourceId, payment}`.
+
+    Returns `(changes, error_response)`. In a dense month (`/replace`), `payment` must not be null: to stop a source,
+    deactivate it. In a future month (`/pin`), a `null` removes the pin.
+    """
+
+    raw_rows = body.get("payments")
+    if not isinstance(raw_rows, list):
+        return [], _response(400, "payments array is required")
+    changes: list[_PaymentChange] = []
+    for index, raw in enumerate(raw_rows):
+        if not isinstance(raw, dict) or not isinstance(raw.get("incomeSourceId"), str):
+            return [], _response(400, f"payments[{index}] must have incomeSourceId")
+        if "payment" not in raw:
+            return [], _response(400, f"payments[{index}] must have payment")
+        if dense and raw["payment"] is None:
+            return [], _response(400, f"payments[{index}]: payment must not be null here")
+        source_id = raw["incomeSourceId"]
+        if _INCOME_SOURCE_TABLE.get_income_source_by_id(source_id) is None:
+            return [], _response(400, f"payments[{index}]: income source '{source_id}' does not exist")
+        try:
+            payment = validate_payment(raw["payment"]) if raw["payment"] is not None else None
+        except ValueError as e:
+            return [], _response(400, f"payments[{index}]: {e}")
+        changes.append(_PaymentChange(income_source_id=source_id, payment=payment))
+    return changes, None
+
+
+def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Write the payment rows of a dense month (current, grace, or locked through the override).
+
+    Body: `{payments: [{incomeSourceId, payment}], explanation, override?}`. The body must hold every income source
+    with a payment row in that month. `payment` must not be null here: to stop a source, deactivate it. Each change
+    makes one INCOME_CREATE or INCOME_UPDATE entry.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+    changes, err = _parse_payment_rows(body, dense=True)
+    if err:
+        return err
+
+    override_active, err = _resolve_override(event, body)
+    if err:
+        return err
+    err = _check_year_month_editable(year_month, override_active, now)
+    if err:
+        return err
+
+    _ensure_hydrated(now)
+
+    if year_month > _year_month_of(now):
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "/replace is for dense months only; use /pin for future months",
+                    "yearMonth": year_month,
+                }
+            ),
+        )
+
+    existing = {
+        str(r["incomeSourceId"]): r
+        for r in _INCOME_PLAN_TABLE.get_income_plan_for_month(year_month)
+        if r.get("lineType") == IncomeLineType.PAYMENT
+    }
+    missing = sorted(set(existing) - {c.income_source_id for c in changes})
+    if missing:
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "body must include every income source with a payment row in this month",
+                    "yearMonth": year_month,
+                    "missingIncomeSourceIds": missing,
+                }
+            ),
+        )
+
+    for change in changes:
+        source_id = change.income_source_id
+        stored = existing.get(source_id)
+        before = get_payment(stored) if stored else None
+        if change.payment is None or payments_equal(before, change.payment):
+            continue
+        _INCOME_PLAN_TABLE.put_payment(year_month, source_id, change.payment)
+        _AUDIT_LOG_TABLE.write_entry(
+            effective_year_month=year_month,
+            category_id=None,
+            action=AuditAction.INCOME_CREATE if before is None else AuditAction.INCOME_UPDATE,
+            explanation=explanation,
+            user=user,
+            changes={"payment": {"before": before, "after": change.payment}},
+            override=override_active,
+            income_source_id=source_id,
+            income_line_id=payment_line_id(source_id),
+        )
+
+    return _json_response(200, json.dumps(_income_month_response(year_month, now), default=_json_default))
+
+
+def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Pin or unpin the payment of a future month.
+
+    The same rules as the budget /pin: the month must be EDITABLE and later than the current month, and the override
+    does not change that. Body: `{payments: [{incomeSourceId, payment}], explanation}`. A source left out of the body
+    does not change. A payment writes the pin (INCOME_PIN), and `null` removes it (INCOME_UNPIN). Later months carry
+    the pin forward. The same value again is a no-op with no audit entry.
+
+    Returns `{income: <the month, as GET /api/income>, warnings: {downstreamPins, pinMatchesCarriedValue}}`.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+    changes, err = _parse_payment_rows(body, dense=False)
+    if err:
+        return err
+
+    if year_month <= _year_month_of(now):
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "/pin is for future months only; use /replace for current/grace/locked months",
+                    "yearMonth": year_month,
+                }
+            ),
+        )
+    state = editability(year_month, now)
+    if state != EditabilityState.EDITABLE:
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": f"/pin requires an editable future month; year-month is {state}",
+                    "yearMonth": year_month,
+                    "state": state,
+                }
+            ),
+        )
+
+    _ensure_hydrated(now)
+
+    # Read the rows before any write, so that the warnings compare with the plan as it was.
+    by_key_before = carry_map(IncomePlanDensifyAdapter(_INCOME_PLAN_TABLE).scan_stored_values())
+    pin_matches_carried: list[str] = []
+
+    for change in changes:
+        source_id = change.income_source_id
+        before = by_key_before.get((year_month, source_id))
+        after = change.payment
+        if payments_equal(before, after):
+            continue
+        if after is None:
+            _INCOME_PLAN_TABLE.delete_payment(year_month, source_id)
+        else:
+            _INCOME_PLAN_TABLE.put_payment(year_month, source_id, after)
+            sans_pin = {k: v for k, v in by_key_before.items() if k != (year_month, source_id)}
+            if payments_equal(walk_back_for(sans_pin, year_month, source_id), after):
+                pin_matches_carried.append(source_id)
+        _AUDIT_LOG_TABLE.write_entry(
+            effective_year_month=year_month,
+            category_id=None,
+            action=AuditAction.INCOME_PIN if after is not None else AuditAction.INCOME_UNPIN,
+            explanation=explanation,
+            user=user,
+            changes={"payment": {"before": before, "after": after}},
+            income_source_id=source_id,
+            income_line_id=payment_line_id(source_id),
+        )
+
+    touched_ids = {c.income_source_id for c in changes}
+    downstream_pins = sorted(
+        (
+            {"incomeSourceId": key, "yearMonth": ym}
+            for ym, key, _ in IncomePlanDensifyAdapter(_INCOME_PLAN_TABLE).scan_stored_values()
+            if key in touched_ids and ym > year_month
+        ),
+        key=lambda p: (p["yearMonth"], p["incomeSourceId"]),
+    )
+
+    return _json_response(
+        200,
+        json.dumps(
+            {
+                "income": _income_month_response(year_month, now),
+                "warnings": {
+                    "downstreamPins": downstream_pins,
+                    "pinMatchesCarriedValue": sorted(pin_matches_carried),
+                },
+            },
+            default=_json_default,
+        ),
+    )
+
+
+def _post_one_time(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Create, change, or delete a one-time income line. One route does all three, from the body:
+
+    - Create: `{label, amount, explanation, override?}` (no `lineId`)
+    - Change: `{lineId, label, amount, explanation, override?}`
+    - Delete: `{lineId, delete: true, explanation, override?}`
+
+    The month must be EDITABLE or GRACE, or LOCKED with the override. A future month is
+    permitted. Each call makes one ONE_TIME_CREATE, ONE_TIME_UPDATE, or ONE_TIME_DELETE entry.
+    The entry holds the label, because the line can be deleted later.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+
+    if body.get("lineId") is None:
+        line_action = AuditAction.ONE_TIME_CREATE
+    elif body.get("delete") is True:
+        line_action = AuditAction.ONE_TIME_DELETE
+    else:
+        line_action = AuditAction.ONE_TIME_UPDATE
+
+    new_line: dict[str, Any] | None = None
+    if line_action != AuditAction.ONE_TIME_DELETE:
+        try:
+            label = validate_label(body.get("label"))
+            amount = validate_one_time_amount(body.get("amount"))
+        except ValueError as e:
+            return _response(400, str(e))
+        new_line = {"label": label, "amount": amount}
+
+    existing_line_id: str | None = None
+    old_line: dict[str, Any] | None = None
+    if line_action != AuditAction.ONE_TIME_CREATE:
+        raw_line_id = body.get("lineId")
+        if not isinstance(raw_line_id, str) or not raw_line_id.startswith(ONE_TIME_LINE_PREFIX):
+            return _response(400, "lineId of a one-time line is required")
+        stored = _INCOME_PLAN_TABLE.get_line(year_month, raw_line_id)
+        if stored is None:
+            return _response(404, "One-time line not found")
+        existing_line_id = raw_line_id
+        old_line = {"label": stored["label"], "amount": stored["amount"]}
+
+    override_active, err = _resolve_override(event, body)
+    if err:
+        return err
+    err = _check_year_month_editable(year_month, override_active, now)
+    if err:
+        return err
+
+    result: dict[str, Any]
+    if new_line is None and existing_line_id is not None:
+        _INCOME_PLAN_TABLE.delete_line(year_month, existing_line_id)
+        line_id = existing_line_id
+        status, result = 200, {"deleted": existing_line_id}
+    elif new_line is not None:
+        item = _INCOME_PLAN_TABLE.put_one_time(
+            year_month, new_line["label"], new_line["amount"], line_id=existing_line_id
+        )
+        line_id = str(item["lineId"])
+        status, result = (201 if line_action == AuditAction.ONE_TIME_CREATE else 200), item
+    else:
+        return _response(400, f"unknown one-time action '{line_action}'")
+
+    _AUDIT_LOG_TABLE.write_entry(
+        effective_year_month=year_month,
+        category_id=None,
+        action=line_action,
+        explanation=explanation,
+        user=user,
+        changes={"line": {"before": old_line, "after": new_line}},
+        override=override_active,
+        income_line_id=line_id,
+    )
+    return _json_response(status, json.dumps(result, default=_json_default))
+
+
 # --- Transactions ---
 
 
@@ -1205,6 +1742,10 @@ def _get_summary(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     _ensure_hydrated(now)
 
     result = compute_summary(_BUDGET_TABLE, _TRANSACTIONS_TABLE, _CATEGORY_TABLE, month, now)
+    # Left to assign: the planned net income minus every budget target. It uses the same
+    # category membership as `totals.budgeted`. No transaction changes it.
+    planned = int(compute_income(_INCOME_PLAN_TABLE, _INCOME_SOURCE_TABLE, month, now)["plannedNetIncome"])
+    result["income"] = {"plannedNetIncome": planned, "leftToAssign": planned - int(result["totals"]["budgeted"])}
     return _json_response(200, json.dumps(result, default=_json_default))
 
 
@@ -1277,14 +1818,16 @@ def _delete_profile(profile_id: str) -> dict[str, Any]:
         return _response(404, "Profile not found")
 
     blocking = _ACCOUNT_TABLE.accounts_with_owner(profile_id)
-    if blocking:
+    blocking_sources = _INCOME_SOURCE_TABLE.sources_with_owner(profile_id)
+    if blocking or blocking_sources:
         return _json_response(
             409,
             json.dumps(
                 {
-                    "error": "Profile is the owner of one or more accounts; reassign them first",
+                    "error": "Profile is the owner of one or more accounts or income sources; reassign them first",
                     "personId": profile_id,
                     "blockingAccounts": blocking,
+                    "blockingIncomeSources": blocking_sources,
                 }
             ),
         )

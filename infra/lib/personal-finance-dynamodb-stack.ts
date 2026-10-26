@@ -16,6 +16,8 @@ interface PersonalFinanceDynamoDbStackProps extends cdk.StackProps {
  * - DynamoDB table: Budget-{stage} (PK: yearMonth, SK: categoryId)
  * - DynamoDB table: BudgetAuditLog-{stage} (PK: entityType [always "AUDIT"], SK: sortId [ULID])
  * - DynamoDB table: Transactions-{stage} (PK: yearMonth, SK: sortId)
+ * - DynamoDB table: IncomeSource-{stage} (PK: incomeSourceId [ULID])
+ * - DynamoDB table: IncomePlan-{stage} (PK: yearMonth, SK: lineId ["SRC#{incomeSourceId}" or "ONE#{ULID}"])
  * - DynamoDB table: Profile-{stage} (PK: householdId [always "HOUSEHOLD"], SK: personId [ULID])
  * - DynamoDB table: Account-{stage} (PK: accountId [ULID])
  * - DynamoDB table: NetWorthSnapshot-{stage} (PK: yearMonth, SK: accountId)
@@ -26,6 +28,8 @@ export class PersonalFinanceDynamoDbStack extends cdk.Stack {
     readonly budgetTable: dynamodb.Table;
     readonly budgetAuditLogTable: dynamodb.Table;
     readonly transactionsTable: dynamodb.Table;
+    readonly incomeSourceTable: dynamodb.Table;
+    readonly incomePlanTable: dynamodb.Table;
     readonly profileTable: dynamodb.Table;
     readonly accountTable: dynamodb.Table;
     readonly netWorthSnapshotTable: dynamodb.Table;
@@ -84,6 +88,26 @@ export class PersonalFinanceDynamoDbStack extends cdk.Stack {
             tableName: `Transactions-${stage}`,
             partitionKey: { name: "yearMonth", type: dynamodb.AttributeType.STRING },
             sortKey: { name: "sortId", type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+            removalPolicy,
+        });
+
+        // The tables for the income plan. An income source is any stream of income, such as a job,
+        // interest, or dividends. The plan holds one paycheck row ("SRC#{incomeSourceId}") for each
+        // source in each dense month, and the one-time income lines ("ONE#{ULID}") of each month.
+        this.incomeSourceTable = new dynamodb.Table(this, "IncomeSourceTable", {
+            tableName: `IncomeSource-${stage}`,
+            partitionKey: { name: "incomeSourceId", type: dynamodb.AttributeType.STRING },
+            billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+            pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+            removalPolicy,
+        });
+
+        this.incomePlanTable = new dynamodb.Table(this, "IncomePlanTable", {
+            tableName: `IncomePlan-${stage}`,
+            partitionKey: { name: "yearMonth", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "lineId", type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
             removalPolicy,

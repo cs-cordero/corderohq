@@ -19,8 +19,8 @@ describe("PersonalFinanceDynamoDbStack", () => {
             template = createTestTemplate("prod");
         });
 
-        test("creates eight DynamoDB tables", () => {
-            template.resourceCountIs("AWS::DynamoDB::Table", 8);
+        test("creates ten DynamoDB tables", () => {
+            template.resourceCountIs("AWS::DynamoDB::Table", 10);
         });
 
         test("Category table has correct key schema", () => {
@@ -56,6 +56,23 @@ describe("PersonalFinanceDynamoDbStack", () => {
                 KeySchema: [
                     { AttributeName: "yearMonth", KeyType: "HASH" },
                     { AttributeName: "sortId", KeyType: "RANGE" },
+                ],
+            });
+        });
+
+        test("IncomeSource table has correct key schema", () => {
+            template.hasResourceProperties("AWS::DynamoDB::Table", {
+                TableName: "IncomeSource-prod",
+                KeySchema: [{ AttributeName: "incomeSourceId", KeyType: "HASH" }],
+            });
+        });
+
+        test("IncomePlan table has correct key schema", () => {
+            template.hasResourceProperties("AWS::DynamoDB::Table", {
+                TableName: "IncomePlan-prod",
+                KeySchema: [
+                    { AttributeName: "yearMonth", KeyType: "HASH" },
+                    { AttributeName: "lineId", KeyType: "RANGE" },
                 ],
             });
         });

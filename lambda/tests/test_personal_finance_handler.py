@@ -10,6 +10,8 @@ os.environ.setdefault("CATEGORY_TABLE_NAME", "test-Category")
 os.environ.setdefault("BUDGET_TABLE_NAME", "test-Budget")
 os.environ.setdefault("BUDGET_AUDIT_LOG_TABLE_NAME", "test-BudgetAuditLog")
 os.environ.setdefault("TRANSACTIONS_TABLE_NAME", "test-Transactions")
+os.environ.setdefault("INCOME_SOURCE_TABLE_NAME", "test-IncomeSource")
+os.environ.setdefault("INCOME_PLAN_TABLE_NAME", "test-IncomePlan")
 os.environ.setdefault("PROFILE_TABLE_NAME", "test-Profile")
 os.environ.setdefault("ACCOUNT_TABLE_NAME", "test-Account")
 os.environ.setdefault("NETWORTH_SNAPSHOT_TABLE_NAME", "test-NetWorthSnapshot")
@@ -1125,15 +1127,32 @@ class TestDeleteTransactions:
 
 
 class TestGetSummary:
+    @patch("corderohq.personal_finance_handler.compute_income")
     @patch("corderohq.personal_finance_handler.compute_summary")
-    def test_returns_summary(self, mock_summary: MagicMock) -> None:
+    def test_returns_summary(self, mock_summary: MagicMock, mock_income: MagicMock) -> None:
         mock_summary.return_value = {
             "yearMonth": _EDITABLE_MONTH,
             "categories": [],
             "totals": {"budgeted": 0, "actual": 0, "delta": 0},
         }
+        mock_income.return_value = {"plannedNetIncome": 0}
         result = handler(_make_event("GET", "/api/summary", query={"month": _EDITABLE_MONTH}), None)
         assert result["statusCode"] == 200
+
+    @patch("corderohq.personal_finance_handler.compute_income")
+    @patch("corderohq.personal_finance_handler.compute_summary")
+    def test_left_to_assign_is_planned_income_minus_targets(
+        self, mock_summary: MagicMock, mock_income: MagicMock
+    ) -> None:
+        mock_summary.return_value = {
+            "yearMonth": _EDITABLE_MONTH,
+            "categories": [],
+            "totals": {"budgeted": 7_000_000_000, "actual": 6_000_000_000, "delta": 1_000_000_000},
+        }
+        mock_income.return_value = {"plannedNetIncome": 8_000_000_000}
+        result = handler(_make_event("GET", "/api/summary", query={"month": _EDITABLE_MONTH}), None)
+        body = json.loads(result["body"])
+        assert body["income"] == {"plannedNetIncome": 8_000_000_000, "leftToAssign": 1_000_000_000}
 
     def test_returns_400_when_month_missing(self) -> None:
         result = handler(_make_event("GET", "/api/summary"), None)
@@ -1638,11 +1657,13 @@ class TestPutPerson:
 
 
 class TestDeletePerson:
+    @patch("corderohq.personal_finance_handler._INCOME_SOURCE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
-    def test_deletes_when_unreferenced(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
+    def test_deletes_when_unreferenced(self, mock_pt: MagicMock, mock_at: MagicMock, mock_ist: MagicMock) -> None:
         mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = []
+        mock_ist.sources_with_owner.return_value = []
         result = handler(_make_event("POST", "/api/profiles/p1/delete"), None)
         assert result["statusCode"] == 200
         mock_pt.delete_profile.assert_called_once_with("p1")
@@ -1653,15 +1674,31 @@ class TestDeletePerson:
         result = handler(_make_event("POST", "/api/profiles/nope/delete"), None)
         assert result["statusCode"] == 404
 
+    @patch("corderohq.personal_finance_handler._INCOME_SOURCE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
-    def test_blocked_when_owner_of_accounts(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
+    def test_blocked_when_owner_of_accounts(self, mock_pt: MagicMock, mock_at: MagicMock, mock_ist: MagicMock) -> None:
         mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = [{"accountId": "a1", "name": "His 401k"}]
+        mock_ist.sources_with_owner.return_value = []
         result = handler(_make_event("POST", "/api/profiles/p1/delete"), None)
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["blockingAccounts"][0]["accountId"] == "a1"
+        mock_pt.delete_profile.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._INCOME_SOURCE_TABLE")
+    @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
+    @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
+    def test_blocked_when_owner_of_an_income_source(
+        self, mock_pt: MagicMock, mock_at: MagicMock, mock_ist: MagicMock
+    ) -> None:
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_at.accounts_with_owner.return_value = []
+        mock_ist.sources_with_owner.return_value = [{"incomeSourceId": "s1", "label": "Employer A"}]
+        result = handler(_make_event("POST", "/api/profiles/p1/delete"), None)
+        assert result["statusCode"] == 409
+        assert json.loads(result["body"])["blockingIncomeSources"][0]["incomeSourceId"] == "s1"
         mock_pt.delete_profile.assert_not_called()
 
 
