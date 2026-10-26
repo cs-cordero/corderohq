@@ -10,7 +10,7 @@ from corderohq.accounts import (
     FixedClassAccount,
     LoanAccount,
     LoanTerms,
-    account_type_meta,
+    get_metadata_for_account_type,
     parse_create_account_args,
     parse_loan_terms,
     resolve_target_year,
@@ -102,20 +102,20 @@ class TestValidateOwners:
 
 class TestAccountTypeMeta:
     def test_every_account_type_has_meta(self) -> None:
-        # account_type_meta must resolve for every enum member (no gaps in the map).
+        # get_metadata_for_account_type must resolve for every enum member (no gaps in the map).
         for t in AccountType:
-            assert account_type_meta(t.value) is not None
+            assert get_metadata_for_account_type(t.value) is not None
 
     def test_liability_types(self) -> None:
-        assert account_type_meta("mortgage").is_liability is True
-        assert account_type_meta("other_liability").is_liability is True
-        assert account_type_meta("checking").is_liability is False
-        assert account_type_meta("brokerage").is_liability is False
+        assert get_metadata_for_account_type("mortgage").is_liability is True
+        assert get_metadata_for_account_type("other_liability").is_liability is True
+        assert get_metadata_for_account_type("checking").is_liability is False
+        assert get_metadata_for_account_type("brokerage").is_liability is False
 
     def test_amortizing_only_on_debt_types(self) -> None:
-        assert account_type_meta("mortgage").amortizing is True
-        assert account_type_meta("other_liability").amortizing is True
-        assert account_type_meta("checking").amortizing is False
+        assert get_metadata_for_account_type("mortgage").amortizing is True
+        assert get_metadata_for_account_type("other_liability").amortizing is True
+        assert get_metadata_for_account_type("checking").amortizing is False
 
 
 class TestValidateAssetClasses:

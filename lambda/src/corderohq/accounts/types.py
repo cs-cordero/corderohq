@@ -73,7 +73,7 @@ _ACCOUNT_TYPE_META: dict[AccountType, AccountTypeMeta] = {
 }
 
 
-def account_type_meta(account_type: str) -> AccountTypeMeta:
+def get_metadata_for_account_type(account_type: str) -> AccountTypeMeta:
     """Return the rules for an account type. Raise ValueError if the type is unknown."""
 
     return _ACCOUNT_TYPE_META[AccountType(account_type)]

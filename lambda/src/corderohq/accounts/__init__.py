@@ -19,7 +19,7 @@ from corderohq.accounts.types import (
     LoanAccount,
     LoanTerms,
     NewAccount,
-    account_type_meta,
+    get_metadata_for_account_type,
 )
 
 __all__ = [
@@ -32,7 +32,7 @@ __all__ = [
     "LoanAccount",
     "LoanTerms",
     "NewAccount",
-    "account_type_meta",
+    "get_metadata_for_account_type",
     "parse_create_account_args",
     "parse_loan_terms",
     "resolve_target_year",

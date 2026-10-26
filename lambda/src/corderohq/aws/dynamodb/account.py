@@ -11,7 +11,7 @@ from corderohq.accounts import (
     CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
-    account_type_meta,
+    get_metadata_for_account_type,
     parse_loan_terms,
     validate_asset_classes,
     validate_owners,
@@ -35,7 +35,7 @@ class AccountTable:
     def _fixed_class_fields(account: FixedClassAccount) -> dict[str, Any]:
         """Return the stored fields of an account whose type fixes its asset class."""
 
-        meta = account_type_meta(account.account_type)
+        meta = get_metadata_for_account_type(account.account_type)
         return {
             "accountType": account.account_type,
             "assetClasses": [meta.fixed_asset_class],
@@ -61,7 +61,7 @@ class AccountTable:
 
         fields: dict[str, Any] = {
             "accountType": account.account_type,
-            "assetClasses": [account_type_meta(account.account_type).fixed_asset_class],
+            "assetClasses": [get_metadata_for_account_type(account.account_type).fixed_asset_class],
             "liability": True,
         }
         if account.loan_terms is not None:
@@ -137,7 +137,7 @@ class AccountTable:
         existing = self.get_account_by_id(account_id)
         if existing is None:
             return None
-        meta = account_type_meta(existing["accountType"])
+        meta = get_metadata_for_account_type(existing["accountType"])
 
         set_parts: list[str] = ["updatedAt = :now"]
         remove_parts: list[str] = []
