@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, assert_never
 
 from ulid import ULID
 
@@ -14,33 +14,35 @@ from corderohq.common import FieldChange, Keep, Remove, SetTo
 _LOGGER = logging.getLogger(__name__)
 
 
-_DEFAULT_CASH_FLOW_ROLE: dict[AccountType, CashFlowRole] = {
-    AccountType.CHECKING: CashFlowRole.SPENDING,
-    AccountType.CREDIT_CARD: CashFlowRole.SPENDING,
-    AccountType.SAVINGS: CashFlowRole.HOLDING,
-    AccountType.BROKERAGE: CashFlowRole.HOLDING,
-    AccountType.RETIREMENT_401K: CashFlowRole.HOLDING,
-    AccountType.RETIREMENT_403B: CashFlowRole.HOLDING,
-    AccountType.ROTH_IRA: CashFlowRole.HOLDING,
-    AccountType.TRADITIONAL_IRA: CashFlowRole.HOLDING,
-    AccountType.HSA: CashFlowRole.HOLDING,
-    AccountType.PLAN_529: CashFlowRole.HOLDING,
-    AccountType.PLAN_530A: CashFlowRole.HOLDING,
-    AccountType.OTHER_ASSET: CashFlowRole.HOLDING,
-    AccountType.MORTGAGE: CashFlowRole.EXTERNAL,
-    AccountType.OTHER_LIABILITY: CashFlowRole.EXTERNAL,
-    AccountType.REAL_ESTATE: CashFlowRole.NON_CASH,
-    AccountType.VEHICLE: CashFlowRole.NON_CASH,
-}
-
-
 def get_cash_flow_role(account: Mapping[str, Any]) -> CashFlowRole:
     """Return the cash flow role of a stored account: its own `cashFlowRole`, else the default for its type."""
 
     explicit = account.get("cashFlowRole")
     if isinstance(explicit, str) and explicit in CashFlowRole:
         return CashFlowRole(explicit)
-    return _DEFAULT_CASH_FLOW_ROLE[AccountType(account["accountType"])]
+    account_type = AccountType(account["accountType"])
+    match account_type:
+        case AccountType.CHECKING | AccountType.CREDIT_CARD:
+            return CashFlowRole.SPENDING
+        case (
+            AccountType.SAVINGS
+            | AccountType.BROKERAGE
+            | AccountType.RETIREMENT_401K
+            | AccountType.RETIREMENT_403B
+            | AccountType.ROTH_IRA
+            | AccountType.TRADITIONAL_IRA
+            | AccountType.HSA
+            | AccountType.PLAN_529
+            | AccountType.PLAN_530A
+            | AccountType.OTHER_ASSET
+        ):
+            return CashFlowRole.HOLDING
+        case AccountType.MORTGAGE | AccountType.OTHER_LIABILITY:
+            return CashFlowRole.EXTERNAL
+        case AccountType.REAL_ESTATE | AccountType.VEHICLE:
+            return CashFlowRole.NON_CASH
+        case _:
+            assert_never(account_type)
 
 
 class AccountTable:
@@ -100,8 +102,7 @@ class AccountTable:
     def update_account(self, account_id: str, args: UpdateAccountArgs) -> dict[str, Any]:
         """Apply the checked changes to an account, and return the updated item.
 
-        Raise ValueError for a duplicate name. The caller reads the account first, and parses the
-        changes against it.
+        Raise ValueError for a duplicate name.
         """
 
         match args.name:

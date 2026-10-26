@@ -30,7 +30,7 @@ def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[
 
     `existing` is the stored transaction. A change to any disposition attribute is checked together
     with the stored values of the others. Then each disposition attribute is set to its new value,
-    or removed when it no longer applies. The caller checks that the account exists.
+    or removed when it no longer applies. It does not check that the account exists.
     """
 
     description: Keep | SetTo[str] = Keep()

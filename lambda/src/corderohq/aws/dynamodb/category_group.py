@@ -86,7 +86,7 @@ class CategoryGroupTable:
     def delete_category_group(self, group_id: str) -> None:
         """Delete a group for ever.
 
-        The caller makes sure that no active category is in the group.
+        It does not check whether a category is still in the group.
         """
 
         self._table.delete_item(Key={"groupId": group_id})

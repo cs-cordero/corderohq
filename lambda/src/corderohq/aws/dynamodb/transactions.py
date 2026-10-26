@@ -38,10 +38,7 @@ class TransactionsTable:
         account_id: str | None = None,
         note: str | None = None,
     ) -> dict[str, Any]:
-        """Create a single transaction. Returns the created item.
-
-        The caller checks the disposition rules first. An optional value that is None is not stored.
-        """
+        """Create a single transaction. Returns the created item."""
 
         description = description.strip()
         if not description:
@@ -74,27 +71,26 @@ class TransactionsTable:
         """Create multiple transactions in a batch. Returns the created items.
 
         Each dict must have yearMonth, transactionDate, description, and amount. The keys
-        disposition, categoryId, accountId, and note are copied when they are present. The caller
-        checks the disposition rules first.
+        disposition, categoryId, accountId, and note are copied when they are present.
         """
 
         now = datetime.now(tz=UTC).isoformat()
         items: list[dict[str, Any]] = []
 
         with self._table.batch_writer() as batch:
-            for txn in transactions:
-                sort_id = f"{txn['transactionDate']}#{ULID()}"
+            for transaction in transactions:
+                sort_id = f"{transaction['transactionDate']}#{ULID()}"
                 item: dict[str, Any] = {
-                    "yearMonth": txn["yearMonth"],
+                    "yearMonth": transaction["yearMonth"],
                     "sortId": sort_id,
-                    "transactionDate": txn["transactionDate"],
-                    "description": txn["description"].strip(),
-                    "amount": txn["amount"],
+                    "transactionDate": transaction["transactionDate"],
+                    "description": transaction["description"].strip(),
+                    "amount": transaction["amount"],
                     "createdAt": now,
                 }
                 for name in DISPOSITION_ATTRIBUTES:
-                    if txn.get(name) is not None:
-                        item[name] = txn[name]
+                    if transaction.get(name) is not None:
+                        item[name] = transaction[name]
                 batch.put_item(Item=item)
                 items.append(item)
 
@@ -110,8 +106,7 @@ class TransactionsTable:
     def update_transaction(self, year_month: str, sort_id: str, args: UpdateTransactionArgs) -> dict[str, Any]:
         """Apply the checked changes to a transaction, and return the updated item.
 
-        The caller reads the transaction first, and parses the changes against it. Raise ValueError if
-        the changes change nothing.
+        Raise ValueError if the changes change nothing.
         """
 
         changes: dict[str, FieldChange[Any]] = {

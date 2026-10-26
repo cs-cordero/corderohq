@@ -39,7 +39,7 @@ def parse_create_account_args(payload: Mapping[str, Any]) -> CreateAccountArgs:
     """Convert the body of a create request into checked arguments. Raise ValueError for bad input.
 
     The account type decides which other keys the body can hold. A type with a fixed asset class
-    ignores `assetClasses`. The caller checks that each owner exists.
+    ignores `assetClasses`. It does not check that each owner exists.
     """
 
     account_type = AccountType(validate_account_type(payload.get("accountType")))
@@ -99,7 +99,7 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
     `existing` is the stored account. Its type decides which keys the body can change. Its asset
     classes decide the target year rule when the body does not change them. An absent key changes
     nothing. A null `notes`, `loanTerms`, or `targetYear` removes that field. The type of an
-    account cannot change. The caller checks that each owner exists.
+    account cannot change. It does not check that each owner exists.
     """
 
     if not any(key in payload for key in _EDITABLE_ACCOUNT_KEYS):
@@ -375,7 +375,7 @@ def validate_account_number_last_four(value: Any) -> list[str]:
 def validate_owners(value: Any) -> list[str]:
     """Check an `owners` list, and return it without duplicates, in the order given.
 
-    The list must not be empty, and each entry must be a non-empty personId. The caller checks that each person exists.
+    The list must not be empty, and each entry must be a non-empty personId. It does not check that each person exists.
     Raise ValueError for bad input.
     """
 

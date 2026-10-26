@@ -43,7 +43,7 @@ def _resolve_historical_name(category: dict[str, Any], month_end_utc: datetime) 
 
 def compute_summary(
     budget: BudgetTable,
-    transactions: TransactionsTable,
+    transactions_table: TransactionsTable,
     category_table: CategoryTable,
     year_month: str,
     now: datetime,
@@ -63,7 +63,7 @@ def compute_summary(
     nowhere.
     """
 
-    txns = transactions.list_transactions_for_month(year_month)
+    transactions = transactions_table.list_transactions_for_month(year_month)
     categories_all = category_table.get_all_categories()
     category_by_id = {c["categoryId"]: c for c in categories_all}
 
@@ -93,23 +93,23 @@ def compute_summary(
             budget_by_category[target["categoryId"]] = Decimal("0") if raw is None else Decimal(str(raw))
 
     actual_by_category: dict[str, Decimal] = {}
-    nonzero_txn_cat_ids: set[str] = set()
-    budget_txn_cat_ids: set[str] = set()
+    nonzero_transaction_cat_ids: set[str] = set()
+    budget_transaction_cat_ids: set[str] = set()
     off_budget_actual = Decimal("0")
-    for txn in txns:
-        raw_amount = txn.get("amount")
+    for transaction in transactions:
+        raw_amount = transaction.get("amount")
         amount = Decimal("0") if raw_amount is None else Decimal(str(raw_amount))
-        disposition = disposition_of(txn)
+        disposition = disposition_of(transaction)
         if disposition == Disposition.OFF_BUDGET:
             off_budget_actual += amount
             continue
         if disposition != Disposition.BUDGET:
             continue
-        cat_id = txn["categoryId"]
-        budget_txn_cat_ids.add(cat_id)
+        cat_id = transaction["categoryId"]
+        budget_transaction_cat_ids.add(cat_id)
         actual_by_category[cat_id] = actual_by_category.get(cat_id, Decimal("0")) + amount
         if amount != 0:
-            nonzero_txn_cat_ids.add(cat_id)
+            nonzero_transaction_cat_ids.add(cat_id)
 
     state = editability(year_month, now)
     is_locked = state == EditabilityState.LOCKED
@@ -117,11 +117,11 @@ def compute_summary(
     if is_locked:
         # Locked rule: every category with ANY budget row or ANY transaction (zero or not).
         # Budget rows are never removed on deactivation, so they're the historical signal.
-        member_ids = set(budget_by_category.keys()) | budget_txn_cat_ids
+        member_ids = set(budget_by_category.keys()) | budget_transaction_cat_ids
     else:
-        # Editable rule: active categories + (inactive with non-zero txn).
+        # Editable rule: active categories + (inactive with non-zero transaction).
         active_ids = {c["categoryId"] for c in categories_all if c.get("active", False)}
-        member_ids = active_ids | nonzero_txn_cat_ids
+        member_ids = active_ids | nonzero_transaction_cat_ids
     all_category_ids = sorted(member_ids)
 
     month_end_utc = _month_end_utc(year_month) if is_locked else None
