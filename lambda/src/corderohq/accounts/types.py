@@ -208,4 +208,4 @@ class UpdateAccountArgs:
     target_year: FieldChange[int]
     loan_terms: FieldChange[LoanTerms]
     cash_flow_role: FieldChange[CashFlowRole]
-    last_four: FieldChange[list[str]]
+    account_number_last_four: FieldChange[list[str]]

@@ -17,11 +17,11 @@ from corderohq.accounts import (
     parse_loan_terms,
     parse_update_account_args,
     resolve_target_year,
+    validate_account_number_last_four,
     validate_account_type,
     validate_asset_class,
     validate_asset_classes,
     validate_cash_flow_role,
-    validate_last_four,
     validate_loan_terms,
     validate_owners,
     validate_target_year,
@@ -269,7 +269,7 @@ class TestParseUpdateAccountArgs:
             target_year=Keep(),
             loan_terms=Keep(),
             cash_flow_role=Keep(),
-            last_four=Keep(),
+            account_number_last_four=Keep(),
         )
 
     def test_needs_an_editable_key(self) -> None:
@@ -382,21 +382,21 @@ class TestCashFlowRole:
     def test_update_sets_and_removes_the_budget_fields(self) -> None:
         args = parse_update_account_args({"cashFlowRole": "SPENDING", "lastFour": ["1234"]}, _stored("other_liability"))
         assert args.cash_flow_role == SetTo(CashFlowRole.SPENDING)
-        assert args.last_four == SetTo(["1234"])
+        assert args.account_number_last_four == SetTo(["1234"])
         args = parse_update_account_args({"cashFlowRole": None, "lastFour": []}, _stored("other_liability"))
         assert args.cash_flow_role == Remove()
-        assert args.last_four == Remove()
+        assert args.account_number_last_four == Remove()
 
 
 class TestLastFour:
     def test_accepts_and_dedupes(self) -> None:
-        assert validate_last_four(["1234", "5678", "1234"]) == ["1234", "5678"]
-        assert validate_last_four([]) == []
+        assert validate_account_number_last_four(["1234", "5678", "1234"]) == ["1234", "5678"]
+        assert validate_account_number_last_four([]) == []
 
     @pytest.mark.parametrize("bad", ["1234", ["123"], ["12345"], ["12a4"], [1234]])
     def test_rejects_bad_values(self, bad: object) -> None:
         with pytest.raises(ValueError, match="lastFour"):
-            validate_last_four(bad)
+            validate_account_number_last_four(bad)
 
 
 class TestParseLoanTerms:

@@ -149,7 +149,7 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
         target_year=_resolve_target_year_change(payload, existing, asset_classes),
         loan_terms=loan_terms,
         cash_flow_role=_parse_cash_flow_role_change(payload),
-        last_four=_parse_last_four_change(payload),
+        account_number_last_four=_parse_account_number_last_four_change(payload),
     )
 
 
@@ -162,13 +162,13 @@ def _parse_cash_flow_role_change(payload: Mapping[str, Any]) -> FieldChange[Cash
     return Remove() if role is None else SetTo(role)
 
 
-def _parse_last_four_change(payload: Mapping[str, Any]) -> FieldChange[list[str]]:
+def _parse_account_number_last_four_change(payload: Mapping[str, Any]) -> FieldChange[list[str]]:
     """Return the change to `lastFour`. An empty list removes it."""
 
     if "lastFour" not in payload:
         return Keep()
-    last_four = validate_last_four(payload["lastFour"])
-    return SetTo(last_four) if last_four else Remove()
+    account_number_last_four = validate_account_number_last_four(payload["lastFour"])
+    return SetTo(account_number_last_four) if account_number_last_four else Remove()
 
 
 def _parse_name_change(payload: Mapping[str, Any]) -> Keep | SetTo[str]:
@@ -355,7 +355,7 @@ def validate_cash_flow_role(value: Any) -> CashFlowRole | None:
         raise ValueError(f"cashFlowRole must be one of {[r.value for r in CashFlowRole]} or null") from None
 
 
-def validate_last_four(value: Any) -> list[str]:
+def validate_account_number_last_four(value: Any) -> list[str]:
     """Return the "last four digits" of an account, without duplicates, in the order given.
 
     Each entry must be a string of exactly 4 digits. Raise ValueError for bad input.

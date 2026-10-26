@@ -206,7 +206,7 @@ def _update_args(**changes: Any) -> UpdateAccountArgs:
         "target_year": Keep(),
         "loan_terms": Keep(),
         "cash_flow_role": Keep(),
-        "last_four": Keep(),
+        "account_number_last_four": Keep(),
     }
     return UpdateAccountArgs(**(fields | changes))
 
@@ -246,7 +246,8 @@ class TestAccountTableUpdate:
 
     def test_sets_and_removes_the_budget_fields(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
-        accounts.update_account("a1", _update_args(cash_flow_role=SetTo(CashFlowRole.SPENDING), last_four=Remove()))
+        args = _update_args(cash_flow_role=SetTo(CashFlowRole.SPENDING), account_number_last_four=Remove())
+        accounts.update_account("a1", args)
         kwargs = mock.update_item.call_args.kwargs
         assert kwargs["UpdateExpression"] == (
             "SET updatedAt = :updatedAt, #cashFlowRole = :cashFlowRole REMOVE #lastFour"
