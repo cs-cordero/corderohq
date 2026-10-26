@@ -86,11 +86,7 @@ def get_metadata_for_account_type(account_type: str) -> AccountTypeMeta:
 
 
 class BudgetRole(StrEnum):
-    """The budget role of an account, for the CSV import.
-
-    Money counts in the budget only when it crosses the boundary between the outside world, the
-    spending accounts, and the holding accounts. An account with no role cannot take a CSV upload.
-    """
+    """Whether an account is where expenses are paid from, or where money is kept."""
 
     SPENDING = "SPENDING"  # checking, a credit card: expenses come from here
     HOLDING = "HOLDING"  # a savings fund, a brokerage, a 529: money sits here
