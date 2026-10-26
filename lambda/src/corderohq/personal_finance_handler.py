@@ -19,7 +19,6 @@ from corderohq.aws.dynamodb import (
     NetWorthSnapshotTable,
     ProfileTable,
     TransactionsTable,
-    active_category_ids,
     compute_summary,
 )
 from corderohq.budget.auth import is_budget_admin
@@ -114,7 +113,7 @@ def _ensure_hydrated(now: datetime) -> None:
 
     densify(
         BudgetDensifyAdapter(_BUDGET_TABLE),
-        active_category_ids(_CATEGORY_TABLE.get_all_categories()),
+        [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()],
         _year_month_of(now),
         cold_start_value=0,
     )
@@ -322,7 +321,7 @@ def _put_category(event: dict[str, Any], category_id: str) -> dict[str, Any]:
         if not name:
             return _response(400, "name must not be empty")
         try:
-            item = _CATEGORY_TABLE.update(category_id, name)
+            item = _CATEGORY_TABLE.update_category(category_id, name)
         except ValueError as e:
             return _response(400, str(e))
         if item is None:
@@ -476,7 +475,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
 
     budget_rows_deleted = _BUDGET_TABLE.delete_all_for_category(category_id)
     txn_rows_deleted = _TRANSACTIONS_TABLE.delete_all_for_category(category_id)
-    _CATEGORY_TABLE.delete(category_id)
+    _CATEGORY_TABLE.delete_category(category_id)
 
     # Write the audit entry last. The cascade then either finished in full, or it left
     # nothing in the log to explain. effectiveYearMonth is null, as the spec states.
@@ -541,7 +540,7 @@ def _put_category_group(event: dict[str, Any], group_id: str) -> dict[str, Any]:
     if existing.get("system"):
         return _response(403, "System groups cannot be renamed")
     try:
-        item = _CATEGORY_GROUP_TABLE.update(group_id, name)
+        item = _CATEGORY_GROUP_TABLE.update_category_group(group_id, name)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(200, json.dumps(item, default=_json_default))
@@ -581,7 +580,7 @@ def _delete_category_group(group_id: str) -> dict[str, Any]:
         for cat in inactive_cats:
             _CATEGORY_TABLE.move_to_group(cat["categoryId"], unassigned["groupId"])
 
-    _CATEGORY_GROUP_TABLE.delete(group_id)
+    _CATEGORY_GROUP_TABLE.delete_category_group(group_id)
     return _json_response(
         200,
         json.dumps({"groupId": group_id, "movedDeactivatedCategories": len(inactive_cats)}),
@@ -638,9 +637,8 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     # Future month: resolve effective values via per-category walk-back,
     # attaching a `pinned` flag so the UI can distinguish explicit pins from
     # carried values.
-    targets = resolve_future_targets(
-        BudgetDensifyAdapter(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
-    )
+    active_ids = [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()]
+    targets = resolve_future_targets(BudgetDensifyAdapter(_BUDGET_TABLE), active_ids, year_month)
     return _json_response(200, json.dumps(targets, default=_json_default))
 
 
@@ -851,9 +849,8 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
         key=lambda p: (p["yearMonth"], p["categoryId"]),
     )
 
-    resolved = resolve_future_targets(
-        BudgetDensifyAdapter(_BUDGET_TABLE), active_category_ids(_CATEGORY_TABLE.get_all_categories()), year_month
-    )
+    active_ids = [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()]
+    resolved = resolve_future_targets(BudgetDensifyAdapter(_BUDGET_TABLE), active_ids, year_month)
 
     return _json_response(
         200,
@@ -1192,7 +1189,7 @@ def _get_audit_log(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get_profile() -> dict[str, Any]:
-    return _json_response(200, json.dumps(_PROFILE_TABLE.list_people(), default=_json_default))
+    return _json_response(200, json.dumps(_PROFILE_TABLE.list_profiles(), default=_json_default))
 
 
 def _post_person(event: dict[str, Any]) -> dict[str, Any]:
@@ -1208,7 +1205,7 @@ def _post_person(event: dict[str, Any]) -> dict[str, Any]:
         return _response(400, "birthYearMonth is required")
 
     try:
-        item = _PROFILE_TABLE.create_person(name, birth_year_month)
+        item = _PROFILE_TABLE.create_profile(name, birth_year_month)
     except ValueError as e:
         return _response(400, str(e))
     return _json_response(201, json.dumps(item, default=_json_default))
@@ -1225,7 +1222,7 @@ def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
         return _response(400, "name and/or birthYearMonth is required")
 
     try:
-        item = _PROFILE_TABLE.update_person(person_id, name=name, birth_year_month=birth_year_month)
+        item = _PROFILE_TABLE.update_profile(person_id, name=name, birth_year_month=birth_year_month)
     except ValueError as e:
         return _response(400, str(e))
     if item is None:
@@ -1239,7 +1236,7 @@ def _delete_person(person_id: str) -> dict[str, Any]:
     If an account still names the person as an owner, return a 409 that lists those accounts.
     """
 
-    if _PROFILE_TABLE.get_person(person_id) is None:
+    if _PROFILE_TABLE.get_profile(person_id) is None:
         return _response(404, "Person not found")
 
     blocking = _ACCOUNT_TABLE.accounts_with_owner(person_id)
@@ -1255,7 +1252,7 @@ def _delete_person(person_id: str) -> dict[str, Any]:
             ),
         )
 
-    _PROFILE_TABLE.delete_person(person_id)
+    _PROFILE_TABLE.delete_profile(person_id)
     return _json_response(200, json.dumps({"personId": person_id}))
 
 
@@ -1279,7 +1276,7 @@ def _check_owners_exist(owners: list[str]) -> dict[str, Any] | None:
     """Return a 400 response if a personId is not a person in the household, else None."""
 
     for owner in owners:
-        if _PROFILE_TABLE.get_person(owner) is None:
+        if _PROFILE_TABLE.get_profile(owner) is None:
             return _response(400, f"owner '{owner}' is not a person in the household")
     return None
 
@@ -1399,8 +1396,8 @@ def _get_networth_month(year_month: str, now: datetime) -> dict[str, Any]:
         return err
 
     accounts = _ACCOUNT_TABLE.get_all_accounts()
-    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_month(year_month)
-    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan_all(), year_month)
+    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_snapshot_for_month(year_month)
+    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan(), year_month)
     rows = build_month_view(accounts, month_rows, prefill)
     return _json_response(200, json.dumps({"yearMonth": year_month, "rows": rows}, default=_json_default))
 
@@ -1409,7 +1406,7 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
     """Merge the balance rows of one month.
 
     The body is `{rows: [{accountId, note?, classes: [{assetClass, value: number | null}, ...]}]}`. See
-    `NetWorthSnapshotTable.upsert_month` for the merge rules. An unknown accountId or asset class is rejected.
+    `NetWorthSnapshotTable.upsert_snapshot_record` for the merge rules. An unknown accountId or asset class is rejected.
     """
 
     err = _reject_future_or_malformed_month(year_month, now)
@@ -1472,10 +1469,10 @@ def _post_networth_month(event: dict[str, Any], year_month: str, now: datetime) 
             json.dumps({"error": "unknown accountId(s) in rows", "unknownAccountIds": sorted(set(unknown))}),
         )
 
-    _NETWORTH_SNAPSHOT_TABLE.upsert_month(year_month, upsert_rows)
+    _NETWORTH_SNAPSHOT_TABLE.upsert_snapshot_record(year_month, upsert_rows)
     # Return the same per-class shape as GET so the client sees a consistent view.
-    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_month(year_month)
-    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan_all(), year_month)
+    month_rows = _NETWORTH_SNAPSHOT_TABLE.get_snapshot_for_month(year_month)
+    prefill = compute_prefill(_NETWORTH_SNAPSHOT_TABLE.scan(), year_month)
     view = build_month_view(list(accounts_by_id.values()), month_rows, prefill)
     return _json_response(200, json.dumps({"yearMonth": year_month, "rows": view}, default=_json_default))
 
@@ -1484,7 +1481,7 @@ def _get_networth_history() -> dict[str, Any]:
     """Return the full Excel-style history: accounts, months, values, monthly totals."""
 
     accounts = _ACCOUNT_TABLE.get_all_accounts()
-    all_rows = _NETWORTH_SNAPSHOT_TABLE.scan_all()
+    all_rows = _NETWORTH_SNAPSHOT_TABLE.scan()
     return _json_response(200, json.dumps(build_history(accounts, all_rows), default=_json_default))
 
 

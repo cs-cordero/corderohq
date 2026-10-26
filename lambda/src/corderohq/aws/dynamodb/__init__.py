@@ -1,7 +1,7 @@
 from corderohq.aws.dynamodb.account import AccountTable
 from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
 from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable
-from corderohq.aws.dynamodb.category import CategoryTable, active_category_ids
+from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.category_group import CategoryGroupTable
 from corderohq.aws.dynamodb.net_worth_snapshot import NetWorthSnapshotTable
 from corderohq.aws.dynamodb.profile import ProfileTable
@@ -20,7 +20,6 @@ __all__ = [
     "NetWorthSnapshotTable",
     "ProfileTable",
     "TransactionsTable",
-    "active_category_ids",
     "compute_summary",
     "current_year_month",
 ]

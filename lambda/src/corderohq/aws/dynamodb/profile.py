@@ -13,13 +13,17 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class ProfileTable:
-    """The people of the household. `Account.owners` refers to a personId from here."""
+    """The people of the household."""
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
-    def list_people(self) -> list[dict[str, Any]]:
-        """Return every person in the household, sorted by name. Case does not count."""
+    def list_profiles(self) -> list[dict[str, Any]]:
+        """Return every person in the household, sorted by name.
+
+        The app currently assumes only a single household is present in the data, and therefore the HOUSEHOLD_PK is
+        hardcoded.
+        """
 
         response = self._table.query(
             KeyConditionExpression="householdId = :pk",
@@ -28,12 +32,15 @@ class ProfileTable:
         people = [p for p in response["Items"] if p["personId"] != PROFILE_SETTINGS_SK]
         return sorted(people, key=lambda p: (str(p.get("name", "")).lower(), p["personId"]))
 
-    def get_person(self, person_id: str) -> dict[str, Any] | None:
+    def get_profile(self, person_id: str) -> dict[str, Any] | None:
         response = self._table.get_item(Key={"householdId": HOUSEHOLD_PK, "personId": person_id})
         return response.get("Item")
 
-    def create_person(self, name: str, birth_year_month: str) -> dict[str, Any]:
-        """Create a person. Validates name non-empty and birthYearMonth as YYYY-MM."""
+    def create_profile(self, name: str, birth_year_month: str) -> dict[str, Any]:
+        """Create a profile, and return it. Raise ValueError for an empty name or a bad birthYearMonth.
+
+        The new profile belongs to the one household of the app, HOUSEHOLD_PK.
+        """
 
         name = name.strip()
         if not name:
@@ -53,12 +60,12 @@ class ProfileTable:
         _LOGGER.info("Created person: %s (%s)", item["name"], item["personId"])
         return item
 
-    def update_person(
+    def update_profile(
         self, person_id: str, name: str | None = None, birth_year_month: str | None = None
     ) -> dict[str, Any] | None:
         """Update a person's name and/or birthYearMonth. Returns the item, or None if absent."""
 
-        if self.get_person(person_id) is None:
+        if self.get_profile(person_id) is None:
             return None
 
         set_parts: list[str] = ["updatedAt = :now"]
@@ -87,7 +94,7 @@ class ProfileTable:
         response = self._table.update_item(**kwargs)
         return response["Attributes"]
 
-    def delete_person(self, person_id: str) -> None:
+    def delete_profile(self, person_id: str) -> None:
         """Delete a person for ever.
 
         The caller makes sure that no account names the person as an owner.

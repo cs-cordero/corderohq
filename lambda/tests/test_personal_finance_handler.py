@@ -207,7 +207,7 @@ class TestPostCategory:
 class TestPutCategory:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     def test_updates_category_name(self, mock_ct: MagicMock) -> None:
-        mock_ct.update.return_value = {
+        mock_ct.update_category.return_value = {
             "categoryId": "cat1",
             "name": "New Name",
             "active": True,
@@ -239,7 +239,7 @@ class TestPutCategory:
 
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     def test_returns_404_when_not_found(self, mock_ct: MagicMock) -> None:
-        mock_ct.update.return_value = None
+        mock_ct.update_category.return_value = None
         result = handler(_make_event("PUT", "/api/categories/cat1", body={"name": "New"}), None)
         assert result["statusCode"] == 404
 
@@ -282,7 +282,7 @@ class TestCategoryGroupEndpoints:
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["blockingCategories"][0]["categoryId"] == "c1"
-        mock_cg.delete.assert_not_called()
+        mock_cg.delete_category_group.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
@@ -291,7 +291,7 @@ class TestCategoryGroupEndpoints:
         mock_ct.get_all_categories.return_value = []
         result = handler(_make_event("DELETE", "/api/category-groups/g1"), None)
         assert result["statusCode"] == 200
-        mock_cg.delete.assert_called_once_with("g1")
+        mock_cg.delete_category_group.assert_called_once_with("g1")
 
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
@@ -313,14 +313,14 @@ class TestCategoryGroupEndpoints:
         assert mock_ct.move_to_group.call_count == 2
         for call in mock_ct.move_to_group.call_args_list:
             assert call.args[1] == "g-sys"
-        mock_cg.delete.assert_called_once_with("g1")
+        mock_cg.delete_category_group.assert_called_once_with("g1")
 
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
     def test_delete_system_group_forbidden(self, mock_cg: MagicMock) -> None:
         mock_cg.get_category_group_by_id.return_value = {"groupId": "g-sys", "name": "Unassigned", "system": True}
         result = handler(_make_event("DELETE", "/api/category-groups/g-sys"), None)
         assert result["statusCode"] == 403
-        mock_cg.delete.assert_not_called()
+        mock_cg.delete_category_group.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
     def test_rename_system_group_forbidden(self, mock_cg: MagicMock) -> None:
@@ -330,7 +330,7 @@ class TestCategoryGroupEndpoints:
             None,
         )
         assert result["statusCode"] == 403
-        mock_cg.update.assert_not_called()
+        mock_cg.update_category_group.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_GROUP_TABLE")
@@ -489,7 +489,7 @@ class TestHardDeleteCategory:
         # Make sure no destructive call was issued.
         mock_bt.delete_all_for_category.assert_not_called()
         mock_tt.delete_all_for_category.assert_not_called()
-        mock_ct.delete.assert_not_called()
+        mock_ct.delete_category.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
@@ -528,7 +528,7 @@ class TestHardDeleteCategory:
         # Cascade order: budget → transactions → category → audit.
         mock_bt.delete_all_for_category.assert_called_once_with("cat1")
         mock_tt.delete_all_for_category.assert_called_once_with("cat1")
-        mock_ct.delete.assert_called_once_with("cat1")
+        mock_ct.delete_category.assert_called_once_with("cat1")
         kwargs = mock_audit.write_entry.call_args.kwargs
         assert kwargs["action"] == "CATEGORY_HARD_DELETE"
         assert kwargs["override"] is True
@@ -620,7 +620,7 @@ class TestGetBudget:
     ) -> None:
         # Current = 2026-06, asking for 2026-09 (future). No pin at 09 → walk back to 06.
         mock_bt.scan.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500}]
-        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(_make_event("GET", "/api/budget/2026-09"), None)
 
@@ -1166,7 +1166,7 @@ class TestPostBudgetPin:
     ) -> None:
         # No existing pin; current=2026-06, pin 2026-09 cat1=500.
         mock_bt.scan.return_value = []
-        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
             _make_event(
@@ -1200,7 +1200,7 @@ class TestPostBudgetPin:
         mock_bt.scan.return_value = [
             {"yearMonth": _FUTURE_MONTH, "categoryId": "cat1", "amount": 800},
         ]
-        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         handler(
             _make_event(
@@ -1234,7 +1234,7 @@ class TestPostBudgetPin:
         mock_bt.scan.return_value = [
             {"yearMonth": _FUTURE_MONTH, "categoryId": "cat1", "amount": 500},
         ]
-        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         handler(
             _make_event(
@@ -1282,7 +1282,7 @@ class TestPostBudgetPin:
         mock_bt.scan.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "amount": 500},
         ]
-        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
             _make_event(
@@ -1317,7 +1317,7 @@ class TestPostBudgetPin:
             {"yearMonth": "2026-12", "categoryId": "cat1", "amount": 999},
         ]
         mock_bt.scan.return_value = downstream_state
-        mock_ct.get_all_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
+        mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
             _make_event(
@@ -1578,7 +1578,7 @@ class TestErrorHandling:
 class TestGetProfile:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_returns_people(self, mock_pt: MagicMock) -> None:
-        mock_pt.list_people.return_value = [{"personId": "p1", "name": "Jordan", "birthYearMonth": "1985-07"}]
+        mock_pt.list_profiles.return_value = [{"personId": "p1", "name": "Jordan", "birthYearMonth": "1985-07"}]
         result = handler(_make_event("GET", "/api/profile"), None)
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
@@ -1588,13 +1588,13 @@ class TestGetProfile:
 class TestPostPerson:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_creates_person(self, mock_pt: MagicMock) -> None:
-        mock_pt.create_person.return_value = {"personId": "p1", "name": "Jordan", "birthYearMonth": "1985-07"}
+        mock_pt.create_profile.return_value = {"personId": "p1", "name": "Jordan", "birthYearMonth": "1985-07"}
         result = handler(
             _make_event("POST", "/api/profile/people", body={"name": "Jordan", "birthYearMonth": "1985-07"}),
             None,
         )
         assert result["statusCode"] == 201
-        mock_pt.create_person.assert_called_once_with("Jordan", "1985-07")
+        mock_pt.create_profile.assert_called_once_with("Jordan", "1985-07")
 
     def test_requires_name(self) -> None:
         result = handler(_make_event("POST", "/api/profile/people", body={"birthYearMonth": "1985-07"}), None)
@@ -1606,7 +1606,7 @@ class TestPostPerson:
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_invalid_birth_month_returns_400(self, mock_pt: MagicMock) -> None:
-        mock_pt.create_person.side_effect = ValueError("birthYearMonth must be a YYYY-MM string")
+        mock_pt.create_profile.side_effect = ValueError("birthYearMonth must be a YYYY-MM string")
         result = handler(
             _make_event("POST", "/api/profile/people", body={"name": "Jordan", "birthYearMonth": "bad"}),
             None,
@@ -1617,10 +1617,10 @@ class TestPostPerson:
 class TestPutPerson:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_updates_person(self, mock_pt: MagicMock) -> None:
-        mock_pt.update_person.return_value = {"personId": "p1", "name": "New", "birthYearMonth": "1985-07"}
+        mock_pt.update_profile.return_value = {"personId": "p1", "name": "New", "birthYearMonth": "1985-07"}
         result = handler(_make_event("PUT", "/api/profile/people/p1", body={"name": "New"}), None)
         assert result["statusCode"] == 200
-        mock_pt.update_person.assert_called_once_with("p1", name="New", birth_year_month=None)
+        mock_pt.update_profile.assert_called_once_with("p1", name="New", birth_year_month=None)
 
     def test_requires_a_field(self) -> None:
         result = handler(_make_event("PUT", "/api/profile/people/p1", body={}), None)
@@ -1628,7 +1628,7 @@ class TestPutPerson:
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_missing_person_returns_404(self, mock_pt: MagicMock) -> None:
-        mock_pt.update_person.return_value = None
+        mock_pt.update_profile.return_value = None
         result = handler(_make_event("PUT", "/api/profile/people/nope", body={"name": "New"}), None)
         assert result["statusCode"] == 404
 
@@ -1637,28 +1637,28 @@ class TestDeletePerson:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_deletes_when_unreferenced(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
-        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = []
         result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
         assert result["statusCode"] == 200
-        mock_pt.delete_person.assert_called_once_with("p1")
+        mock_pt.delete_profile.assert_called_once_with("p1")
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_missing_person_returns_404(self, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = None
+        mock_pt.get_profile.return_value = None
         result = handler(_make_event("POST", "/api/profile/people/nope/delete"), None)
         assert result["statusCode"] == 404
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_blocked_when_owner_of_accounts(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
-        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = [{"accountId": "a1", "name": "His 401k"}]
         result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["blockingAccounts"][0]["accountId"] == "a1"
-        mock_pt.delete_person.assert_not_called()
+        mock_pt.delete_profile.assert_not_called()
 
 
 # --- Accounts (net worth) ---
@@ -1685,7 +1685,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_creates_asset_account(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.create_account.return_value = {"accountId": "a1", "name": "Chase Checking"}
         result = handler(
             _make_event(
@@ -1714,7 +1714,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_creates_excluded_account(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.create_account.return_value = {"accountId": "a1", "name": "529"}
         result = handler(
             _make_event(
@@ -1737,7 +1737,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_creates_with_multiple_owners(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
         # Every personId resolves; a jointly-held account is just two owners.
-        mock_pt.get_person.return_value = {"personId": "x", "name": "Someone"}
+        mock_pt.get_profile.return_value = {"personId": "x", "name": "Someone"}
         mock_at.create_account.return_value = {"accountId": "a1", "name": "Joint Checking"}
         result = handler(
             _make_event(
@@ -1757,7 +1757,7 @@ class TestPostAccount:
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_unknown_owner_returns_400(self, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = None
+        mock_pt.get_profile.return_value = None
         result = handler(
             _make_event(
                 "POST",
@@ -1802,7 +1802,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_invalid_asset_class_returns_400(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
         # A bad asset class fails when the handler converts the request, before any write.
-        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         result = handler(
             _make_event(
                 "POST",
@@ -1822,7 +1822,7 @@ class TestPostAccount:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_non_bool_excluded_flag_returns_400(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = {"personId": "p1", "name": "Jordan"}
+        mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         body = {"name": "X", "accountType": "checking", "owners": ["p1"], "excludedFromNetWorth": "false"}
         result = handler(_make_event("POST", "/api/accounts", body=body), None)
         assert result["statusCode"] == 400
@@ -1870,7 +1870,7 @@ class TestPutAccount:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_updates_owners(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = {"personId": "x", "name": "Someone"}
+        mock_pt.get_profile.return_value = {"personId": "x", "name": "Someone"}
         mock_at.update_account.return_value = {"accountId": "a1", "name": "A"}
         result = handler(_make_event("PUT", "/api/accounts/a1", body={"owners": ["p1", "p2"]}), None)
         assert result["statusCode"] == 200
@@ -1879,7 +1879,7 @@ class TestPutAccount:
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_unknown_owner_returns_400(self, mock_pt: MagicMock) -> None:
-        mock_pt.get_person.return_value = None
+        mock_pt.get_profile.return_value = None
         result = handler(_make_event("PUT", "/api/accounts/a1", body={"owners": ["ghost"]}), None)
         assert result["statusCode"] == 400
 
@@ -1936,8 +1936,8 @@ class TestGetNetWorthMonth:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_returns_per_class_rows_with_prefill(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
         mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
-        mock_st.get_month.return_value = []
-        mock_st.scan_all.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 100}}]
+        mock_st.get_snapshot_for_month.return_value = []
+        mock_st.scan.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 100}}]
         result = handler(_make_event("GET", "/api/net-worth/2026-06"), None)
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
@@ -1961,8 +1961,8 @@ class TestPostNetWorthMonth:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_upserts_per_class_merge_rows(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
         mock_at.get_all_accounts.return_value = [_acct("a1", ["us_equity_large_cap", "cash"]), _acct("a2", ["bonds"])]
-        mock_st.get_month.return_value = []
-        mock_st.scan_all.return_value = []
+        mock_st.get_snapshot_for_month.return_value = []
+        mock_st.scan.return_value = []
         rows = [
             {
                 "accountId": "a1",
@@ -1975,7 +1975,7 @@ class TestPostNetWorthMonth:
         ]
         result = handler(_make_event("POST", "/api/net-worth/2026-06", body={"rows": rows}), None)
         assert result["statusCode"] == 200
-        mock_st.upsert_month.assert_called_once_with(
+        mock_st.upsert_snapshot_record.assert_called_once_with(
             "2026-06",
             [
                 {"accountId": "a1", "classes": {"us_equity_large_cap": 500, "cash": None}},
@@ -2001,12 +2001,12 @@ class TestPostNetWorthMonth:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_note_passed_through(self, mock_at: MagicMock, mock_st: MagicMock) -> None:
         mock_at.get_all_accounts.return_value = [_acct("a1", ["cash"])]
-        mock_st.get_month.return_value = []
-        mock_st.scan_all.return_value = []
+        mock_st.get_snapshot_for_month.return_value = []
+        mock_st.scan.return_value = []
         rows = [{"accountId": "a1", "note": "quarterly bonus", "classes": [{"assetClass": "cash", "value": 500}]}]
         result = handler(_make_event("POST", "/api/net-worth/2026-06", body={"rows": rows}), None)
         assert result["statusCode"] == 200
-        mock_st.upsert_month.assert_called_once_with(
+        mock_st.upsert_snapshot_record.assert_called_once_with(
             "2026-06", [{"accountId": "a1", "classes": {"cash": 500}, "note": "quarterly bonus"}]
         )
 
@@ -2065,11 +2065,11 @@ class TestGetNetWorthHistory:
         mock_at.get_all_accounts.return_value = [
             {"accountId": "a1", "name": "Checking", "active": True, "liability": False, "sortOrder": 0},
         ]
-        mock_st.scan_all.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 1000}}]
+        mock_st.scan.return_value = [{"yearMonth": "2026-05", "accountId": "a1", "byAssetClass": {"cash": 1000}}]
         result = handler(_make_event("GET", "/api/net-worth/history"), None)
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["months"] == ["2026-05"]
         assert body["totals"]["2026-05"]["netWorth"] == 1000
         # /history must not be parsed as a {YYYY-MM} — the month handler never runs.
-        mock_st.get_month.assert_not_called()
+        mock_st.get_snapshot_for_month.assert_not_called()

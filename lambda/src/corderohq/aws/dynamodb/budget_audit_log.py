@@ -16,7 +16,7 @@ _AUDIT_PARTITION = "AUDIT"
 
 
 class AuditAction(StrEnum):
-    """The action of an audit log entry. The value is stored in `BudgetAuditLog.action`."""
+    """The action of an audit log entry."""
 
     CREATE = "CREATE"
     UPDATE = "UPDATE"

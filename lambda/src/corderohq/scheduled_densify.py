@@ -8,7 +8,6 @@ from corderohq.aws.dynamodb import (
     BudgetDensifyAdapter,
     BudgetTable,
     CategoryTable,
-    active_category_ids,
     current_year_month,
 )
 from corderohq.budget.densify import densify
@@ -33,7 +32,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     try:
         rows_written = densify(
             BudgetDensifyAdapter(_BUDGET_TABLE),
-            active_category_ids(_CATEGORY_TABLE.get_all_categories()),
+            [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()],
             current_ym,
             cold_start_value=0,
         )

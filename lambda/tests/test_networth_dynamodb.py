@@ -54,11 +54,11 @@ class TestProfileTable:
                 {"householdId": "HOUSEHOLD", "personId": "01A", "name": "adam", "birthYearMonth": "1988-03"},
             ]
         }
-        result = profile.list_people()
+        result = profile.list_profiles()
         assert [p["name"] for p in result] == ["adam", "Zoe"]
 
     def test_create_person_writes_item(self, profile: ProfileTable, mock: MagicMock) -> None:
-        result = profile.create_person("  Jordan  ", "1985-07")
+        result = profile.create_profile("  Jordan  ", "1985-07")
         assert result["name"] == "Jordan"
         assert result["birthYearMonth"] == "1985-07"
         assert "personId" in result
@@ -68,20 +68,20 @@ class TestProfileTable:
 
     def test_create_person_rejects_empty_name(self, profile: ProfileTable) -> None:
         with pytest.raises(ValueError, match="must not be empty"):
-            profile.create_person("   ", "1985-07")
+            profile.create_profile("   ", "1985-07")
 
     def test_create_person_rejects_bad_birth_month(self, profile: ProfileTable) -> None:
         with pytest.raises(ValueError, match="birthYearMonth"):
-            profile.create_person("Jordan", "July 1985")
+            profile.create_profile("Jordan", "July 1985")
 
     def test_update_person_returns_none_when_absent(self, profile: ProfileTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
-        assert profile.update_person("nope", name="X") is None
+        assert profile.update_profile("nope", name="X") is None
 
     def test_update_person_sets_name_and_birth_month(self, profile: ProfileTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {"Item": {"householdId": "HOUSEHOLD", "personId": "p1", "name": "Old"}}
         mock.update_item.return_value = {"Attributes": {"personId": "p1", "name": "New", "birthYearMonth": "1991-02"}}
-        result = profile.update_person("p1", name="New", birth_year_month="1991-02")
+        result = profile.update_profile("p1", name="New", birth_year_month="1991-02")
         assert result is not None and result["name"] == "New"
         kwargs = mock.update_item.call_args.kwargs
         assert "birthYearMonth = :bym" in kwargs["UpdateExpression"]
@@ -90,7 +90,7 @@ class TestProfileTable:
     def test_update_person_rejects_bad_birth_month(self, profile: ProfileTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {"Item": {"personId": "p1", "name": "Old"}}
         with pytest.raises(ValueError, match="birthYearMonth"):
-            profile.update_person("p1", birth_year_month="bad")
+            profile.update_profile("p1", birth_year_month="bad")
 
 
 _CHECKING = FixedClassAccount(AccountType.CHECKING)
@@ -319,7 +319,7 @@ class TestNetWorthSnapshotTable:
         mock.query.return_value = {
             "Items": [{"yearMonth": "2026-06", "accountId": "a1", "byAssetClass": {"cash": 100}}]
         }
-        result = snapshots.get_month("2026-06")
+        result = snapshots.get_snapshot_for_month("2026-06")
         assert result[0]["accountId"] == "a1"
         kwargs = mock.query.call_args.kwargs
         assert kwargs["ExpressionAttributeValues"][":ym"] == "2026-06"
@@ -332,7 +332,7 @@ class TestNetWorthSnapshotTable:
             },
             {"Items": [{"yearMonth": "2026-06", "accountId": "a1", "byAssetClass": {"cash": 2}}]},
         ]
-        result = snapshots.scan_all()
+        result = snapshots.scan()
         assert len(result) == 2
         assert mock.scan.call_count == 2
 
@@ -350,7 +350,7 @@ class TestNetWorthSnapshotTable:
 
         mock.get_item.side_effect = get_item
         mock.query.return_value = {"Items": []}
-        snapshots.upsert_month(
+        snapshots.upsert_snapshot_record(
             "2026-06",
             [
                 {"accountId": "a1", "classes": {"cash": 600, "bonds": None}},  # update cash, clear bonds
@@ -363,7 +363,7 @@ class TestNetWorthSnapshotTable:
         mock.delete_item.assert_called_once_with(Key={"yearMonth": "2026-06", "accountId": "a2"})
 
     def test_delete_single(self, snapshots: NetWorthSnapshotTable, mock: MagicMock) -> None:
-        snapshots.delete_single("2026-06", "a1")
+        snapshots.delete_snapshot_record("2026-06", "a1")
         mock.delete_item.assert_called_once_with(Key={"yearMonth": "2026-06", "accountId": "a1"})
 
     def test_upsert_month_preserves_note_when_absent(self, snapshots: NetWorthSnapshotTable, mock: MagicMock) -> None:
@@ -371,14 +371,15 @@ class TestNetWorthSnapshotTable:
             "Item": {"yearMonth": "2026-06", "accountId": "a1", "byAssetClass": {"cash": 500}, "note": "kept"}
         }
         mock.query.return_value = {"Items": []}
-        snapshots.upsert_month("2026-06", [{"accountId": "a1", "classes": {"cash": 600}}])  # no note key
+        snapshots.upsert_snapshot_record("2026-06", [{"accountId": "a1", "classes": {"cash": 600}}])  # no note key
         put_item = mock.put_item.call_args.kwargs["Item"]
         assert put_item["note"] == "kept"
 
     def test_upsert_month_replaces_note_trimmed(self, snapshots: NetWorthSnapshotTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
         mock.query.return_value = {"Items": []}
-        snapshots.upsert_month("2026-06", [{"accountId": "a1", "classes": {"cash": 500}, "note": "  bonus  "}])
+        rows = [{"accountId": "a1", "classes": {"cash": 500}, "note": "  bonus  "}]
+        snapshots.upsert_snapshot_record("2026-06", rows)
         put_item = mock.put_item.call_args.kwargs["Item"]
         assert put_item["note"] == "bonus"
 
@@ -387,6 +388,6 @@ class TestNetWorthSnapshotTable:
             "Item": {"yearMonth": "2026-06", "accountId": "a1", "byAssetClass": {"cash": 500}, "note": "old"}
         }
         mock.query.return_value = {"Items": []}
-        snapshots.upsert_month("2026-06", [{"accountId": "a1", "classes": {"cash": 500}, "note": "   "}])
+        snapshots.upsert_snapshot_record("2026-06", [{"accountId": "a1", "classes": {"cash": 500}, "note": "   "}])
         put_item = mock.put_item.call_args.kwargs["Item"]
         assert "note" not in put_item

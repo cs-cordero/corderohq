@@ -66,7 +66,7 @@ class CategoryGroupTable:
                 return g
         return self.create_category_group("Unassigned", system=True)
 
-    def update(self, group_id: str, name: str) -> dict[str, Any] | None:
+    def update_category_group(self, group_id: str, name: str) -> dict[str, Any] | None:
         name = name.strip()
         if not name:
             raise ValueError("Group name must not be empty")
@@ -84,7 +84,7 @@ class CategoryGroupTable:
         )
         return response["Attributes"]
 
-    def delete(self, group_id: str) -> None:
+    def delete_category_group(self, group_id: str) -> None:
         """Delete a group for ever.
 
         The caller makes sure that no active category is in the group.

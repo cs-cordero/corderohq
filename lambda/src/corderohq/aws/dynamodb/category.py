@@ -12,7 +12,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class CategoryTable:
-    """CRUD operations for budget categories."""
+    """Categories for a Budget. Allocations are assigned to these categories.
+
+    Categories sometimes but do not always represent an Account owned by a household. For example, a budget line item
+    that tracks saving in a Vacation Fund account provides a 1:1 map of category to account. But a budget categories
+    could be, for example, "Groceries", "Utilities", "Household Items", none of which necessarily point to a particular
+    Account.
+    """
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -67,7 +73,7 @@ class CategoryTable:
         _LOGGER.info("Created category: %s (%s) in group %s", item["name"], item["categoryId"], group_id)
         return item
 
-    def update(self, category_id: str, name: str) -> dict[str, Any] | None:
+    def update_category(self, category_id: str, name: str) -> dict[str, Any] | None:
         """Rename a category. Return the updated item, or None if it does not exist.
 
         A changed name adds the old name to `nameHistory`.
@@ -167,7 +173,7 @@ class CategoryTable:
         _LOGGER.info("Deactivated category %s", category_id)
         return response["Attributes"]
 
-    def delete(self, category_id: str) -> None:
+    def delete_category(self, category_id: str) -> None:
         """Delete the Category row for ever."""
 
         self._table.delete_item(Key={"categoryId": category_id})
@@ -207,9 +213,3 @@ class CategoryTable:
         if not cats_in_group:
             return 0
         return max(int(c.get("orderInGroup", 0)) for c in cats_in_group) + 1
-
-
-def active_category_ids(categories: list[dict[str, Any]]) -> list[str]:
-    """Return the IDs of the active categories, in the order given. The densify step uses them."""
-
-    return [c["categoryId"] for c in categories if c["active"]]

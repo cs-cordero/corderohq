@@ -18,7 +18,7 @@ class NetWorthSnapshotTable:
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
 
-    def get_month(self, year_month: str) -> list[dict[str, Any]]:
+    def get_snapshot_for_month(self, year_month: str) -> list[dict[str, Any]]:
         """Return every recorded row for a month (one per account with a value)."""
 
         response = self._table.query(
@@ -27,7 +27,7 @@ class NetWorthSnapshotTable:
         )
         return response["Items"]
 
-    def scan_all(self) -> list[dict[str, Any]]:
+    def scan(self) -> list[dict[str, Any]]:
         """Return every snapshot row across all months, paginating the Scan."""
 
         items: list[dict[str, Any]] = []
@@ -36,12 +36,12 @@ class NetWorthSnapshotTable:
             items.extend(response.get("Items", []))
         return items
 
-    def delete_single(self, year_month: str, account_id: str) -> None:
+    def delete_snapshot_record(self, year_month: str, account_id: str) -> None:
         """Delete a single snapshot row (undo a mistaken entry)."""
 
         self._table.delete_item(Key={"yearMonth": year_month, "accountId": account_id})
 
-    def upsert_month(self, year_month: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def upsert_snapshot_record(self, year_month: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Merge rows into one month, and return the stored state of that month.
 
         Each row is `{accountId, classes: {assetClass: millionths | None}, note?}`.
@@ -83,4 +83,4 @@ class NetWorthSnapshotTable:
                 item["note"] = existing["note"]
             self._table.put_item(Item=item)
         _LOGGER.info("Upserted %d snapshot rows for %s", len(rows), year_month)
-        return self.get_month(year_month)
+        return self.get_snapshot_for_month(year_month)
