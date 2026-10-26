@@ -2,15 +2,12 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any, assert_never
+from typing import Any
 
 from ulid import ULID
 
 from corderohq.accounts import (
-    ChosenClassAccount,
     CreateAccountArgs,
-    FixedClassAccount,
-    LoanAccount,
     get_metadata_for_account_type,
     parse_loan_terms,
     validate_asset_classes,
@@ -30,43 +27,6 @@ class AccountTable:
         """Sort the accounts by sortOrder, and then by name. Case does not count."""
 
         return sorted(items, key=lambda a: (int(a.get("sortOrder", 0)), str(a.get("name", "")).lower()))
-
-    @staticmethod
-    def _fixed_class_fields(account: FixedClassAccount) -> dict[str, Any]:
-        """Return the stored fields of an account whose type fixes its asset class."""
-
-        meta = get_metadata_for_account_type(account.account_type)
-        return {
-            "accountType": account.account_type,
-            "assetClasses": [meta.fixed_asset_class],
-            "liability": meta.is_liability,
-        }
-
-    @staticmethod
-    def _chosen_class_fields(account: ChosenClassAccount) -> dict[str, Any]:
-        """Return the stored fields of an asset account whose asset classes the user chose."""
-
-        fields: dict[str, Any] = {
-            "accountType": account.account_type,
-            "assetClasses": list(account.asset_classes),
-            "liability": False,
-        }
-        if account.target_year is not None:
-            fields["targetYear"] = account.target_year
-        return fields
-
-    @staticmethod
-    def _loan_fields(account: LoanAccount) -> dict[str, Any]:
-        """Return the stored fields of an amortizing liability."""
-
-        fields: dict[str, Any] = {
-            "accountType": account.account_type,
-            "assetClasses": [get_metadata_for_account_type(account.account_type).fixed_asset_class],
-            "liability": True,
-        }
-        if account.loan_terms is not None:
-            fields["loanTerms"] = account.loan_terms.to_item()
-        return fields
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -111,16 +71,7 @@ class AccountTable:
         }
         if args.notes is not None:
             item["notes"] = args.notes
-        account = args.account
-        match account:
-            case FixedClassAccount():
-                item.update(self._fixed_class_fields(account))
-            case ChosenClassAccount():
-                item.update(self._chosen_class_fields(account))
-            case LoanAccount():
-                item.update(self._loan_fields(account))
-            case _:
-                assert_never(account)
+        item.update(args.account.to_item())
 
         self._table.put_item(Item=item)
         _LOGGER.info("Created account: %s (%s)", item["name"], item["accountId"])

@@ -104,6 +104,16 @@ class FixedClassAccount:
 
     account_type: AccountType
 
+    def to_item(self) -> dict[str, Any]:
+        """Converts an instance of FixedClassAccount to how it is stored in DynamoDB."""
+
+        meta = get_metadata_for_account_type(self.account_type)
+        return {
+            "accountType": self.account_type,
+            "assetClasses": [meta.fixed_asset_class],
+            "liability": meta.is_liability,
+        }
+
 
 @dataclass(frozen=True)
 class ChosenClassAccount:
@@ -113,6 +123,18 @@ class ChosenClassAccount:
     asset_classes: list[AssetClass]
     target_year: int | None  # set only when asset_classes holds TARGET_DATE
 
+    def to_item(self) -> dict[str, Any]:
+        """Converts an instance of ChosenClassAccount to how it is stored in DynamoDB."""
+
+        item: dict[str, Any] = {
+            "accountType": self.account_type,
+            "assetClasses": list(self.asset_classes),
+            "liability": False,
+        }
+        if self.target_year is not None:
+            item["targetYear"] = self.target_year
+        return item
+
 
 @dataclass(frozen=True)
 class LoanAccount:
@@ -120,6 +142,18 @@ class LoanAccount:
 
     account_type: AccountType
     loan_terms: LoanTerms | None
+
+    def to_item(self) -> dict[str, Any]:
+        """Converts an instance of LoanAccount to how it is stored in DynamoDB."""
+
+        item: dict[str, Any] = {
+            "accountType": self.account_type,
+            "assetClasses": [get_metadata_for_account_type(self.account_type).fixed_asset_class],
+            "liability": True,
+        }
+        if self.loan_terms is not None:
+            item["loanTerms"] = self.loan_terms.to_item()
+        return item
 
 
 NewAccount = FixedClassAccount | ChosenClassAccount | LoanAccount
