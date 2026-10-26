@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -8,9 +9,17 @@ from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
 from corderohq.budget.transaction_args import CreateTransactionArgs, UpdateTransactionArgs
+from corderohq.budget.treatment import BudgetTreatment
 from corderohq.common import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def get_budget_treatment(transaction: Mapping[str, Any]) -> BudgetTreatment:
+    """Return the budget treatment of a stored transaction. An absent value means BUDGET_IMPACTING."""
+
+    value = transaction.get("budgetTreatment")
+    return BudgetTreatment(value) if value else BudgetTreatment.BUDGET_IMPACTING
 
 
 class TransactionsTable:

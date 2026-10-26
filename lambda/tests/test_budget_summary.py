@@ -289,7 +289,7 @@ class TestHistoricalNameResolution:
 
 
 class TestBudgetTreatments:
-    """Only BUDGET rows are actuals. OFF_BUDGET rows have their own total."""
+    """Only BUDGET_IMPACTING rows are actuals. OFF_BUDGET rows have their own total."""
 
     def test_off_budget_and_skip_rows_do_not_change_a_category(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
@@ -297,7 +297,7 @@ class TestBudgetTreatments:
         txn_mock.query.return_value = {
             "Items": [
                 {"categoryId": "cat1", "amount": 300_000},
-                {"categoryId": "cat1", "amount": 400_000, "budgetTreatment": "BUDGET"},
+                {"categoryId": "cat1", "amount": 400_000, "budgetTreatment": "BUDGET_IMPACTING"},
                 {"categoryId": "cat1", "amount": 5_000_000, "budgetTreatment": "OFF_BUDGET"},
                 {"amount": 2_000_000, "budgetTreatment": "OFF_BUDGET"},
                 {"amount": -9_000_000, "budgetTreatment": "SKIP"},

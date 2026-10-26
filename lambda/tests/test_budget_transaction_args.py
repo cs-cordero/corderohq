@@ -22,7 +22,7 @@ class TestParseCreateTransactionArgs:
             transaction_date="2026-03-15",
             description="Coffee",
             amount=5,
-            classification=Classification(BudgetTreatment.BUDGET, "cat1"),
+            classification=Classification(BudgetTreatment.BUDGET_IMPACTING, "cat1"),
             account_id="acct1",
             note="work trip",
         )
@@ -40,7 +40,7 @@ class TestParseCreateTransactionArgs:
     def test_budget_without_category_passes_when_not_required(self) -> None:
         body = {key: value for key, value in _BODY.items() if key != "categoryId"}
         new = parse_create_transaction_args(body, year_month="2026-03", require_category=False)
-        assert new.classification == Classification(BudgetTreatment.BUDGET, None)
+        assert new.classification == Classification(BudgetTreatment.BUDGET_IMPACTING, None)
         with pytest.raises(ValueError, match="categoryId is required"):
             parse_create_transaction_args(body, year_month="2026-03")
 
@@ -96,8 +96,8 @@ class TestParseUpdateTransactionArgs:
     def test_skip_row_back_to_budget_needs_a_category(self) -> None:
         stored = {"yearMonth": "2026-03", "sortId": "s", "budgetTreatment": "SKIP"}
         with pytest.raises(ValueError, match="categoryId is required"):
-            parse_update_transaction_args({"budgetTreatment": "BUDGET"}, stored)
-        args = parse_update_transaction_args({"budgetTreatment": "BUDGET", "categoryId": "cat1"}, stored)
+            parse_update_transaction_args({"budgetTreatment": "BUDGET_IMPACTING"}, stored)
+        args = parse_update_transaction_args({"budgetTreatment": "BUDGET_IMPACTING", "categoryId": "cat1"}, stored)
         assert args.category_id == SetTo("cat1")
 
     @pytest.mark.parametrize(

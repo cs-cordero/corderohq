@@ -50,7 +50,7 @@ lambda/src/corderohq/
         local_checks.py    Column types, dates, amounts and their sign, the bank category
         fingerprints.py    The fingerprint of each row, to find a row that was saved before
         directions.py      The direction table: a suggested budget treatment for each CSV row
-    budget/treatment.py    The Budget / Off-budget / Skip rules of a transaction
+    budget/treatment.py    The Budget-impacting / Off-budget / Skip rules of a transaction
     budget/transaction_args.py
                            The checks of a new or changed transaction, at the API boundary
     budget/income.py       Payment rules, net amount, and the IncomePlan row IDs
@@ -158,11 +158,13 @@ it.
 |                        |                    |            | (signed millionths;         |
 |                        |                    |            | positive = money out,       |
 |                        |                    |            | negative = money in),       |
-|                        |                    |            | budgetTreatment (BUDGET /   |
+|                        |                    |            | budgetTreatment             |
+|                        |                    |            | (BUDGET_IMPACTING /         |
 |                        |                    |            | OFF_BUDGET / SKIP; absent   |
-|                        |                    |            | means BUDGET), categoryId   |
-|                        |                    |            | (required for BUDGET,       |
-|                        |                    |            | absent for SKIP), accountId |
+|                        |                    |            | means BUDGET_IMPACTING),    |
+|                        |                    |            | categoryId (required for    |
+|                        |                    |            | BUDGET_IMPACTING, absent    |
+|                        |                    |            | for SKIP), accountId        |
 |                        |                    |            | (optional), note (optional, |
 |                        |                    |            | 200 chars), fingerprint     |
 |                        |                    |            | (CSV rows only). Sort key   |
@@ -1068,24 +1070,24 @@ Each transaction has a budget treatment (`budget/treatment.py`):
 
 | Budget treatment | What | In the summary | Category |
 |---|---|---|---|
-| `BUDGET` (absent means this) | a normal expense or refund | in its category | required |
+| `BUDGET_IMPACTING` (absent means this) | a normal expense or refund | in its category | required |
 | `OFF_BUDGET` | work travel that an employer pays back; a payment with money from a fund | in the Off-budget total only | optional |
 | `SKIP` | paychecks, bonuses, interest, transfers, card payments | nowhere | none |
 
 The rules for the fields of a transaction, on a create, an update, and a commit:
 
-- `budgetTreatment = BUDGET` needs a `categoryId`. `budgetTreatment = SKIP` has no `categoryId`: the server
+- `budgetTreatment = BUDGET_IMPACTING` needs a `categoryId`. `budgetTreatment = SKIP` has no `categoryId`: the server
   removes one that the client sends.
 - `accountId`, if present, must be an account in the Account table.
 - `note`, if present, is at most 200 characters after a trim. An empty note is removed.
 - A change of the budget treatment, the category, or the note obeys the usual editability rules.
 
-The summary counts only BUDGET rows, in each category and in the membership rules. An OFF_BUDGET
+The summary counts only BUDGET_IMPACTING rows, in each category and in the membership rules. An OFF_BUDGET
 row with a category does not put that category on the summary. The `/replace` body rule reads
-BUDGET rows only. The summary response holds these totals:
+BUDGET_IMPACTING rows only. The summary response holds these totals:
 
 ```
-"totals":              { "budgeted", "actual", "delta" },   // BUDGET rows only
+"totals":              { "budgeted", "actual", "delta" },   // BUDGET_IMPACTING rows only
 "offBudget":           { "actual" },                        // the OFF_BUDGET rows
 "totalsWithOffBudget": { "budgeted", "actual" },            // budgeted = totals.budgeted
 "income":              { "plannedNetIncome", "leftToAssign" }
@@ -1095,9 +1097,9 @@ The Off-budget total is below the TOTAL, and not in it. If it were in the TOTAL,
 would always show an overspend that is not real. The summary page shows the Off-budget row and the
 "Total + off-budget" row below the Total row. The ledger hides SKIP rows by default.
 
-**No migration was necessary.** An absent `budgetTreatment` reads as BUDGET, and every older row has a
+**No migration was necessary.** An absent `budgetTreatment` reads as BUDGET_IMPACTING, and every older row has a
 `categoryId`, so every older row stays valid. An older paycheck in an "Income" category stays a
-BUDGET row until the user changes it to SKIP. A locked month stays as it is, unless an admin uses
+BUDGET_IMPACTING row until the user changes it to SKIP. A locked month stays as it is, unless an admin uses
 the override.
 
 The hard delete of a category deletes every transaction with that `categoryId`, an OFF_BUDGET row
@@ -1377,13 +1379,13 @@ An EXTERNAL or NON_CASH account, such as a mortgage, counts as the outside world
 
 | Upload role | Money | Other side | Suggested budget treatment | Mark for review? |
 |---|---|---|---|---|
-| SPENDING | out | outside | BUDGET, LLM category | only if no category |
+| SPENDING | out | outside | BUDGET_IMPACTING, LLM category | only if no category |
 | SPENDING | out | SPENDING account (pair, last four) | SKIP | no |
-| SPENDING | out | HOLDING account (pair, last four) | BUDGET, LLM category | yes, if the LLM gave no category |
+| SPENDING | out | HOLDING account (pair, last four) | BUDGET_IMPACTING, LLM category | yes, if the LLM gave no category |
 | SPENDING | out | own account, role unknown, LLM says `card_payment` | SKIP | no |
-| SPENDING | out | own account, role unknown, LLM says `own_transfer` with a category | BUDGET, that category | **yes** |
+| SPENDING | out | own account, role unknown, LLM says `own_transfer` with a category | BUDGET_IMPACTING, that category | **yes** |
 | SPENDING | out | own account, role unknown, no category | SKIP | **yes** |
-| SPENDING | in | outside, LLM says `refund` | BUDGET, LLM category | only if no category |
+| SPENDING | in | outside, LLM says `refund` | BUDGET_IMPACTING, LLM category | only if no category |
 | SPENDING | in | outside, income | SKIP | no |
 | SPENDING | in | any own account | SKIP | no |
 | HOLDING | out | outside | OFF_BUDGET | no |
@@ -1417,7 +1419,7 @@ fingerprint = sha256(accountId | transactionDate | amount | normalizedDescriptio
   "transactions": [
     {
       "transactionDate", "description", "amount", "categoryId", "categoryName", "accountId",
-      "budgetTreatment": "BUDGET" | "OFF_BUDGET" | "SKIP",
+      "budgetTreatment": "BUDGET_IMPACTING" | "OFF_BUDGET" | "SKIP",
       "suggestedBy": "PAIR" | "LAST_FOUR" | "BANK" | "LLM" | "DEFAULT",
       "pairWith": { "yearMonth", "sortId" } | null,
       "fingerprint": "…",
@@ -1431,7 +1433,7 @@ fingerprint = sha256(accountId | transactionDate | amount | normalizedDescriptio
 }
 ```
 
-An **issue** blocks the commit. `missing_category` applies to a BUDGET row with no known category,
+An **issue** blocks the commit. `missing_category` applies to a BUDGET_IMPACTING row with no known category,
 and to an OFF_BUDGET row with an unknown category. `locked_month` applies to a row in a LOCKED
 month. A **review reason** does not block the commit. It puts the row in the "Look at these first"
 list of the review screen.
@@ -1442,7 +1444,7 @@ also returns `400`. The upload stores the date text of the bank as it is, and th
 its first 7 characters. A bank date format such as `03/15/2026` therefore gives a wrong year-month.
 This is a known limit.
 
-The review screen shows three lists: the rows to look at first, the BUDGET rows, and the
+The review screen shows three lists: the rows to look at first, the BUDGET_IMPACTING rows, and the
 OFF_BUDGET and SKIP rows. A duplicate row starts unselected. The user can change the budget treatment,
 the category, and the note of each row before the commit.
 

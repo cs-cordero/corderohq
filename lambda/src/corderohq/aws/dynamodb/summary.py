@@ -7,11 +7,11 @@ from typing import Any
 
 from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
 from corderohq.aws.dynamodb.category import CategoryTable
-from corderohq.aws.dynamodb.transactions import TransactionsTable
+from corderohq.aws.dynamodb.transactions import TransactionsTable, get_budget_treatment
 from corderohq.aws.dynamodb.util import BUDGET_TZ
 from corderohq.budget.densify import carry_map, value_at_or_before
 from corderohq.budget.editability import EditabilityState, editability
-from corderohq.budget.treatment import BudgetTreatment, budget_treatment_of
+from corderohq.budget.treatment import BudgetTreatment
 
 
 def _month_end_utc(year_month: str) -> datetime:
@@ -58,9 +58,8 @@ def compute_summary(
     Amounts are signed: positive is an expense, and negative is income or a refund. A refund makes the actual amount of
     its category smaller.
 
-    Only a BUDGET transaction counts in a category and in the membership rules. The OFF_BUDGET
-    transactions add up to `offBudget.actual`, which is not in `totals`. A SKIP transaction counts
-    nowhere.
+    Only a BUDGET_IMPACTING transaction counts in a category and in the membership rules. The OFF_BUDGET
+    transactions add up to `offBudget.actual`, which is not in `totals`. A SKIP transaction counts nowhere.
     """
 
     transactions = transactions_table.list_transactions_for_month(year_month)
@@ -99,11 +98,11 @@ def compute_summary(
     for transaction in transactions:
         raw_amount = transaction.get("amount")
         amount = Decimal("0") if raw_amount is None else Decimal(str(raw_amount))
-        budget_treatment = budget_treatment_of(transaction)
+        budget_treatment = get_budget_treatment(transaction)
         if budget_treatment == BudgetTreatment.OFF_BUDGET:
             off_budget_actual += amount
             continue
-        if budget_treatment != BudgetTreatment.BUDGET:
+        if budget_treatment != BudgetTreatment.BUDGET_IMPACTING:
             continue
         cat_id = transaction["categoryId"]
         budget_transaction_cat_ids.add(cat_id)

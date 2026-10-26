@@ -2212,7 +2212,7 @@ class TestTransactionBudgetTreatments:
             _make_event(
                 "POST",
                 "/api/transactions/update",
-                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "BUDGET"},
+                body={"yearMonth": _EDITABLE_MONTH, "sortId": "s", "budgetTreatment": "BUDGET_IMPACTING"},
             ),
             None,
         )
@@ -2283,7 +2283,7 @@ class TestTransactionBudgetTreatments:
         assert items[1]["budgetTreatment"] == "OFF_BUDGET"
         assert items[1]["note"] == "work trip"
         assert "categoryId" not in items[1]
-        assert items[2]["budgetTreatment"] == "BUDGET"
+        assert items[2]["budgetTreatment"] == "BUDGET_IMPACTING"
         assert items[2]["categoryId"] == "cat1"
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")

@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from corderohq.aws.dynamodb import TransactionsTable
+from corderohq.aws.dynamodb import TransactionsTable, get_budget_treatment
 from corderohq.budget.transaction_args import CreateTransactionArgs, UpdateTransactionArgs
 from corderohq.budget.treatment import BudgetTreatment, Classification
 from corderohq.common import Keep, Remove, SetTo
@@ -23,6 +23,14 @@ def table(mock: MagicMock) -> TransactionsTable:
     tt = TransactionsTable.__new__(TransactionsTable)
     tt._table = mock
     return tt
+
+
+class TestGetBudgetTreatment:
+    def test_absent_value_means_budget_impacting(self) -> None:
+        assert get_budget_treatment({"categoryId": "cat1"}) == BudgetTreatment.BUDGET_IMPACTING
+
+    def test_returns_stored_value(self) -> None:
+        assert get_budget_treatment({"budgetTreatment": "SKIP"}) == BudgetTreatment.SKIP
 
 
 class TestList:
@@ -51,11 +59,12 @@ def _new(description: str, classification: Classification, **fields: Any) -> Cre
 
 class TestCreate:
     def test_creates_transaction_with_sort_id(self, table: TransactionsTable, mock: MagicMock) -> None:
-        result = table.create_transaction(_new("Grocery store", Classification(BudgetTreatment.BUDGET, "cat1")))
+        classification = Classification(BudgetTreatment.BUDGET_IMPACTING, "cat1")
+        result = table.create_transaction(_new("Grocery store", classification))
         assert result["yearMonth"] == "2026-03"
         assert result["sortId"].startswith("2026-03-15#")
         assert result["description"] == "Grocery store"
-        assert result["budgetTreatment"] == "BUDGET"
+        assert result["budgetTreatment"] == "BUDGET_IMPACTING"
         assert result["categoryId"] == "cat1"
         assert "accountId" not in result and "note" not in result
         assert "createdAt" in result
@@ -76,7 +85,7 @@ class TestBatchCreate:
         writer = mock.batch_writer.return_value.__enter__.return_value
         rows = [
             _new("Hotel", Classification(BudgetTreatment.OFF_BUDGET, None), note="work trip"),
-            _new("Groceries", Classification(BudgetTreatment.BUDGET, "cat1"), transaction_date="2026-03-16"),
+            _new("Groceries", Classification(BudgetTreatment.BUDGET_IMPACTING, "cat1"), transaction_date="2026-03-16"),
         ]
         result = table.batch_create_transaction(rows)
         assert result[0]["budgetTreatment"] == "OFF_BUDGET"

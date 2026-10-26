@@ -33,7 +33,7 @@ class CreateTransactionArgs:
             "transactionDate": self.transaction_date,
             "description": self.description,
             "amount": self.amount,
-            "budgetTreatment": self.classification.budget_treatment,
+            "budgetTreatment": self.classification.treatment,
         }
         if self.classification.category_id is not None:
             item["categoryId"] = self.classification.category_id
@@ -66,7 +66,7 @@ def parse_create_transaction_args(
 ) -> CreateTransactionArgs:
     """Convert the body of a new transaction into checked fields. Raise ValueError for bad input.
 
-    With `require_category=False`, a BUDGET transaction with no category passes. It does not check
+    With `require_category=False`, a BUDGET_IMPACTING transaction with no category passes. It does not check
     that the account exists.
     """
 
@@ -109,7 +109,7 @@ def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[
             payload["budgetTreatment"] if "budgetTreatment" in payload else existing.get("budgetTreatment"),
             payload["categoryId"] if "categoryId" in payload else existing.get("categoryId"),
         )
-        budget_treatment = SetTo(classification.budget_treatment)
+        budget_treatment = SetTo(classification.treatment)
         category_id = _set_or_remove(classification.category_id)
 
     account_id: FieldChange[str] = Keep()

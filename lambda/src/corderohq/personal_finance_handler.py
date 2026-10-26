@@ -21,6 +21,7 @@ from corderohq.aws.dynamodb import (
     ProfileTable,
     TransactionsTable,
     compute_summary,
+    get_budget_treatment,
 )
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
@@ -31,7 +32,7 @@ from corderohq.budget.transaction_args import (
     parse_create_transaction_args,
     parse_update_transaction_args,
 )
-from corderohq.budget.treatment import BudgetTreatment, Classification, budget_treatment_of, parse_classification
+from corderohq.budget.treatment import BudgetTreatment, Classification, parse_classification
 from corderohq.common import Keep, Remove, SetTo
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
@@ -700,7 +701,9 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     existing_cat_ids = {t["categoryId"] for t in existing}
     txns = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
     txn_cat_ids = {
-        t["categoryId"] for t in txns if budget_treatment_of(t) == BudgetTreatment.BUDGET and t.get("amount") != 0
+        t["categoryId"]
+        for t in txns
+        if get_budget_treatment(t) == BudgetTreatment.BUDGET_IMPACTING and t.get("amount") != 0
     }
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
@@ -940,8 +943,8 @@ def _validate_commit_rows(
     """Return the issues of each row for /transactions/commit and /transactions/upload.
 
     Each row is `(classification, transactionDate)`. Each result is `{index, issues}`, and each issue is a RowIssue
-    value. `missing_category` applies to a BUDGET row with no known category, and to an OFF_BUDGET row with a category
-    that does not exist. An override suppresses `locked_month`.
+    value. `missing_category` applies to a BUDGET_IMPACTING row with no known category, and to an OFF_BUDGET row with
+    a category that does not exist. An override suppresses `locked_month`.
     """
 
     results: list[dict[str, Any]] = []
@@ -949,7 +952,7 @@ def _validate_commit_rows(
         issues: list[RowIssue] = []
         category_id = classification.category_id
         category_unknown = category_id is not None and category_id not in valid_category_ids
-        if (classification.budget_treatment == BudgetTreatment.BUDGET and category_id is None) or category_unknown:
+        if (classification.treatment == BudgetTreatment.BUDGET_IMPACTING and category_id is None) or category_unknown:
             issues.append(RowIssue.MISSING_CATEGORY)
         year_month = transaction_date[:7]
         if YEAR_MONTH_PATTERN.match(year_month):
@@ -964,8 +967,9 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
     """Save all rows of a CSV import, or none of them.
 
     The body is `{rows: [{transactionDate, description, amount, categoryId?, budgetTreatment?, accountId?, note?},
-    ...], override?}`. `categoryId` is necessary only for a BUDGET row. If any row has an issue, return a 409 with the
-    issues of all rows, and save nothing. A second call with the same body saves the rows again, as duplicates.
+    ...], override?}`. `categoryId` is necessary only for a BUDGET_IMPACTING row. If any row has an issue, return a
+    409 with the issues of all rows, and save nothing. A second call with the same body saves the rows again, as
+    duplicates.
     """
 
     body = _parse_json_body(event)
