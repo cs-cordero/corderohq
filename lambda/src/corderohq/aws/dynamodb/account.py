@@ -51,7 +51,7 @@ class AccountTable:
         return {
             "accountType": account.account_type,
             "assetClasses": [meta.fixed_asset_class],
-            "liability": meta.liability,
+            "liability": meta.is_liability,
         }
 
     @staticmethod

@@ -107,10 +107,10 @@ class TestAccountTypeMeta:
             assert account_type_meta(t.value) is not None
 
     def test_liability_types(self) -> None:
-        assert account_type_meta("mortgage").liability is True
-        assert account_type_meta("other_liability").liability is True
-        assert account_type_meta("checking").liability is False
-        assert account_type_meta("brokerage").liability is False
+        assert account_type_meta("mortgage").is_liability is True
+        assert account_type_meta("other_liability").is_liability is True
+        assert account_type_meta("checking").is_liability is False
+        assert account_type_meta("brokerage").is_liability is False
 
     def test_amortizing_only_on_debt_types(self) -> None:
         assert account_type_meta("mortgage").amortizing is True

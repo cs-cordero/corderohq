@@ -6,11 +6,6 @@ from typing import NamedTuple
 
 
 class AccountType(StrEnum):
-    """Account types. The value is stored in `Account.accountType`.
-
-    The values are a contract: the database, the API, and the later simulation use them.
-    """
-
     CHECKING = "checking"
     SAVINGS = "savings"
     BROKERAGE = "brokerage"
@@ -29,11 +24,6 @@ class AccountType(StrEnum):
 
 
 class AssetClass(StrEnum):
-    """Asset classes. The value is stored in `Account.assetClasses`.
-
-    The later simulation uses each value as the key of a return distribution.
-    """
-
     CASH = "cash"
     US_EQUITY_LARGE_CAP = "us_equity_large_cap"
     US_EQUITY_SMALL_CAP = "us_equity_small_cap"
@@ -46,36 +36,39 @@ class AssetClass(StrEnum):
 
 
 class AccountTypeMeta(NamedTuple):
-    """The rules of one account type.
+    """Additional metadata for each AccountType."""
 
-    - liability: True for a liability. The type decides it, and the client never sends it.
-    - fixed_asset_class: the one asset class of the type, or None when the user chooses the classes.
-    - amortizing: True when the account can have loan terms.
-    """
-
-    liability: bool
+    # Whether this AccountType represents a liability for the owner.
+    is_liability: bool
+    # Some AccountTypes are inexorably tied to a particular AssetClass. For example, checking and
+    # savings accounts are unambiguously cash accounts. This field associates those certain
+    # AccountTypes with those AssetClasses they are tied to. This field takes the value None when
+    # the Account can differ in the AssetClasses stored within it.
     fixed_asset_class: AssetClass | None
+    # True when the account can have loan terms.
     amortizing: bool
 
 
 _ACCOUNT_TYPE_META: dict[AccountType, AccountTypeMeta] = {
-    AccountType.CHECKING: AccountTypeMeta(liability=False, fixed_asset_class=AssetClass.CASH, amortizing=False),
-    AccountType.SAVINGS: AccountTypeMeta(liability=False, fixed_asset_class=AssetClass.CASH, amortizing=False),
-    AccountType.BROKERAGE: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.RETIREMENT_401K: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.RETIREMENT_403B: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.ROTH_IRA: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.TRADITIONAL_IRA: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.HSA: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.PLAN_529: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.PLAN_530A: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.CHECKING: AccountTypeMeta(is_liability=False, fixed_asset_class=AssetClass.CASH, amortizing=False),
+    AccountType.SAVINGS: AccountTypeMeta(is_liability=False, fixed_asset_class=AssetClass.CASH, amortizing=False),
+    AccountType.BROKERAGE: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.RETIREMENT_401K: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.RETIREMENT_403B: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.ROTH_IRA: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.TRADITIONAL_IRA: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.HSA: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.PLAN_529: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.PLAN_530A: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
     AccountType.REAL_ESTATE: AccountTypeMeta(
-        liability=False, fixed_asset_class=AssetClass.REAL_ESTATE, amortizing=False
+        is_liability=False, fixed_asset_class=AssetClass.REAL_ESTATE, amortizing=False
     ),
-    AccountType.VEHICLE: AccountTypeMeta(liability=False, fixed_asset_class=AssetClass.OTHER, amortizing=False),
-    AccountType.MORTGAGE: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True),
-    AccountType.OTHER_ASSET: AccountTypeMeta(liability=False, fixed_asset_class=None, amortizing=False),
-    AccountType.OTHER_LIABILITY: AccountTypeMeta(liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True),
+    AccountType.VEHICLE: AccountTypeMeta(is_liability=False, fixed_asset_class=AssetClass.OTHER, amortizing=False),
+    AccountType.MORTGAGE: AccountTypeMeta(is_liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True),
+    AccountType.OTHER_ASSET: AccountTypeMeta(is_liability=False, fixed_asset_class=None, amortizing=False),
+    AccountType.OTHER_LIABILITY: AccountTypeMeta(
+        is_liability=True, fixed_asset_class=AssetClass.OTHER, amortizing=True
+    ),
 }
 
 
