@@ -14,20 +14,20 @@ CarryRow = tuple[str, str, Any]
 
 
 class DenseSparseStore(Protocol):
-    """A table whose rows obey the dense-past, sparse-future rules.
+    """A Protocol for a table that the densify step makes dense.
 
-    Each row is `(yearMonth, key, value)`. Past months, the current month, and the grace month are dense: they have a
-    row for each active key. Future months are sparse: they have only the rows that the user pinned. A future month
-    without a pin gets its value from the nearest row before it.
+    A month is dense when the table holds a stored value for each of its keys, so no value
+    comes from a walk back to an earlier month. A table that must become dense implements this
+    Protocol. The densify step uses it to read the stored values and to write each missing value.
     """
 
     def scan_carry_rows(self) -> list[CarryRow]:
-        """Return every stored row as `(yearMonth, key, value)`."""
+        """Return each stored value as `(yearMonth, key, value)`."""
 
         ...
 
     def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
-        """Write one row. The densify step calls this to fill a cell that is absent."""
+        """Store one value. The densify step calls this to fill a missing value."""
 
         ...
 
