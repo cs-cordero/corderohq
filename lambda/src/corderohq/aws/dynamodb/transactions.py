@@ -7,6 +7,7 @@ from typing import Any
 from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
+from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition, resolve_disposition_fields
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -30,9 +31,15 @@ class TransactionsTable:
         transaction_date: str,
         description: str,
         amount: int,
-        category_id: str,
+        category_id: str | None,
+        disposition: Disposition = Disposition.BUDGET,
+        account_id: str | None = None,
+        note: str | None = None,
     ) -> dict[str, Any]:
-        """Create a single transaction. Returns the created item."""
+        """Create a single transaction. Returns the created item.
+
+        The caller checks the disposition rules first. An optional value that is None is not stored.
+        """
 
         description = description.strip()
         if not description:
@@ -47,9 +54,15 @@ class TransactionsTable:
             "transactionDate": transaction_date,
             "description": description,
             "amount": amount,
-            "categoryId": category_id,
+            "disposition": disposition,
             "createdAt": now,
         }
+        if category_id is not None:
+            item["categoryId"] = category_id
+        if account_id is not None:
+            item["accountId"] = account_id
+        if note is not None:
+            item["note"] = note
 
         self._table.put_item(Item=item)
         _LOGGER.info("Created transaction %s in %s", sort_id, year_month)
@@ -58,7 +71,9 @@ class TransactionsTable:
     def batch_create_transaction(self, transactions: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Create multiple transactions in a batch. Returns the created items.
 
-        Each dict must have yearMonth, transactionDate, description, amount, and categoryId.
+        Each dict must have yearMonth, transactionDate, description, and amount. The keys
+        disposition, categoryId, accountId, and note are copied when they are present. The caller
+        checks the disposition rules first.
         """
 
         now = datetime.now(tz=UTC).isoformat()
@@ -73,9 +88,11 @@ class TransactionsTable:
                     "transactionDate": txn["transactionDate"],
                     "description": txn["description"].strip(),
                     "amount": txn["amount"],
-                    "categoryId": txn["categoryId"],
                     "createdAt": now,
                 }
+                for name in DISPOSITION_ATTRIBUTES:
+                    if txn.get(name) is not None:
+                        item[name] = txn[name]
                 batch.put_item(Item=item)
                 items.append(item)
 
@@ -85,30 +102,43 @@ class TransactionsTable:
     def update_transaction(self, year_month: str, sort_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Update the mutable fields of a transaction. Returns the updated item, or None if not found.
 
-        The mutable fields are description, amount, and categoryId.
+        The mutable fields are description, amount, and the disposition attributes. A change to a
+        disposition attribute is checked together with the stored row, and a disposition attribute
+        that no longer applies is removed. Raise ValueError if a disposition rule fails.
         """
 
         response = self._table.get_item(Key={"yearMonth": year_month, "sortId": sort_id})
         if "Item" not in response:
             return None
+        existing = response["Item"]
 
-        update_parts: list[str] = []
-        attr_values: dict[str, Any] = {}
+        set_values: dict[str, Any] = {field: updates[field] for field in ("description", "amount") if field in updates}
+        remove_names: list[str] = []
+        if any(name in updates for name in DISPOSITION_ATTRIBUTES):
+            fields = resolve_disposition_fields(updates, base=existing)
+            set_values.update(fields.stored_values())
+            remove_names = fields.absent_attributes()
+
+        if not set_values and not remove_names:
+            return existing
+
         attr_names: dict[str, str] = {}
+        attr_values: dict[str, Any] = {}
+        set_parts: list[str] = []
+        for field, value in set_values.items():
+            attr_names[f"#{field}"] = field
+            attr_values[f":{field}"] = value
+            set_parts.append(f"#{field} = :{field}")
+        for field in remove_names:
+            attr_names[f"#{field}"] = field
 
-        for field in ("description", "amount", "categoryId"):
-            if field in updates:
-                placeholder = f":{field}"
-                update_parts.append(f"#{field} = {placeholder}")
-                attr_values[placeholder] = updates[field]
-                attr_names[f"#{field}"] = field
-
-        if not update_parts:
-            return response["Item"]
+        expression = "SET " + ", ".join(set_parts)
+        if remove_names:
+            expression += " REMOVE " + ", ".join(f"#{field}" for field in remove_names)
 
         result = self._table.update_item(
             Key={"yearMonth": year_month, "sortId": sort_id},
-            UpdateExpression="SET " + ", ".join(update_parts),
+            UpdateExpression=expression,
             ExpressionAttributeNames=attr_names,
             ExpressionAttributeValues=attr_values,
             ReturnValues="ALL_NEW",

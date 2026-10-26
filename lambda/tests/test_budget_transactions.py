@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from corderohq.aws.dynamodb import TransactionsTable
+from corderohq.budget.dispositions import Disposition
 
 
 # `mock` and `table` are split into two fixtures sharing the same MagicMock instance
@@ -53,6 +54,62 @@ class TestCreate:
         with pytest.raises(ValueError, match="must not be empty"):
             table.create_transaction("2026-03", "2026-03-15", "", 100, "cat1")
 
+    def test_stores_budget_disposition_by_default(self, table: TransactionsTable) -> None:
+        result = table.create_transaction("2026-03", "2026-03-15", "Coffee", 100, "cat1")
+        assert result["disposition"] == "BUDGET"
+        assert result["categoryId"] == "cat1"
+        assert "accountId" not in result
+        assert "note" not in result
+
+    def test_skip_row_has_no_category(self, table: TransactionsTable, mock: MagicMock) -> None:
+        result = table.create_transaction(
+            "2026-03",
+            "2026-03-15",
+            "Payroll",
+            -100,
+            None,
+            disposition=Disposition.SKIP,
+            account_id="acct1",
+            note="paycheck",
+        )
+        assert result["disposition"] == "SKIP"
+        assert "categoryId" not in result
+        assert result["accountId"] == "acct1"
+        assert result["note"] == "paycheck"
+        assert mock.put_item.call_args.kwargs["Item"] == result
+
+
+class TestBatchCreate:
+    def test_copies_present_disposition_fields_only(self, table: TransactionsTable, mock: MagicMock) -> None:
+        writer = mock.batch_writer.return_value.__enter__.return_value
+        result = table.batch_create_transaction(
+            [
+                {
+                    "yearMonth": "2026-03",
+                    "transactionDate": "2026-03-15",
+                    "description": " Hotel ",
+                    "amount": 100,
+                    "disposition": "OFF_BUDGET",
+                    "note": "work trip",
+                },
+                {
+                    "yearMonth": "2026-03",
+                    "transactionDate": "2026-03-16",
+                    "description": "Groceries",
+                    "amount": 200,
+                    "disposition": "BUDGET",
+                    "categoryId": "cat1",
+                },
+            ]
+        )
+        assert result[0]["description"] == "Hotel"
+        assert result[0]["disposition"] == "OFF_BUDGET"
+        assert result[0]["note"] == "work trip"
+        assert "categoryId" not in result[0]
+        assert result[1]["categoryId"] == "cat1"
+        assert "note" not in result[1]
+        assert writer.put_item.call_count == 2
+
 
 class TestUpdate:
     def test_updates_fields(self, table: TransactionsTable, mock: MagicMock) -> None:
@@ -70,6 +127,41 @@ class TestUpdate:
         mock.get_item.return_value = {}
         result = table.update_transaction("2026-03", "nonexistent", {"description": "New"})
         assert result is None
+
+    def test_plain_update_does_not_touch_disposition(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {"Item": {"yearMonth": "2026-03", "sortId": "s", "categoryId": "cat1"}}
+        mock.update_item.return_value = {"Attributes": {}}
+        table.update_transaction("2026-03", "s", {"amount": 5})
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == "SET #amount = :amount"
+        assert kwargs["ExpressionAttributeValues"] == {":amount": 5}
+
+    def test_change_to_skip_removes_category_and_absent_fields(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {
+            "Item": {"yearMonth": "2026-03", "sortId": "s", "categoryId": "cat1", "note": "old"}
+        }
+        mock.update_item.return_value = {"Attributes": {}}
+        table.update_transaction("2026-03", "s", {"disposition": "SKIP"})
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == (
+            "SET #disposition = :disposition, #note = :note REMOVE #categoryId, #accountId"
+        )
+        assert kwargs["ExpressionAttributeValues"] == {":disposition": "SKIP", ":note": "old"}
+
+    def test_empty_note_removes_the_note(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {
+            "Item": {"yearMonth": "2026-03", "sortId": "s", "disposition": "BUDGET", "categoryId": "c", "note": "x"}
+        }
+        mock.update_item.return_value = {"Attributes": {}}
+        table.update_transaction("2026-03", "s", {"note": ""})
+        expression = mock.update_item.call_args.kwargs["UpdateExpression"]
+        assert expression.endswith("REMOVE #accountId, #note")
+
+    def test_rule_failure_raises_and_writes_nothing(self, table: TransactionsTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {"Item": {"yearMonth": "2026-03", "sortId": "s", "disposition": "SKIP"}}
+        with pytest.raises(ValueError, match="categoryId is required"):
+            table.update_transaction("2026-03", "s", {"disposition": "BUDGET"})
+        mock.update_item.assert_not_called()
 
     def test_returns_existing_when_no_updates(self, table: TransactionsTable, mock: MagicMock) -> None:
         existing = {"yearMonth": "2026-03", "sortId": "2026-03-15#abc", "description": "Same"}

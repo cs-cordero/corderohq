@@ -5,6 +5,7 @@ import pytest
 from corderohq.accounts import (
     AccountType,
     AssetClass,
+    BudgetRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
@@ -14,6 +15,7 @@ from corderohq.accounts import (
     Remove,
     SetTo,
     UpdateAccountArgs,
+    budget_role_of,
     get_metadata_for_account_type,
     parse_create_account_args,
     parse_loan_terms,
@@ -22,6 +24,8 @@ from corderohq.accounts import (
     validate_account_type,
     validate_asset_class,
     validate_asset_classes,
+    validate_budget_role,
+    validate_last_four,
     validate_loan_terms,
     validate_owners,
     validate_target_year,
@@ -47,6 +51,7 @@ class TestEnumValues:
             "vehicle",
             "other_asset",
             "other_liability",
+            "credit_card",
         }
 
     def test_asset_class_covers_design_values(self) -> None:
@@ -61,6 +66,7 @@ class TestEnumValues:
             "real_estate",
             "target_date",
             "other",
+            "debt",
         }
 
     def test_numeric_valued_members_are_addressable(self) -> None:
@@ -265,6 +271,8 @@ class TestParseUpdateAccountArgs:
             asset_classes=Keep(),
             target_year=Keep(),
             loan_terms=Keep(),
+            budget_role=Keep(),
+            last_four=Keep(),
         )
 
     def test_needs_an_editable_key(self) -> None:
@@ -345,6 +353,74 @@ class TestParseUpdateAccountArgs:
         # The frontend sends `targetYear: null` when the classes do not hold target_date.
         args = parse_update_account_args({"targetYear": None}, _stored("checking", assetClasses=["cash"]))
         assert args.target_year == Keep()
+
+
+class TestLiabilities:
+    def test_credit_card_is_a_debt_liability_with_no_loan_terms(self) -> None:
+        args = parse_create_account_args(_body("credit_card"))
+        assert args.account == FixedClassAccount(AccountType.CREDIT_CARD)
+        meta = get_metadata_for_account_type(AccountType.CREDIT_CARD)
+        assert meta.is_liability
+        assert meta.fixed_asset_class == AssetClass.DEBT
+        with pytest.raises(ValueError, match="loanTerms is not allowed for a credit_card account"):
+            parse_create_account_args(_body("credit_card", loanTerms=_LOAN_TERMS))
+
+    @pytest.mark.parametrize("account_type", list(AccountType))
+    def test_every_liability_type_has_the_debt_class(self, account_type: AccountType) -> None:
+        meta = get_metadata_for_account_type(account_type)
+        assert meta.is_liability == (meta.fixed_asset_class == AssetClass.DEBT)
+
+    def test_asset_account_cannot_choose_debt(self) -> None:
+        with pytest.raises(ValueError, match="cannot include 'debt'"):
+            parse_create_account_args(_body("brokerage", assetClasses=["cash", "debt"]))
+
+
+class TestBudgetRole:
+    @pytest.mark.parametrize(
+        ("account_type", "expected"),
+        [
+            ("checking", "SPENDING"),
+            ("credit_card", "SPENDING"),
+            ("savings", "HOLDING"),
+            ("brokerage", "HOLDING"),
+            ("529", "HOLDING"),
+            ("530a", "HOLDING"),
+            ("401k", None),
+            ("mortgage", None),
+            ("other_liability", None),
+        ],
+    )
+    def test_default_for_each_type(self, account_type: str, expected: str | None) -> None:
+        assert budget_role_of({"accountType": account_type}) == expected
+
+    def test_explicit_role_wins(self) -> None:
+        assert budget_role_of({"accountType": "other_liability", "budgetRole": "SPENDING"}) == "SPENDING"
+        assert budget_role_of({"accountType": "savings", "budgetRole": "SPENDING"}) == "SPENDING"
+
+    def test_validate_budget_role(self) -> None:
+        assert validate_budget_role("HOLDING") == "HOLDING"
+        assert validate_budget_role(None) is None
+        with pytest.raises(ValueError, match="budgetRole must be one of"):
+            validate_budget_role("spending")
+
+    def test_update_sets_and_removes_the_budget_fields(self) -> None:
+        args = parse_update_account_args({"budgetRole": "SPENDING", "lastFour": ["1234"]}, _stored("other_liability"))
+        assert args.budget_role == SetTo(BudgetRole.SPENDING)
+        assert args.last_four == SetTo(["1234"])
+        args = parse_update_account_args({"budgetRole": None, "lastFour": []}, _stored("other_liability"))
+        assert args.budget_role == Remove()
+        assert args.last_four == Remove()
+
+
+class TestLastFour:
+    def test_accepts_and_dedupes(self) -> None:
+        assert validate_last_four(["1234", "5678", "1234"]) == ["1234", "5678"]
+        assert validate_last_four([]) == []
+
+    @pytest.mark.parametrize("bad", ["1234", ["123"], ["12345"], ["12a4"], [1234]])
+    def test_rejects_bad_values(self, bad: object) -> None:
+        with pytest.raises(ValueError, match="lastFour"):
+            validate_last_four(bad)
 
 
 class TestParseLoanTerms:

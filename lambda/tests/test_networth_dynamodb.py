@@ -7,6 +7,7 @@ import pytest
 from corderohq.accounts import (
     AccountType,
     AssetClass,
+    BudgetRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
@@ -137,7 +138,7 @@ class TestAccountTableCreate:
         account = LoanAccount(AccountType.MORTGAGE, LoanTerms(0.045, 2_500_000_000, "2045-06"))
         result = _create(accounts, account, name="Mortgage", owners=["p1", "p2"], notes="30-year fixed")
         assert result["liability"] is True
-        assert result["assetClasses"] == ["other"]
+        assert result["assetClasses"] == ["debt"]
         assert result["owners"] == ["p1", "p2"]
         # interestRate is stored as Decimal (DynamoDB rejects floats); the rest is unchanged.
         assert result["loanTerms"]["interestRate"] == Decimal("0.045")
@@ -175,6 +176,8 @@ def _update_args(**changes: Any) -> UpdateAccountArgs:
         "asset_classes": Keep(),
         "target_year": Keep(),
         "loan_terms": Keep(),
+        "budget_role": Keep(),
+        "last_four": Keep(),
     }
     return UpdateAccountArgs(**(fields | changes))
 
@@ -211,6 +214,13 @@ class TestAccountTableUpdate:
         assert expression.startswith("SET updatedAt = :updatedAt REMOVE ")
         for attribute in ("#notes", "#targetYear", "#loanTerms"):
             assert attribute in expression
+
+    def test_sets_and_removes_the_budget_fields(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
+        accounts.update_account("a1", _update_args(budget_role=SetTo(BudgetRole.SPENDING), last_four=Remove()))
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == "SET updatedAt = :updatedAt, #budgetRole = :budgetRole REMOVE #lastFour"
+        assert kwargs["ExpressionAttributeValues"][":budgetRole"] == "SPENDING"
 
     def test_with_no_changes_sets_only_the_time(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}

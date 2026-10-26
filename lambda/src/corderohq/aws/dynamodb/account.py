@@ -137,6 +137,8 @@ class AccountTable:
             "assetClasses": args.asset_classes,
             "targetYear": args.target_year,
             "loanTerms": loan_terms,
+            "budgetRole": args.budget_role,
+            "lastFour": args.last_four,
         }
         response = self._table.update_item(
             Key={"accountId": account_id}, ReturnValues="ALL_NEW", **_update_expression(changes)

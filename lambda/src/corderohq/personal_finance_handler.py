@@ -4,6 +4,7 @@ import io
 import json
 import logging
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -30,6 +31,12 @@ from corderohq.aws.dynamodb import (
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
+from corderohq.budget.dispositions import (
+    DISPOSITION_ATTRIBUTES,
+    Disposition,
+    disposition_of,
+    resolve_disposition_fields,
+)
 from corderohq.budget.editability import EditabilityState, editability
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
@@ -697,7 +704,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
     txns = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
-    txn_cat_ids = {t["categoryId"] for t in txns if t.get("amount") != 0}
+    txn_cat_ids = {t["categoryId"] for t in txns if disposition_of(t) == Disposition.BUDGET and t.get("amount") != 0}
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
     body_cat_ids = {t["categoryId"] for t in targets}
@@ -885,15 +892,31 @@ def _get_transactions(event: dict[str, Any]) -> dict[str, Any]:
     return _json_response(200, json.dumps(txns, default=_json_default))
 
 
+def _check_account_exists(account_id: str | None) -> dict[str, Any] | None:
+    """Return a 400 response if `account_id` is set and names no account. Else return None."""
+
+    if account_id is not None and _ACCOUNT_TABLE.get_account_by_id(account_id) is None:
+        return _response(400, f"accountId '{account_id}' does not exist")
+    return None
+
+
 def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
 
-    required = ("yearMonth", "transactionDate", "description", "amount", "categoryId")
+    required = ("yearMonth", "transactionDate", "description", "amount")
     for field in required:
         if field not in body:
             return _response(400, f"{field} is required")
+
+    try:
+        fields = resolve_disposition_fields(body)
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_account_exists(fields.account_id)
+    if err:
+        return err
 
     override_active, err = _resolve_override(event, body)
     if err:
@@ -908,12 +931,22 @@ def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
             transaction_date=body["transactionDate"],
             description=body["description"],
             amount=body["amount"],
-            category_id=body["categoryId"],
+            category_id=fields.category_id,
+            disposition=fields.disposition,
+            account_id=fields.account_id,
+            note=fields.note,
         )
     except ValueError as e:
         return _response(400, str(e))
 
     return _json_response(201, json.dumps(item, default=_json_default))
+
+
+class RowIssue(StrEnum):
+    """A problem with one CSV row that blocks the commit. The upload and the commit send the value."""
+
+    MISSING_CATEGORY = "missing_category"
+    LOCKED_MONTH = "locked_month"
 
 
 def _validate_commit_rows(
@@ -924,22 +957,25 @@ def _validate_commit_rows(
 ) -> list[dict[str, Any]]:
     """Return the issues of each row for /transactions/commit and /transactions/upload.
 
-    Each result is `{index, issues}`. The issues are `missing_category` and `locked_month`. An override suppresses
-    `locked_month`.
+    Each result is `{index, issues}`, and each issue is a RowIssue value. `missing_category` applies to a BUDGET row
+    with no known category, and to an OFF_BUDGET row with a category that does not exist. A row with no disposition is a
+    BUDGET row. An override suppresses `locked_month`.
     """
 
     results: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
-        issues: list[str] = []
+        issues: list[RowIssue] = []
         cat_id = row.get("categoryId")
-        if not cat_id or cat_id not in valid_category_ids:
-            issues.append("missing_category")
+        disposition = disposition_of(row)
+        category_unknown = bool(cat_id) and cat_id not in valid_category_ids
+        if (disposition == Disposition.BUDGET and not cat_id) or (disposition != Disposition.SKIP and category_unknown):
+            issues.append(RowIssue.MISSING_CATEGORY)
         txn_date = row.get("transactionDate") or ""
         ym = txn_date[:7] if len(txn_date) >= 7 else ""
         if ym and YEAR_MONTH_PATTERN.match(ym):
             state = editability(ym, now)
             if state == EditabilityState.LOCKED and not override_active:
-                issues.append("locked_month")
+                issues.append(RowIssue.LOCKED_MONTH)
         results.append({"index": i, "issues": issues})
     return results
 
@@ -947,9 +983,9 @@ def _validate_commit_rows(
 def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     """Save all rows of a CSV import, or none of them.
 
-    The body is `{rows: [{transactionDate, description, amount, categoryId}, ...], override?}`. If any row has an issue,
-    return a 409 with the issues of all rows, and save nothing. A second call with the same body saves the rows again,
-    as duplicates.
+    The body is `{rows: [{transactionDate, description, amount, categoryId?, disposition?, accountId?, note?}, ...],
+    override?}`. `categoryId` is necessary only for a BUDGET row. If any row has an issue, return a 409 with the issues
+    of all rows, and save nothing. A second call with the same body saves the rows again, as duplicates.
     """
 
     body = _parse_json_body(event)
@@ -964,18 +1000,30 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
     if err:
         return err
 
-    required_fields = ("transactionDate", "description", "amount", "categoryId")
+    required_fields = ("transactionDate", "description", "amount")
+    checked_rows: list[dict[str, Any]] = []
     for i, row in enumerate(rows):
         for field in required_fields:
             if field not in row:
                 return _response(400, f"row {i}: missing required field '{field}'")
         if not isinstance(row["amount"], int):
             return _response(400, f"row {i}: amount must be an integer (millionths of a dollar)")
+        try:
+            # A missing category is a row issue (see _validate_commit_rows), not an error.
+            fields = resolve_disposition_fields(row, require_category=False)
+        except ValueError as e:
+            return _response(400, f"row {i}: {e}")
+        err = _check_account_exists(fields.account_id)
+        if err:
+            return err
+        checked = {key: value for key, value in row.items() if key not in DISPOSITION_ATTRIBUTES}
+        checked.update(fields.stored_values())
+        checked_rows.append(checked)
 
     _ensure_hydrated(now)
 
     valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.get_all_categories()}
-    validations = _validate_commit_rows(rows, valid_category_ids, override_active, now)
+    validations = _validate_commit_rows(checked_rows, valid_category_ids, override_active, now)
     invalid = [v for v in validations if v["issues"]]
     if invalid:
         return _json_response(
@@ -989,16 +1037,15 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
         )
 
     items_to_create: list[dict[str, Any]] = []
-    for row in rows:
-        items_to_create.append(
-            {
-                "yearMonth": str(row["transactionDate"])[:7],
-                "transactionDate": row["transactionDate"],
-                "description": row["description"],
-                "amount": row["amount"],
-                "categoryId": row["categoryId"],
-            }
-        )
+    for row in checked_rows:
+        item: dict[str, Any] = {
+            "yearMonth": str(row["transactionDate"])[:7],
+            "transactionDate": row["transactionDate"],
+            "description": row["description"],
+            "amount": row["amount"],
+        }
+        item.update({name: row[name] for name in DISPOSITION_ATTRIBUTES if name in row})
+        items_to_create.append(item)
     created = _TRANSACTIONS_TABLE.batch_create_transaction(items_to_create)
 
     return _json_response(200, json.dumps({"count": len(created), "transactions": created}, default=_json_default))
@@ -1128,11 +1175,20 @@ def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
         return err
 
     updates: dict[str, Any] = {}
-    for field in ("description", "amount", "categoryId"):
+    for field in ("description", "amount", *DISPOSITION_ATTRIBUTES):
         if field in body:
             updates[field] = body[field]
 
-    item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, updates)
+    account_id = updates.get("accountId")
+    if isinstance(account_id, str) and account_id.strip():
+        err = _check_account_exists(account_id.strip())
+        if err:
+            return err
+
+    try:
+        item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, updates)
+    except ValueError as e:
+        return _response(400, str(e))
     if item is None:
         return _response(404, "Transaction not found")
 

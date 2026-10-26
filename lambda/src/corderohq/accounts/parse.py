@@ -6,6 +6,7 @@ from typing import Any, assert_never
 from corderohq.accounts.types import (
     AccountType,
     AssetClass,
+    BudgetRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FieldChange,
@@ -30,6 +31,8 @@ _EDITABLE_ACCOUNT_KEYS = (
     "loanTerms",
     "notes",
     "sortOrder",
+    "budgetRole",
+    "lastFour",
 )
 _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
 _ASSET_CLASS_VALUES = frozenset(c.value for c in AssetClass)
@@ -45,7 +48,13 @@ def parse_create_account_args(payload: Mapping[str, Any]) -> CreateAccountArgs:
     account_type = AccountType(validate_account_type(payload.get("accountType")))
     account: NewAccount
     match account_type:
-        case AccountType.CHECKING | AccountType.SAVINGS | AccountType.REAL_ESTATE | AccountType.VEHICLE:
+        case (
+            AccountType.CHECKING
+            | AccountType.SAVINGS
+            | AccountType.REAL_ESTATE
+            | AccountType.VEHICLE
+            | AccountType.CREDIT_CARD
+        ):
             _reject_keys(payload, account_type, "targetYear", "loanTerms")
             account = FixedClassAccount(account_type)
         case (
@@ -103,7 +112,13 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
     asset_classes: Keep | SetTo[list[AssetClass]] = Keep()
     loan_terms: FieldChange[LoanTerms] = Keep()
     match account_type:
-        case AccountType.CHECKING | AccountType.SAVINGS | AccountType.REAL_ESTATE | AccountType.VEHICLE:
+        case (
+            AccountType.CHECKING
+            | AccountType.SAVINGS
+            | AccountType.REAL_ESTATE
+            | AccountType.VEHICLE
+            | AccountType.CREDIT_CARD
+        ):
             _reject_keys(payload, account_type, "assetClasses", "loanTerms")
         case (
             AccountType.BROKERAGE
@@ -136,7 +151,27 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
         asset_classes=asset_classes,
         target_year=_resolve_target_year_change(payload, existing, asset_classes),
         loan_terms=loan_terms,
+        budget_role=_parse_budget_role_change(payload),
+        last_four=_parse_last_four_change(payload),
     )
+
+
+def _parse_budget_role_change(payload: Mapping[str, Any]) -> FieldChange[BudgetRole]:
+    """Return the change to `budgetRole`. A null value removes it, and the type default applies."""
+
+    if "budgetRole" not in payload:
+        return Keep()
+    role = validate_budget_role(payload["budgetRole"])
+    return Remove() if role is None else SetTo(role)
+
+
+def _parse_last_four_change(payload: Mapping[str, Any]) -> FieldChange[list[str]]:
+    """Return the change to `lastFour`. An empty list removes it."""
+
+    if "lastFour" not in payload:
+        return Keep()
+    last_four = validate_last_four(payload["lastFour"])
+    return SetTo(last_four) if last_four else Remove()
 
 
 def _parse_name_change(payload: Mapping[str, Any]) -> Keep | SetTo[str]:
@@ -248,7 +283,8 @@ def validate_asset_class(value: Any) -> str:
 def validate_asset_classes(value: Any) -> list[str]:
     """Check an `assetClasses` list, and return it without duplicates, in the order given.
 
-    The list must not be empty, and each entry must be an AssetClass value. Raise ValueError for bad input.
+    The list must not be empty, and each entry must be an AssetClass value. Only a liability type
+    has `debt`, as its fixed class, so the list cannot hold it. Raise ValueError for bad input.
     """
 
     if not isinstance(value, list) or not value:
@@ -257,6 +293,8 @@ def validate_asset_classes(value: Any) -> list[str]:
     result: list[str] = []
     for entry in value:
         validate_asset_class(entry)
+        if entry == AssetClass.DEBT:
+            raise ValueError("assetClasses cannot include 'debt'; only a liability type has it")
         if entry not in seen:
             seen.add(entry)
             result.append(entry)
@@ -307,6 +345,34 @@ def validate_loan_terms(loan_terms: Any, amortizing: bool) -> dict[str, Any] | N
         "monthlyPayment": monthly_payment,
         "payoffYearMonth": payoff,
     }
+
+
+def validate_budget_role(value: Any) -> BudgetRole | None:
+    """Return the budget role, or None for a null value. Raise ValueError for an unknown role."""
+
+    if value is None:
+        return None
+    try:
+        return BudgetRole(value)
+    except ValueError:
+        raise ValueError(f"budgetRole must be one of {[r.value for r in BudgetRole]} or null") from None
+
+
+def validate_last_four(value: Any) -> list[str]:
+    """Return the "last four digits" of an account, without duplicates, in the order given.
+
+    Each entry must be a string of exactly 4 digits. Raise ValueError for bad input.
+    """
+
+    if not isinstance(value, list):
+        raise ValueError("lastFour must be a list of 4-digit strings")
+    result: list[str] = []
+    for entry in value:
+        if not isinstance(entry, str) or len(entry) != 4 or not entry.isdigit():
+            raise ValueError("each lastFour entry must be a string of exactly 4 digits")
+        if entry not in result:
+            result.append(entry)
+    return result
 
 
 def validate_owners(value: Any) -> list[str]:
