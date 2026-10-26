@@ -26,7 +26,11 @@ from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
 from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
 from corderohq.budget.editability import EditabilityState, editability
-from corderohq.budget.transactions import NewTransaction, parse_new_transaction, parse_update_transaction_args
+from corderohq.budget.transaction_args import (
+    CreateTransactionArgs,
+    parse_create_transaction_args,
+    parse_update_transaction_args,
+)
 from corderohq.budget.treatment import BudgetTreatment, Classification, budget_treatment_of, parse_classification
 from corderohq.common import Keep, Remove, SetTo
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
@@ -902,7 +906,7 @@ def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if not isinstance(year_month, str) or not YEAR_MONTH_PATTERN.match(year_month):
         return _response(400, "yearMonth is required, as YYYY-MM")
     try:
-        new = parse_new_transaction(body, year_month=year_month)
+        new = parse_create_transaction_args(body, year_month=year_month)
     except ValueError as e:
         return _response(400, str(e))
     err = _check_account_exists(new.account_id)
@@ -976,13 +980,14 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
     if err:
         return err
 
-    new_rows: list[NewTransaction] = []
+    new_rows: list[CreateTransactionArgs] = []
     for i, row in enumerate(rows):
         if not isinstance(row, dict):
             return _response(400, f"row {i}: must be an object")
         try:
             # A missing category is a row issue (see _validate_commit_rows), not an error.
-            new = parse_new_transaction(row, year_month=str(row.get("transactionDate", ""))[:7], require_category=False)
+            year_month = str(row.get("transactionDate", ""))[:7]
+            new = parse_create_transaction_args(row, year_month=year_month, require_category=False)
         except ValueError as e:
             return _response(400, f"row {i}: {e}")
         err = _check_account_exists(new.account_id)

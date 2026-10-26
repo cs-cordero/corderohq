@@ -7,7 +7,7 @@ from typing import Any
 from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
-from corderohq.budget.transactions import NewTransaction, UpdateTransactionArgs
+from corderohq.budget.transaction_args import CreateTransactionArgs, UpdateTransactionArgs
 from corderohq.common import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class TransactionsTable:
     """Actual transactions data. These data are applied against budget categories."""
 
     @staticmethod
-    def _new_item(new: NewTransaction, created_at: str) -> dict[str, Any]:
+    def _new_item(new: CreateTransactionArgs, created_at: str) -> dict[str, Any]:
         """Return the stored item of a new transaction. The sort key sorts by date, and a ULID makes it unique."""
 
         return {**new.to_item(), "sortId": f"{new.transaction_date}#{ULID()}", "createdAt": created_at}
@@ -32,7 +32,7 @@ class TransactionsTable:
             self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
 
-    def create_transaction(self, new: NewTransaction) -> dict[str, Any]:
+    def create_transaction(self, new: CreateTransactionArgs) -> dict[str, Any]:
         """Create a single transaction. Returns the created item."""
 
         item = self._new_item(new, datetime.now(tz=UTC).isoformat())
@@ -40,7 +40,7 @@ class TransactionsTable:
         _LOGGER.info("Created transaction %s in %s", item["sortId"], item["yearMonth"])
         return item
 
-    def batch_create_transaction(self, rows: list[NewTransaction]) -> list[dict[str, Any]]:
+    def batch_create_transaction(self, rows: list[CreateTransactionArgs]) -> list[dict[str, Any]]:
         """Create multiple transactions in a batch. Returns the created items."""
 
         now = datetime.now(tz=UTC).isoformat()

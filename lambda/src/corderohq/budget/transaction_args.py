@@ -11,7 +11,7 @@ NOTE_MAX_LENGTH = 200
 
 
 @dataclass(frozen=True)
-class NewTransaction:
+class CreateTransactionArgs:
     """The checked fields of a new transaction."""
 
     year_month: str
@@ -23,7 +23,10 @@ class NewTransaction:
     note: str | None
 
     def to_item(self) -> dict[str, Any]:
-        """Converts an instance of NewTransaction to how it is stored in DynamoDB, without its sort key and time."""
+        """Converts an instance of CreateTransactionArgs to how it is stored in DynamoDB.
+
+        The sort key and the creation time are not part of it.
+        """
 
         item: dict[str, Any] = {
             "yearMonth": self.year_month,
@@ -58,9 +61,9 @@ class UpdateTransactionArgs:
         return all(isinstance(getattr(self, field.name), Keep) for field in fields(self))
 
 
-def parse_new_transaction(
+def parse_create_transaction_args(
     payload: Mapping[str, Any], *, year_month: str, require_category: bool = True
-) -> NewTransaction:
+) -> CreateTransactionArgs:
     """Convert the body of a new transaction into checked fields. Raise ValueError for bad input.
 
     With `require_category=False`, a BUDGET transaction with no category passes. It does not check
@@ -70,7 +73,7 @@ def parse_new_transaction(
     transaction_date = payload.get("transactionDate")
     if not isinstance(transaction_date, str) or not transaction_date.strip():
         raise ValueError("transactionDate is required")
-    return NewTransaction(
+    return CreateTransactionArgs(
         year_month=year_month,
         transaction_date=transaction_date.strip(),
         description=_parse_description(payload.get("description")),

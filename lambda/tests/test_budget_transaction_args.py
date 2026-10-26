@@ -1,10 +1,10 @@
 import pytest
 
-from corderohq.budget.transactions import (
+from corderohq.budget.transaction_args import (
     NOTE_MAX_LENGTH,
-    NewTransaction,
+    CreateTransactionArgs,
     UpdateTransactionArgs,
-    parse_new_transaction,
+    parse_create_transaction_args,
     parse_update_transaction_args,
 )
 from corderohq.budget.treatment import BudgetTreatment, Classification
@@ -14,10 +14,10 @@ _BODY = {"transactionDate": "2026-03-15", "description": " Coffee ", "amount": 5
 _STORED = {"yearMonth": "2026-03", "sortId": "s", "categoryId": "cat1", "note": "old"}
 
 
-class TestParseNewTransaction:
+class TestParseCreateTransactionArgs:
     def test_parses_the_fields(self) -> None:
         body = {**_BODY, "accountId": " acct1 ", "note": "  work trip  "}
-        assert parse_new_transaction(body, year_month="2026-03") == NewTransaction(
+        assert parse_create_transaction_args(body, year_month="2026-03") == CreateTransactionArgs(
             year_month="2026-03",
             transaction_date="2026-03-15",
             description="Coffee",
@@ -28,7 +28,7 @@ class TestParseNewTransaction:
         )
 
     def test_to_item_leaves_out_absent_values(self) -> None:
-        new = parse_new_transaction({**_BODY, "budgetTreatment": "SKIP", "note": "  "}, year_month="2026-03")
+        new = parse_create_transaction_args({**_BODY, "budgetTreatment": "SKIP", "note": "  "}, year_month="2026-03")
         assert new.to_item() == {
             "yearMonth": "2026-03",
             "transactionDate": "2026-03-15",
@@ -39,16 +39,16 @@ class TestParseNewTransaction:
 
     def test_budget_without_category_passes_when_not_required(self) -> None:
         body = {key: value for key, value in _BODY.items() if key != "categoryId"}
-        new = parse_new_transaction(body, year_month="2026-03", require_category=False)
+        new = parse_create_transaction_args(body, year_month="2026-03", require_category=False)
         assert new.classification == Classification(BudgetTreatment.BUDGET, None)
         with pytest.raises(ValueError, match="categoryId is required"):
-            parse_new_transaction(body, year_month="2026-03")
+            parse_create_transaction_args(body, year_month="2026-03")
 
     def test_note_length_limit(self) -> None:
         at_limit = "x" * NOTE_MAX_LENGTH
-        assert parse_new_transaction({**_BODY, "note": at_limit}, year_month="2026-03").note == at_limit
+        assert parse_create_transaction_args({**_BODY, "note": at_limit}, year_month="2026-03").note == at_limit
         with pytest.raises(ValueError, match="note must be at most"):
-            parse_new_transaction({**_BODY, "note": at_limit + "x"}, year_month="2026-03")
+            parse_create_transaction_args({**_BODY, "note": at_limit + "x"}, year_month="2026-03")
 
     @pytest.mark.parametrize(
         ("change", "message"),
@@ -63,7 +63,7 @@ class TestParseNewTransaction:
     )
     def test_rejects_bad_values(self, change: dict[str, object], message: str) -> None:
         with pytest.raises(ValueError, match=message):
-            parse_new_transaction({**_BODY, **change}, year_month="2026-03")
+            parse_create_transaction_args({**_BODY, **change}, year_month="2026-03")
 
 
 class TestParseUpdateTransactionArgs:

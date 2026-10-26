@@ -17,7 +17,7 @@ os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 os.environ.setdefault("STAGE", "test")
 
 from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
-from corderohq.budget.transactions import UpdateTransactionArgs
+from corderohq.budget.transaction_args import UpdateTransactionArgs
 from corderohq.budget.treatment import BudgetTreatment, Classification
 from corderohq.common import Keep, Remove, SetTo
 from corderohq.personal_finance_handler import handler

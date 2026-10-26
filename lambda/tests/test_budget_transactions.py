@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from corderohq.aws.dynamodb import TransactionsTable
-from corderohq.budget.transactions import NewTransaction, UpdateTransactionArgs
+from corderohq.budget.transaction_args import CreateTransactionArgs, UpdateTransactionArgs
 from corderohq.budget.treatment import BudgetTreatment, Classification
 from corderohq.common import Keep, Remove, SetTo
 
@@ -37,8 +37,8 @@ class TestList:
         assert result[0]["description"] == "Coffee"
 
 
-def _new(description: str, classification: Classification, **fields: Any) -> NewTransaction:
-    return NewTransaction(
+def _new(description: str, classification: Classification, **fields: Any) -> CreateTransactionArgs:
+    return CreateTransactionArgs(
         year_month="2026-03",
         transaction_date=fields.get("transaction_date", "2026-03-15"),
         description=description,
