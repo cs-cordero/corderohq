@@ -14,7 +14,7 @@ from corderohq.accounts import (
     validate_owners,
     validate_target_year,
 )
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,17 +34,13 @@ class AccountTable:
     def get_active_accounts(self) -> list[dict[str, Any]]:
         """Return the active accounts, sorted by sortOrder and then by name."""
 
-        response = self._table.scan(
-            FilterExpression="active = :val",
-            ExpressionAttributeValues={":val": True},
-        )
-        return self._sorted(response["Items"])
+        items = scan_all_items(self._table, FilterExpression="active = :val", ExpressionAttributeValues={":val": True})
+        return self._sorted(items)
 
     def get_all_accounts(self) -> list[dict[str, Any]]:
         """Return all accounts, active and inactive, sorted by sortOrder and then by name."""
 
-        response = self._table.scan()
-        return self._sorted(response["Items"])
+        return self._sorted(scan_all_items(self._table))
 
     def get_account_by_id(self, account_id: str) -> dict[str, Any] | None:
         """Return the account, or None if it does not exist."""

@@ -6,7 +6,7 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -15,8 +15,8 @@ class CategoryTable:
     """Categories for a Budget. Allocations are assigned to these categories.
 
     Categories sometimes but do not always represent an Account owned by a household. For example, a budget line item
-    that tracks saving in a Vacation Fund account provides a 1:1 map of category to account. But a budget categories
-    could be, for example, "Groceries", "Utilities", "Household Items", none of which necessarily point to a particular
+    that tracks saving in a Vacation Fund account provides a 1:1 map of category to account. But budget categories could
+    be, for example, "Groceries", "Utilities", "Household Items", none of which necessarily point to a particular
     Account.
     """
 
@@ -26,18 +26,13 @@ class CategoryTable:
     def get_active_categories(self) -> list[dict[str, Any]]:
         """Return all active categories, sorted by name."""
 
-        response = self._table.scan(
-            FilterExpression="active = :val",
-            ExpressionAttributeValues={":val": True},
-        )
-        items: list[dict[str, Any]] = response["Items"]
+        items = scan_all_items(self._table, FilterExpression="active = :val", ExpressionAttributeValues={":val": True})
         return sorted(items, key=lambda c: c["name"])
 
     def get_all_categories(self) -> list[dict[str, Any]]:
         """Return all categories (active and inactive), sorted by name."""
 
-        response = self._table.scan()
-        items: list[dict[str, Any]] = response["Items"]
+        items = scan_all_items(self._table)
         return sorted(items, key=lambda c: c["name"])
 
     def get_category_by_id(self, category_id: str) -> dict[str, Any] | None:

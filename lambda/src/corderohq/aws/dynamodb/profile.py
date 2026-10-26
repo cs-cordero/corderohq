@@ -6,7 +6,7 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items
 from corderohq.networth.models import HOUSEHOLD_PK, PROFILE_SETTINGS_SK, validate_birth_year_month
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,11 +25,10 @@ class ProfileTable:
         hardcoded.
         """
 
-        response = self._table.query(
-            KeyConditionExpression="householdId = :pk",
-            ExpressionAttributeValues={":pk": HOUSEHOLD_PK},
+        items = query_all_items(
+            self._table, KeyConditionExpression="householdId = :pk", ExpressionAttributeValues={":pk": HOUSEHOLD_PK}
         )
-        people = [p for p in response["Items"] if p["personId"] != PROFILE_SETTINGS_SK]
+        people = [p for p in items if p["personId"] != PROFILE_SETTINGS_SK]
         return sorted(people, key=lambda p: (str(p.get("name", "")).lower(), p["personId"]))
 
     def get_profile(self, person_id: str) -> dict[str, Any] | None:

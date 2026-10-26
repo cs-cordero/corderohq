@@ -6,7 +6,7 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_pages
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_pages
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,11 +20,9 @@ class TransactionsTable:
     def list_for_month(self, year_month: str) -> list[dict[str, Any]]:
         """Return every transaction for one month (YYYY-MM), sorted by sortId."""
 
-        response = self._table.query(
-            KeyConditionExpression="yearMonth = :ym",
-            ExpressionAttributeValues={":ym": year_month},
+        return query_all_items(
+            self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
-        return response["Items"]
 
     def create(
         self,

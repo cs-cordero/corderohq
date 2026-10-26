@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_pages
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,20 +21,14 @@ class NetWorthSnapshotTable:
     def get_snapshot_for_month(self, year_month: str) -> list[dict[str, Any]]:
         """Return every recorded row for a month (one per account with a value)."""
 
-        response = self._table.query(
-            KeyConditionExpression="yearMonth = :ym",
-            ExpressionAttributeValues={":ym": year_month},
+        return query_all_items(
+            self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
-        return response["Items"]
 
     def scan(self) -> list[dict[str, Any]]:
-        """Return every snapshot row across all months, paginating the Scan."""
+        """Return every snapshot row across all months."""
 
-        items: list[dict[str, Any]] = []
-        params: dict[str, Any] = {}
-        for response in scan_pages(self._table, **params):
-            items.extend(response.get("Items", []))
-        return items
+        return scan_all_items(self._table)
 
     def delete_snapshot_record(self, year_month: str, account_id: str) -> None:
         """Delete a single snapshot row (undo a mistaken entry)."""

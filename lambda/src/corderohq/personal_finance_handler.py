@@ -205,16 +205,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _get_audit_log(event)
 
         # Household profile (net worth)
-        elif path == "/api/profile" and method == "GET":
-            return _get_profile()
-        elif path == "/api/profile/people" and method == "POST":
-            return _post_person(event)
-        elif path.startswith("/api/profile/people/") and path.endswith("/delete") and method == "POST":
-            person_id = path.split("/")[-2]
-            return _delete_person(person_id)
-        elif path.startswith("/api/profile/people/") and method == "PUT":
-            person_id = path.split("/")[-1]
-            return _put_person(event, person_id)
+        elif path == "/api/profiles" and method == "GET":
+            return _get_profiles()
+        elif path == "/api/profiles" and method == "POST":
+            return _post_profile(event)
+        elif path.startswith("/api/profiles/") and path.endswith("/delete") and method == "POST":
+            profile_id = path.split("/")[-2]
+            return _delete_profile(profile_id)
+        elif path.startswith("/api/profiles/") and method == "PUT":
+            profile_id = path.split("/")[-1]
+            return _put_profile(event, profile_id)
 
         # Accounts (net worth)
         elif path == "/api/accounts" and method == "GET":
@@ -1188,11 +1188,11 @@ def _get_audit_log(event: dict[str, Any]) -> dict[str, Any]:
 # --- Household profile (net worth) ---
 
 
-def _get_profile() -> dict[str, Any]:
+def _get_profiles() -> dict[str, Any]:
     return _json_response(200, json.dumps(_PROFILE_TABLE.list_profiles(), default=_json_default))
 
 
-def _post_person(event: dict[str, Any]) -> dict[str, Any]:
+def _post_profile(event: dict[str, Any]) -> dict[str, Any]:
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1211,7 +1211,7 @@ def _post_person(event: dict[str, Any]) -> dict[str, Any]:
     return _json_response(201, json.dumps(item, default=_json_default))
 
 
-def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
+def _put_profile(event: dict[str, Any], profile_id: str) -> dict[str, Any]:
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -1222,38 +1222,38 @@ def _put_person(event: dict[str, Any], person_id: str) -> dict[str, Any]:
         return _response(400, "name and/or birthYearMonth is required")
 
     try:
-        item = _PROFILE_TABLE.update_profile(person_id, name=name, birth_year_month=birth_year_month)
+        item = _PROFILE_TABLE.update_profile(profile_id, name=name, birth_year_month=birth_year_month)
     except ValueError as e:
         return _response(400, str(e))
     if item is None:
-        return _response(404, "Person not found")
+        return _response(404, "Profile not found")
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
-def _delete_person(person_id: str) -> dict[str, Any]:
-    """Delete a person for ever.
+def _delete_profile(profile_id: str) -> dict[str, Any]:
+    """Delete a profile for ever.
 
-    If an account still names the person as an owner, return a 409 that lists those accounts.
+    If an account still names the profile as an owner, return a 409 that lists those accounts.
     """
 
-    if _PROFILE_TABLE.get_profile(person_id) is None:
-        return _response(404, "Person not found")
+    if _PROFILE_TABLE.get_profile(profile_id) is None:
+        return _response(404, "Profile not found")
 
-    blocking = _ACCOUNT_TABLE.accounts_with_owner(person_id)
+    blocking = _ACCOUNT_TABLE.accounts_with_owner(profile_id)
     if blocking:
         return _json_response(
             409,
             json.dumps(
                 {
-                    "error": "Person is the owner of one or more accounts; reassign them first",
-                    "personId": person_id,
+                    "error": "Profile is the owner of one or more accounts; reassign them first",
+                    "personId": profile_id,
                     "blockingAccounts": blocking,
                 }
             ),
         )
 
-    _PROFILE_TABLE.delete_profile(person_id)
-    return _json_response(200, json.dumps({"personId": person_id}))
+    _PROFILE_TABLE.delete_profile(profile_id)
+    return _json_response(200, json.dumps({"personId": profile_id}))
 
 
 # --- Accounts (net worth) ---

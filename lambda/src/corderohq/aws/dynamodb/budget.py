@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_pages
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
 from corderohq.budget.densify import CarryRow, DenseSparseStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -18,11 +18,9 @@ class BudgetTable:
     def get_budget_targets(self, year_month: str) -> list[dict[str, Any]]:
         """Get all budget targets for a given month (YYYY-MM)."""
 
-        response = self._table.query(
-            KeyConditionExpression="yearMonth = :ym",
-            ExpressionAttributeValues={":ym": year_month},
+        return query_all_items(
+            self._table, KeyConditionExpression="yearMonth = :ym", ExpressionAttributeValues={":ym": year_month}
         )
-        return response["Items"]
 
     def set_all_budget_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Set the budget targets for one month. This writes over every target in that month."""
@@ -49,11 +47,7 @@ class BudgetTable:
     def scan(self) -> list[dict[str, Any]]:
         """Return every row in the table."""
 
-        items: list[dict[str, Any]] = []
-        params: dict[str, Any] = {}
-        for response in scan_pages(self._table, **params):
-            items.extend(response.get("Items", []))
-        return items
+        return scan_all_items(self._table)
 
     def set_single_budget_target(self, year_month: str, category_id: str, amount: Any) -> None:
         """Write one budget row."""
@@ -70,15 +64,12 @@ class BudgetTable:
     def get_rows_for_category(self, category_id: str) -> list[dict[str, Any]]:
         """Return the key of every Budget row that names this categoryId, in all months."""
 
-        rows: list[dict[str, Any]] = []
-        params: dict[str, Any] = {
-            "FilterExpression": "categoryId = :cid",
-            "ExpressionAttributeValues": {":cid": category_id},
-            "ProjectionExpression": "yearMonth, categoryId",
-        }
-        for response in scan_pages(self._table, **params):
-            rows.extend(response["Items"])
-        return rows
+        return scan_all_items(
+            self._table,
+            FilterExpression="categoryId = :cid",
+            ExpressionAttributeValues={":cid": category_id},
+            ProjectionExpression="yearMonth, categoryId",
+        )
 
     def delete_all_for_category(self, category_id: str) -> int:
         """Delete every Budget row that names this categoryId. Return the number of deleted rows."""

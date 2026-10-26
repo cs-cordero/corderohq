@@ -27,3 +27,26 @@ def scan_pages(table: Any, **params: Any) -> Iterator[dict[str, Any]]:
         if "LastEvaluatedKey" not in response:
             return
         params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def query_pages(table: Any, **params: Any) -> Iterator[dict[str, Any]]:
+    """Yield each page of a Query. The next page starts at the `LastEvaluatedKey` of the page before."""
+
+    while True:
+        response = table.query(**params)
+        yield response
+        if "LastEvaluatedKey" not in response:
+            return
+        params["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+
+
+def scan_all_items(table: Any, **params: Any) -> list[dict[str, Any]]:
+    """Return the items of every page of a Scan."""
+
+    return [item for page in scan_pages(table, **params) for item in page.get("Items", [])]
+
+
+def query_all_items(table: Any, **params: Any) -> list[dict[str, Any]]:
+    """Return the items of every page of a Query."""
+
+    return [item for page in query_pages(table, **params) for item in page.get("Items", [])]

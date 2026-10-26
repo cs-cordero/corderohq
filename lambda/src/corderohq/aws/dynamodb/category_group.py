@@ -6,7 +6,7 @@ from typing import Any
 
 from ulid import ULID
 
-from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE
+from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -20,8 +20,7 @@ class CategoryGroupTable:
     def get_all_category_groups(self) -> list[dict[str, Any]]:
         """Return all groups (active + inactive), sorted by order then name."""
 
-        response = self._table.scan()
-        items: list[dict[str, Any]] = response["Items"]
+        items = scan_all_items(self._table)
         # A system group, such as Unassigned, always sorts last, whatever its number. It
         # therefore stays in place when the user changes the order of the other groups.
         return sorted(items, key=lambda g: (bool(g.get("system", False)), int(g.get("order", 0)), g["name"]))

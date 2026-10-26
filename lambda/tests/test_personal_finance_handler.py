@@ -1579,7 +1579,7 @@ class TestGetProfile:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_returns_people(self, mock_pt: MagicMock) -> None:
         mock_pt.list_profiles.return_value = [{"personId": "p1", "name": "Jordan", "birthYearMonth": "1985-07"}]
-        result = handler(_make_event("GET", "/api/profile"), None)
+        result = handler(_make_event("GET", "/api/profiles"), None)
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body[0]["name"] == "Jordan"
@@ -1590,25 +1590,25 @@ class TestPostPerson:
     def test_creates_person(self, mock_pt: MagicMock) -> None:
         mock_pt.create_profile.return_value = {"personId": "p1", "name": "Jordan", "birthYearMonth": "1985-07"}
         result = handler(
-            _make_event("POST", "/api/profile/people", body={"name": "Jordan", "birthYearMonth": "1985-07"}),
+            _make_event("POST", "/api/profiles", body={"name": "Jordan", "birthYearMonth": "1985-07"}),
             None,
         )
         assert result["statusCode"] == 201
         mock_pt.create_profile.assert_called_once_with("Jordan", "1985-07")
 
     def test_requires_name(self) -> None:
-        result = handler(_make_event("POST", "/api/profile/people", body={"birthYearMonth": "1985-07"}), None)
+        result = handler(_make_event("POST", "/api/profiles", body={"birthYearMonth": "1985-07"}), None)
         assert result["statusCode"] == 400
 
     def test_requires_birth_year_month(self) -> None:
-        result = handler(_make_event("POST", "/api/profile/people", body={"name": "Jordan"}), None)
+        result = handler(_make_event("POST", "/api/profiles", body={"name": "Jordan"}), None)
         assert result["statusCode"] == 400
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_invalid_birth_month_returns_400(self, mock_pt: MagicMock) -> None:
         mock_pt.create_profile.side_effect = ValueError("birthYearMonth must be a YYYY-MM string")
         result = handler(
-            _make_event("POST", "/api/profile/people", body={"name": "Jordan", "birthYearMonth": "bad"}),
+            _make_event("POST", "/api/profiles", body={"name": "Jordan", "birthYearMonth": "bad"}),
             None,
         )
         assert result["statusCode"] == 400
@@ -1618,18 +1618,18 @@ class TestPutPerson:
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_updates_person(self, mock_pt: MagicMock) -> None:
         mock_pt.update_profile.return_value = {"personId": "p1", "name": "New", "birthYearMonth": "1985-07"}
-        result = handler(_make_event("PUT", "/api/profile/people/p1", body={"name": "New"}), None)
+        result = handler(_make_event("PUT", "/api/profiles/p1", body={"name": "New"}), None)
         assert result["statusCode"] == 200
         mock_pt.update_profile.assert_called_once_with("p1", name="New", birth_year_month=None)
 
     def test_requires_a_field(self) -> None:
-        result = handler(_make_event("PUT", "/api/profile/people/p1", body={}), None)
+        result = handler(_make_event("PUT", "/api/profiles/p1", body={}), None)
         assert result["statusCode"] == 400
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_missing_person_returns_404(self, mock_pt: MagicMock) -> None:
         mock_pt.update_profile.return_value = None
-        result = handler(_make_event("PUT", "/api/profile/people/nope", body={"name": "New"}), None)
+        result = handler(_make_event("PUT", "/api/profiles/nope", body={"name": "New"}), None)
         assert result["statusCode"] == 404
 
 
@@ -1639,14 +1639,14 @@ class TestDeletePerson:
     def test_deletes_when_unreferenced(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
         mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = []
-        result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
+        result = handler(_make_event("POST", "/api/profiles/p1/delete"), None)
         assert result["statusCode"] == 200
         mock_pt.delete_profile.assert_called_once_with("p1")
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
     def test_missing_person_returns_404(self, mock_pt: MagicMock) -> None:
         mock_pt.get_profile.return_value = None
-        result = handler(_make_event("POST", "/api/profile/people/nope/delete"), None)
+        result = handler(_make_event("POST", "/api/profiles/nope/delete"), None)
         assert result["statusCode"] == 404
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
@@ -1654,7 +1654,7 @@ class TestDeletePerson:
     def test_blocked_when_owner_of_accounts(self, mock_pt: MagicMock, mock_at: MagicMock) -> None:
         mock_pt.get_profile.return_value = {"personId": "p1", "name": "Jordan"}
         mock_at.accounts_with_owner.return_value = [{"accountId": "a1", "name": "His 401k"}]
-        result = handler(_make_event("POST", "/api/profile/people/p1/delete"), None)
+        result = handler(_make_event("POST", "/api/profiles/p1/delete"), None)
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["blockingAccounts"][0]["accountId"] == "a1"

@@ -458,7 +458,7 @@ Assign** for the bodies and the responses.
 API Gateway lists each route explicitly. A route that is not in that list gets a `404` from API
 Gateway, and the Lambda never sees the request.
 
-The net worth record has its own routes: `/api/profile`, `/api/profile/people/...`,
+The net worth record has its own routes: `/api/profiles/...`,
 `/api/accounts/...`, and `/api/net-worth/...`. See `handler()` in `personal_finance_handler.py`.
 
 A change to a transaction uses `POST`, and not `PUT` or `DELETE`. A CloudFront cache policy can
