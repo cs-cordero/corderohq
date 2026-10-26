@@ -65,23 +65,23 @@ def compute_summary(
     current_ym = f"{now.year:04d}-{now.month:02d}"
     is_future = year_month > current_ym
 
-    # The densify step writes `amount=null` when the walk back finds no earlier row.
-    # (architecture: "New category, no prior history"). Null means "no target" —
-    # for aggregation we treat it as 0 since there's nothing to subtract from.
+    # Find the budget target of each category in this month. A target of None means "no
+    # target", and the totals count it as $0.
     #
-    # For dense months (year_month <= current_ym) every active category has a
-    # stored row; a direct query is sufficient. For future months the table is
-    # sparse — only explicit pins live there — so the effective budgeted value
-    # is whatever walk-back resolves to, per architecture's "Display of a future
-    # month is resolved per category" rule.
+    # A dense month has a stored row for each of its categories, so no value comes from a walk
+    # back. The past months and the current month are dense. Each has a row for each category
+    # that was active when the month became dense, so the code reads the rows of the month. A
+    # future month has rows only for its pins. For each other category, the target is the value
+    # of the nearest earlier row. An inactive category with no target is left out.
     budget_by_category: dict[str, Decimal] = {}
     if is_future:
         by_key = carry_map(BudgetDensifyAdapter(budget).scan_carry_rows())
         for cat in categories_all:
             cat_id = cat["categoryId"]
             raw = value_at_or_before(by_key, year_month, cat_id)
-            if raw is not None:
-                budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))
+            if raw is None and not cat.get("active", False):
+                continue
+            budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))
     else:
         for target in budget.get_budget_targets(year_month):
             raw = target.get("amount")
