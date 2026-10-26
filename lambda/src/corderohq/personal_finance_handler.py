@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import parse_create_account_args, validate_asset_class, validate_owners
+from corderohq.accounts import SetTo, parse_create_account_args, parse_update_account_args, validate_asset_class
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -1259,19 +1259,6 @@ def _delete_profile(profile_id: str) -> dict[str, Any]:
 # --- Accounts (net worth) ---
 
 
-def _validate_owners(owners: Any) -> tuple[list[str] | None, dict[str, Any] | None]:
-    """Check an `owners` list. Return `(owners, None)`, or `(None, error_response)`.
-
-    The list must not be empty, and each personId must exist in the household. Duplicates are removed.
-    """
-
-    try:
-        normalized = validate_owners(owners)
-    except ValueError as e:
-        return None, _response(400, str(e))
-    return normalized, _check_owners_exist(normalized)
-
-
 def _check_owners_exist(owners: list[str]) -> dict[str, Any] | None:
     """Return a 400 response if a personId is not a person in the household, else None."""
 
@@ -1313,40 +1300,29 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
 def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
     """Change the given fields of an account.
 
-    See `AccountTable.update_account` for the editable fields. The handler ignores `accountType` and
-    `liability`, because they cannot change.
+    See `parse_update_account_args` for the editable fields. The type of an account cannot change.
     """
 
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-
-    editable_fields = (
-        "name",
-        "assetClasses",
-        "owners",
-        "excludedFromNetWorth",
-        "targetYear",
-        "loanTerms",
-        "notes",
-        "sortOrder",
-    )
-    updates = {field: body[field] for field in editable_fields if field in body}
-    if not updates:
-        return _response(400, f"at least one editable field is required: {list(editable_fields)}")
-
-    if "owners" in updates:
-        owners, err = _validate_owners(updates["owners"])
-        if err:
-            return err
-        updates["owners"] = owners
+    existing = _ACCOUNT_TABLE.get_account_by_id(account_id)
+    if existing is None:
+        return _response(404, "Account not found")
 
     try:
-        item = _ACCOUNT_TABLE.update_account(account_id, updates)
+        args = parse_update_account_args(body, existing)
     except ValueError as e:
         return _response(400, str(e))
-    if item is None:
-        return _response(404, "Account not found")
+    if isinstance(args.owners, SetTo):
+        err = _check_owners_exist(args.owners.value)
+        if err:
+            return err
+
+    try:
+        item = _ACCOUNT_TABLE.update_account(account_id, args)
+    except ValueError as e:
+        return _response(400, str(e))
     return _json_response(200, json.dumps(item, default=_json_default))
 
 

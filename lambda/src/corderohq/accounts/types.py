@@ -168,3 +168,37 @@ class CreateAccountArgs:
     excluded_from_net_worth: bool
     notes: str | None
     account: NewAccount
+
+
+@dataclass(frozen=True)
+class Keep:
+    """A change that leaves a field as it is."""
+
+
+@dataclass(frozen=True)
+class SetTo[T]:
+    """A change that sets a field to `value`."""
+
+    value: T
+
+
+@dataclass(frozen=True)
+class Remove:
+    """A change that removes an optional field."""
+
+
+type FieldChange[T] = Keep | SetTo[T] | Remove
+
+
+@dataclass(frozen=True)
+class UpdateAccountArgs:
+    """The checked changes to an account. Each field that the request did not name is Keep()."""
+
+    name: Keep | SetTo[str]
+    owners: Keep | SetTo[list[str]]
+    excluded_from_net_worth: Keep | SetTo[bool]
+    sort_order: Keep | SetTo[int]
+    notes: FieldChange[str]
+    asset_classes: Keep | SetTo[list[AssetClass]]
+    target_year: FieldChange[int]
+    loan_terms: FieldChange[LoanTerms]

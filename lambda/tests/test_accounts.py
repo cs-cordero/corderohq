@@ -8,11 +8,16 @@ from corderohq.accounts import (
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
+    Keep,
     LoanAccount,
     LoanTerms,
+    Remove,
+    SetTo,
+    UpdateAccountArgs,
     get_metadata_for_account_type,
     parse_create_account_args,
     parse_loan_terms,
+    parse_update_account_args,
     resolve_target_year,
     validate_account_type,
     validate_asset_class,
@@ -242,6 +247,104 @@ class TestParseCreateAccountArgs:
     def test_rejects_non_string_notes(self) -> None:
         with pytest.raises(ValueError, match="notes must be a string or null"):
             parse_create_account_args(_body("checking", notes=5))
+
+
+def _stored(account_type: str, **fields: Any) -> dict[str, Any]:
+    return {"accountId": "a1", "name": "A", "accountType": account_type, **fields}
+
+
+class TestParseUpdateAccountArgs:
+    def test_keeps_each_field_that_the_body_does_not_name(self) -> None:
+        args = parse_update_account_args({"name": "  New  "}, _stored("brokerage", assetClasses=["cash"]))
+        assert args == UpdateAccountArgs(
+            name=SetTo("New"),
+            owners=Keep(),
+            excluded_from_net_worth=Keep(),
+            sort_order=Keep(),
+            notes=Keep(),
+            asset_classes=Keep(),
+            target_year=Keep(),
+            loan_terms=Keep(),
+        )
+
+    def test_needs_an_editable_key(self) -> None:
+        # accountType and liability cannot change, so they do not count.
+        with pytest.raises(ValueError, match="at least one editable field is required"):
+            parse_update_account_args({"accountType": "mortgage", "liability": True}, _stored("checking"))
+
+    def test_sets_the_simple_fields(self) -> None:
+        body = {"owners": ["p1", "p2", "p1"], "excludedFromNetWorth": True, "sortOrder": 3, "notes": "n"}
+        args = parse_update_account_args(body, _stored("checking"))
+        assert args.owners == SetTo(["p1", "p2"])
+        assert args.excluded_from_net_worth == SetTo(True)
+        assert args.sort_order == SetTo(3)
+        assert args.notes == SetTo("n")
+
+    def test_null_notes_removes_them(self) -> None:
+        assert parse_update_account_args({"notes": None}, _stored("checking")).notes == Remove()
+
+    @pytest.mark.parametrize(
+        ("body", "message"),
+        [
+            ({"name": "  "}, "must not be empty"),
+            ({"owners": []}, "owners must be a non-empty list"),
+            ({"excludedFromNetWorth": "yes"}, "excludedFromNetWorth must be a boolean"),
+            ({"sortOrder": True}, "sortOrder must be an integer"),
+            ({"notes": 5}, "notes must be a string or null"),
+        ],
+    )
+    def test_rejects_bad_values(self, body: dict[str, Any], message: str) -> None:
+        with pytest.raises(ValueError, match=message):
+            parse_update_account_args(body, _stored("checking"))
+
+    def test_chosen_class_type_can_change_its_classes(self) -> None:
+        args = parse_update_account_args({"assetClasses": ["bonds", "cash"]}, _stored("brokerage"))
+        assert args.asset_classes == SetTo([AssetClass.BONDS, AssetClass.CASH])
+
+    @pytest.mark.parametrize("account_type", ["checking", "mortgage"])
+    def test_fixed_class_types_cannot_change_their_classes(self, account_type: str) -> None:
+        with pytest.raises(ValueError, match=f"assetClasses is not allowed for a {account_type} account"):
+            parse_update_account_args({"assetClasses": ["us_equity_large_cap"]}, _stored(account_type))
+
+    def test_loan_type_sets_and_removes_its_terms(self) -> None:
+        args = parse_update_account_args({"loanTerms": _LOAN_TERMS}, _stored("mortgage"))
+        assert args.loan_terms == SetTo(LoanTerms(0.04, 1_000_000, "2030-01"))
+        assert parse_update_account_args({"loanTerms": None}, _stored("mortgage")).loan_terms == Remove()
+
+    @pytest.mark.parametrize("account_type", ["checking", "brokerage"])
+    def test_other_types_reject_loan_terms(self, account_type: str) -> None:
+        with pytest.raises(ValueError, match=f"loanTerms is not allowed for a {account_type} account"):
+            parse_update_account_args({"loanTerms": _LOAN_TERMS}, _stored(account_type))
+
+    def test_null_loan_terms_on_another_type_changes_nothing(self) -> None:
+        # The frontend sends `loanTerms: null` for every type.
+        args = parse_update_account_args({"name": "A", "loanTerms": None}, _stored("checking"))
+        assert args.loan_terms == Keep()
+
+    def test_adding_target_date_needs_a_year(self) -> None:
+        with pytest.raises(ValueError, match="targetYear is required"):
+            parse_update_account_args({"assetClasses": ["target_date"]}, _stored("brokerage", assetClasses=["cash"]))
+        args = parse_update_account_args(
+            {"assetClasses": ["target_date"], "targetYear": 2055}, _stored("brokerage", assetClasses=["cash"])
+        )
+        assert args.target_year == SetTo(2055)
+
+    def test_a_stored_year_stays_with_target_date(self) -> None:
+        stored = _stored("401k", assetClasses=["target_date"], targetYear=2050)
+        assert parse_update_account_args({"name": "A"}, stored).target_year == SetTo(2050)
+
+    def test_removing_target_date_removes_the_stale_year(self) -> None:
+        stored = _stored("brokerage", assetClasses=["target_date"], targetYear=2055)
+        assert parse_update_account_args({"assetClasses": ["cash"]}, stored).target_year == Remove()
+
+    def test_a_year_without_target_date_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="only allowed when target_date"):
+            parse_update_account_args({"targetYear": 2055}, _stored("brokerage", assetClasses=["cash"]))
+
+    def test_null_year_without_target_date_changes_nothing(self) -> None:
+        # The frontend sends `targetYear: null` when the classes do not hold target_date.
+        args = parse_update_account_args({"targetYear": None}, _stored("checking", assetClasses=["cash"]))
+        assert args.target_year == Keep()
 
 
 class TestParseLoanTerms:

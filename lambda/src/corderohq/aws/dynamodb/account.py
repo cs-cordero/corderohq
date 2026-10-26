@@ -2,21 +2,55 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, assert_never
 
 from ulid import ULID
 
 from corderohq.accounts import (
     CreateAccountArgs,
-    get_metadata_for_account_type,
-    parse_loan_terms,
-    validate_asset_classes,
-    validate_owners,
-    validate_target_year,
+    FieldChange,
+    Keep,
+    Remove,
+    SetTo,
+    UpdateAccountArgs,
 )
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _update_expression(changes: dict[str, FieldChange[Any]]) -> dict[str, Any]:
+    """Return the UpdateExpression and its names and values for a set of field changes.
+
+    Each attribute name goes through ExpressionAttributeNames, so a reserved word such as `name`
+    is safe. `updatedAt` is always set.
+    """
+
+    set_parts = ["updatedAt = :updatedAt"]
+    remove_parts: list[str] = []
+    names: dict[str, str] = {}
+    values: dict[str, Any] = {":updatedAt": datetime.now(tz=UTC).isoformat()}
+    for attribute, change in changes.items():
+        match change:
+            case Keep():
+                continue
+            case SetTo(value=value):
+                names[f"#{attribute}"] = attribute
+                values[f":{attribute}"] = value
+                set_parts.append(f"#{attribute} = :{attribute}")
+            case Remove():
+                names[f"#{attribute}"] = attribute
+                remove_parts.append(f"#{attribute}")
+            case _:
+                assert_never(change)
+
+    expression = "SET " + ", ".join(set_parts)
+    if remove_parts:
+        expression += " REMOVE " + ", ".join(remove_parts)
+    params: dict[str, Any] = {"UpdateExpression": expression, "ExpressionAttributeValues": values}
+    if names:
+        params["ExpressionAttributeNames"] = names
+    return params
 
 
 class AccountTable:
@@ -73,100 +107,32 @@ class AccountTable:
         _LOGGER.info("Created account: %s (%s)", item["name"], item["accountId"])
         return item
 
-    def update_account(self, account_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Change the given fields of an account. Return the updated item, or None if it does not exist.
+    def update_account(self, account_id: str, args: UpdateAccountArgs) -> dict[str, Any]:
+        """Apply the checked changes to an account, and return the updated item.
 
-        The editable fields are name, assetClasses, owners, excludedFromNetWorth, targetYear,
-        loanTerms, notes, and sortOrder. The account type cannot change. A value of None removes
-        loanTerms or notes. Raise ValueError for invalid input.
+        Raise ValueError for a duplicate name. The caller reads the account first, and parses the
+        changes against it.
         """
 
-        existing = self.get_account_by_id(account_id)
-        if existing is None:
-            return None
-        meta = get_metadata_for_account_type(existing["accountType"])
+        if isinstance(args.name, SetTo) and self._name_exists(args.name.value, exclude_id=account_id):
+            raise ValueError(f"An account named '{args.name.value}' already exists")
 
-        set_parts: list[str] = ["updatedAt = :now"]
-        remove_parts: list[str] = []
-        values: dict[str, Any] = {":now": datetime.now(tz=UTC).isoformat()}
-        names: dict[str, str] = {}
-
-        if "name" in updates:
-            name = str(updates["name"]).strip()
-            if not name:
-                raise ValueError("Account name must not be empty")
-            if self._name_exists(name, exclude_id=account_id):
-                raise ValueError(f"An account named '{name}' already exists")
-            set_parts.append("#n = :name")
-            names["#n"] = "name"
-            values[":name"] = name
-        if "assetClasses" in updates:
-            if meta.fixed_asset_class is not None:
-                raise ValueError(f"assetClasses is fixed for {existing['accountType']} accounts and cannot be changed")
-            values[":ac"] = validate_asset_classes(updates["assetClasses"])
-            set_parts.append("assetClasses = :ac")
-        if "sortOrder" in updates:
-            sort_order = updates["sortOrder"]
-            if isinstance(sort_order, bool) or not isinstance(sort_order, int):
-                raise ValueError("sortOrder must be an integer")
-            values[":so"] = sort_order
-            set_parts.append("sortOrder = :so")
-        if "owners" in updates:
-            # The list is replaced as a whole. It is required, so it cannot be removed.
-            owners = validate_owners(updates["owners"])
-            set_parts.append("#ow = :owners")
-            names["#ow"] = "owners"
-            values[":owners"] = owners
-        if "excludedFromNetWorth" in updates:
-            excluded = updates["excludedFromNetWorth"]
-            if not isinstance(excluded, bool):
-                raise ValueError("excludedFromNetWorth must be a boolean")
-            values[":exc"] = excluded
-            set_parts.append("excludedFromNetWorth = :exc")
-        if "loanTerms" in updates:
-            if updates["loanTerms"] is None:
-                remove_parts.append("loanTerms")
-            else:
-                terms = parse_loan_terms(updates["loanTerms"], amortizing=meta.amortizing)
-                if terms is not None:  # always true for a non-None input; narrows the type
-                    set_parts.append("loanTerms = :lt")
-                    values[":lt"] = terms.to_item()
-        if "notes" in updates:
-            if updates["notes"] is None:
-                remove_parts.append("notes")
-            else:
-                set_parts.append("notes = :notes")
-                values[":notes"] = str(updates["notes"])
-
-        # Reconcile targetYear against the effective (post-update) asset-class set, so
-        # adding target_date requires a year and removing it clears a stale one — even
-        # when only one of the two fields is in `updates`.
-        effective_classes = values.get(":ac", existing.get("assetClasses", []))
-        proposed_year = updates.get("targetYear", existing.get("targetYear"))
-        if "target_date" in effective_classes:
-            if proposed_year is None:
-                raise ValueError("targetYear is required when target_date is one of the asset classes")
-            values[":ty"] = validate_target_year(proposed_year)
-            set_parts.append("targetYear = :ty")
-        else:
-            if updates.get("targetYear") is not None:
-                raise ValueError("targetYear is only allowed when target_date is an asset class")
-            if "targetYear" in existing:
-                remove_parts.append("targetYear")
-
-        expression = "SET " + ", ".join(set_parts)
-        if remove_parts:
-            expression += " REMOVE " + ", ".join(remove_parts)
-
-        kwargs: dict[str, Any] = {
-            "Key": {"accountId": account_id},
-            "UpdateExpression": expression,
-            "ExpressionAttributeValues": values,
-            "ReturnValues": "ALL_NEW",
+        # Store loan terms in their DynamoDB form.
+        terms = args.loan_terms
+        loan_terms = SetTo(terms.value.to_item()) if isinstance(terms, SetTo) else terms
+        changes: dict[str, FieldChange[Any]] = {
+            "name": args.name,
+            "owners": args.owners,
+            "excludedFromNetWorth": args.excluded_from_net_worth,
+            "sortOrder": args.sort_order,
+            "notes": args.notes,
+            "assetClasses": args.asset_classes,
+            "targetYear": args.target_year,
+            "loanTerms": loan_terms,
         }
-        if names:
-            kwargs["ExpressionAttributeNames"] = names
-        response = self._table.update_item(**kwargs)
+        response = self._table.update_item(
+            Key={"accountId": account_id}, ReturnValues="ALL_NEW", **_update_expression(changes)
+        )
         return response["Attributes"]
 
     def deactivate(self, account_id: str) -> dict[str, Any] | None:

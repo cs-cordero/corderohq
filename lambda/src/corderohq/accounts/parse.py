@@ -8,14 +8,29 @@ from corderohq.accounts.types import (
     AssetClass,
     ChosenClassAccount,
     CreateAccountArgs,
+    FieldChange,
     FixedClassAccount,
+    Keep,
     LoanAccount,
     LoanTerms,
     NewAccount,
+    Remove,
+    SetTo,
+    UpdateAccountArgs,
 )
 from corderohq.util import YEAR_MONTH_PATTERN
 
 _LOAN_TERMS_FIELDS = ("interestRate", "monthlyPayment", "payoffYearMonth")
+_EDITABLE_ACCOUNT_KEYS = (
+    "name",
+    "assetClasses",
+    "owners",
+    "excludedFromNetWorth",
+    "targetYear",
+    "loanTerms",
+    "notes",
+    "sortOrder",
+)
 _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
 _ASSET_CLASS_VALUES = frozenset(c.value for c in AssetClass)
 
@@ -70,6 +85,123 @@ def parse_create_account_args(payload: Mapping[str, Any]) -> CreateAccountArgs:
         notes=notes,
         account=account,
     )
+
+
+def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str, Any]) -> UpdateAccountArgs:
+    """Convert the body of an update request into checked changes. Raise ValueError for bad input.
+
+    `existing` is the stored account. Its type decides which keys the body can change. Its asset
+    classes decide the target year rule when the body does not change them. An absent key changes
+    nothing. A null `notes`, `loanTerms`, or `targetYear` removes that field. The type of an
+    account cannot change. The caller checks that each owner exists.
+    """
+
+    if not any(key in payload for key in _EDITABLE_ACCOUNT_KEYS):
+        raise ValueError(f"at least one editable field is required: {list(_EDITABLE_ACCOUNT_KEYS)}")
+
+    account_type = AccountType(existing["accountType"])
+    asset_classes: Keep | SetTo[list[AssetClass]] = Keep()
+    loan_terms: FieldChange[LoanTerms] = Keep()
+    match account_type:
+        case AccountType.CHECKING | AccountType.SAVINGS | AccountType.REAL_ESTATE | AccountType.VEHICLE:
+            _reject_keys(payload, account_type, "assetClasses", "loanTerms")
+        case (
+            AccountType.BROKERAGE
+            | AccountType.RETIREMENT_401K
+            | AccountType.RETIREMENT_403B
+            | AccountType.ROTH_IRA
+            | AccountType.TRADITIONAL_IRA
+            | AccountType.HSA
+            | AccountType.PLAN_529
+            | AccountType.PLAN_530A
+            | AccountType.OTHER_ASSET
+        ):
+            _reject_keys(payload, account_type, "loanTerms")
+            if "assetClasses" in payload:
+                asset_classes = SetTo([AssetClass(c) for c in validate_asset_classes(payload["assetClasses"])])
+        case AccountType.MORTGAGE | AccountType.OTHER_LIABILITY:
+            _reject_keys(payload, account_type, "assetClasses")
+            if "loanTerms" in payload:
+                terms = parse_loan_terms(payload["loanTerms"], amortizing=True)
+                loan_terms = Remove() if terms is None else SetTo(terms)
+        case _:
+            assert_never(account_type)
+
+    return UpdateAccountArgs(
+        name=_parse_name_change(payload),
+        owners=SetTo(validate_owners(payload["owners"])) if "owners" in payload else Keep(),
+        excluded_from_net_worth=_parse_bool_change(payload, "excludedFromNetWorth"),
+        sort_order=_parse_sort_order_change(payload),
+        notes=_parse_notes_change(payload),
+        asset_classes=asset_classes,
+        target_year=_resolve_target_year_change(payload, existing, asset_classes),
+        loan_terms=loan_terms,
+    )
+
+
+def _parse_name_change(payload: Mapping[str, Any]) -> Keep | SetTo[str]:
+    """Return the change to `name`. A name must be a string that is not empty."""
+
+    if "name" not in payload:
+        return Keep()
+    name = payload["name"]
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("Account name must not be empty")
+    return SetTo(name.strip())
+
+
+def _parse_bool_change(payload: Mapping[str, Any], key: str) -> Keep | SetTo[bool]:
+    """Return the change to a boolean field."""
+
+    if key not in payload:
+        return Keep()
+    if not isinstance(payload[key], bool):
+        raise ValueError(f"{key} must be a boolean")
+    return SetTo(payload[key])
+
+
+def _parse_sort_order_change(payload: Mapping[str, Any]) -> Keep | SetTo[int]:
+    """Return the change to `sortOrder`."""
+
+    if "sortOrder" not in payload:
+        return Keep()
+    sort_order = payload["sortOrder"]
+    if isinstance(sort_order, bool) or not isinstance(sort_order, int):
+        raise ValueError("sortOrder must be an integer")
+    return SetTo(sort_order)
+
+
+def _parse_notes_change(payload: Mapping[str, Any]) -> FieldChange[str]:
+    """Return the change to `notes`. A null value removes the notes."""
+
+    if "notes" not in payload:
+        return Keep()
+    notes = payload["notes"]
+    if notes is None:
+        return Remove()
+    if not isinstance(notes, str):
+        raise ValueError("notes must be a string or null")
+    return SetTo(notes)
+
+
+def _resolve_target_year_change(
+    payload: Mapping[str, Any], existing: Mapping[str, Any], asset_classes: Keep | SetTo[list[AssetClass]]
+) -> FieldChange[int]:
+    """Return the change to `targetYear`, from the asset classes that the account has after the update.
+
+    With `target_date`, the account needs a year: the one in the body, else the stored one. Without
+    it, a year in the body is an error, and a stored year is removed.
+    """
+
+    classes = asset_classes.value if isinstance(asset_classes, SetTo) else existing.get("assetClasses", [])
+    if AssetClass.TARGET_DATE in classes:
+        year = payload["targetYear"] if "targetYear" in payload else existing.get("targetYear")
+        if year is None:
+            raise ValueError("targetYear is required when target_date is one of the asset classes")
+        return SetTo(validate_target_year(year))
+    if payload.get("targetYear") is not None:
+        raise ValueError("targetYear is only allowed when target_date is an asset class")
+    return Remove() if "targetYear" in existing else Keep()
 
 
 def _reject_keys(payload: Mapping[str, Any], account_type: AccountType, *keys: str) -> None:
