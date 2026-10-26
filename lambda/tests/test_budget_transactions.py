@@ -100,7 +100,7 @@ def _changes(**changes: Any) -> UpdateTransactionArgs:
     fields: dict[str, Any] = {
         "description": Keep(),
         "amount": Keep(),
-        "budgetTreatment": Keep(),
+        "budget_treatment": Keep(),
         "category_id": Keep(),
         "account_id": Keep(),
         "note": Keep(),

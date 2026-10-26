@@ -19,7 +19,7 @@ os.environ.setdefault("STAGE", "test")
 from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
 from corderohq.budget.transaction_args import UpdateTransactionArgs
 from corderohq.budget.treatment import BudgetTreatment, Classification
-from corderohq.common import Keep, Remove, SetTo
+from corderohq.common import Keep, SetTo
 from corderohq.personal_finance_handler import handler
 
 # Stable "now" used across editability-sensitive tests: June 15, 2026 noon UTC.
@@ -2200,7 +2200,7 @@ class TestTransactionBudgetTreatments:
                 amount=Keep(),
                 budget_treatment=SetTo(BudgetTreatment.OFF_BUDGET),
                 category_id=SetTo("cat1"),
-                account_id=Remove(),
+                account_id=Keep(),
                 note=SetTo("trip"),
             ),
         )
