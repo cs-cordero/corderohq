@@ -21,10 +21,7 @@ class BudgetTreatment(StrEnum):
     # A transaction that is not counted towards the budget for whatever reason. The transaction is still saved and
     # recorded, but the summaries for actual expenditures avoid using it. An example of an OFF_BUDGET transaction
     # might be a transaction that was incurred as a work expense and so the household expects to be reimbursed for
-    # that amount. Another example might be the transaction that happens when the household sends payment to a
-    # credit card account from a checking account. At that point, the expenditures are already counted once the
-    # transactions were made on the credit card. Treating this as a BUDGET_IMPACTING transaction would only double
-    # count the money. OFF_BUDGET transactions do not require a budget Category to be set.
+    # that amount. OFF_BUDGET transactions do not require a budget Category to be set.
     OFF_BUDGET = "OFF_BUDGET"
     # Indicates a transaction that should effectively be ignored and unused.
     SKIP = "SKIP"
