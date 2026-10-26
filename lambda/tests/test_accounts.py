@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, assert_never
 
 import pytest
 
@@ -191,9 +191,26 @@ class TestParseCreateAccountArgs:
         with pytest.raises(ValueError, match=f"{key} is not allowed for a {account_type} account"):
             parse_create_account_args(body)
 
-    def test_every_account_type_has_a_case(self) -> None:
-        for account_type in AccountType:
-            parse_create_account_args(_body(account_type.value, assetClasses=["cash"]))
+    @pytest.mark.parametrize("account_type", list(AccountType))
+    def test_the_variant_of_each_type_agrees_with_its_metadata(self, account_type: AccountType) -> None:
+        # The match in parse_create_account_args and the metadata table both decide the kind of
+        # an account. update_account and to_item() read the table, so the two must agree.
+        account = parse_create_account_args(_body(account_type.value, assetClasses=["cash"])).account
+        meta = get_metadata_for_account_type(account_type)
+        match account:
+            case FixedClassAccount():
+                assert meta.fixed_asset_class is not None
+                assert not meta.amortizing
+            case ChosenClassAccount():
+                assert meta.fixed_asset_class is None
+                assert not meta.amortizing
+                assert not meta.is_liability
+            case LoanAccount():
+                assert meta.fixed_asset_class is not None
+                assert meta.amortizing
+                assert meta.is_liability
+            case _:
+                assert_never(account)
 
     @pytest.mark.parametrize("account_type", [None, "chequing"])
     def test_rejects_invalid_account_type(self, account_type: object) -> None:

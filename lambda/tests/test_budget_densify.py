@@ -185,10 +185,10 @@ class _MemoryStore:
     def __init__(self, rows: list[tuple[str, str, object]]) -> None:
         self.rows = list(rows)
 
-    def scan_carry_rows(self) -> list[tuple[str, str, object]]:
+    def scan_stored_values(self) -> list[tuple[str, str, object]]:
         return list(self.rows)
 
-    def put_carry_row(self, year_month: str, key: str, value: object) -> None:
+    def put_stored_value(self, year_month: str, key: str, value: object) -> None:
         self.rows.append((year_month, key, value))
 
 

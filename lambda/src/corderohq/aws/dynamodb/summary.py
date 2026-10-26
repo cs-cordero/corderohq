@@ -75,7 +75,7 @@ def compute_summary(
     # of the nearest earlier row. An inactive category with no target is left out.
     budget_by_category: dict[str, Decimal] = {}
     if is_future:
-        by_key = carry_map(BudgetDensifyAdapter(budget).scan_carry_rows())
+        by_key = carry_map(BudgetDensifyAdapter(budget).scan_stored_values())
         for cat in categories_all:
             cat_id = cat["categoryId"]
             raw = value_at_or_before(by_key, year_month, cat_id)

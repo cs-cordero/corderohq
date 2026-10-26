@@ -9,8 +9,8 @@ from typing import Any, Protocol
 # 240 months, which is 20 years, is far more than any household budget history.
 _MAX_WALKBACK_MONTHS = 240
 
-# One stored row: (yearMonth, key, value).
-CarryRow = tuple[str, str, Any]
+# One stored value, with its month and its key: (yearMonth, key, value).
+StoredValue = tuple[str, str, Any]
 
 
 class DenseSparseStore(Protocol):
@@ -21,12 +21,12 @@ class DenseSparseStore(Protocol):
     Protocol. The densify step uses it to read the stored values and to write each missing value.
     """
 
-    def scan_carry_rows(self) -> list[CarryRow]:
+    def scan_stored_values(self) -> list[StoredValue]:
         """Return each stored value as `(yearMonth, key, value)`."""
 
         ...
 
-    def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
+    def put_stored_value(self, year_month: str, key: str, value: Any) -> None:
         """Store one value. The densify step calls this to fill a missing value."""
 
         ...
@@ -59,7 +59,7 @@ def next_year_month(year_month: str) -> str:
     return f"{year}-{month + 1:02d}"
 
 
-def carry_map(rows: list[CarryRow]) -> dict[tuple[str, str], Any]:
+def carry_map(rows: list[StoredValue]) -> dict[tuple[str, str], Any]:
     """Return the rows as a dict from `(yearMonth, key)` to the value."""
 
     return {(year_month, key): value for year_month, key, value in rows}
@@ -77,7 +77,7 @@ def densify(
     table is empty, each active key gets `cold_start_value` in `current_ym` only. A second call writes nothing.
     """
 
-    rows = store.scan_carry_rows()
+    rows = store.scan_stored_values()
     by_key = carry_map(rows)
 
     past_months = sorted({year_month for year_month, _, _ in rows if year_month <= current_ym})
@@ -85,7 +85,7 @@ def densify(
 
     if m_last is None:
         for key in active_keys:
-            store.put_carry_row(current_ym, key, cold_start_value)
+            store.put_stored_value(current_ym, key, cold_start_value)
         return len(active_keys)
 
     if m_last >= current_ym:
@@ -100,7 +100,7 @@ def densify(
                 continue
             value = walk_back_for(by_key, month, key)
             by_key[(month, key)] = value
-            store.put_carry_row(month, key, value)
+            store.put_stored_value(month, key, value)
             rows_written += 1
 
     return rows_written
@@ -114,7 +114,7 @@ def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: 
     month.
     """
 
-    by_key = carry_map(store.scan_carry_rows())
+    by_key = carry_map(store.scan_stored_values())
     result: list[ResolvedValue] = []
     for key in active_keys:
         if (year_month, key) in by_key:

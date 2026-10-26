@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items
-from corderohq.budget.densify import CarryRow, DenseSparseStore
+from corderohq.budget.densify import StoredValue, DenseSparseStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,12 +93,12 @@ class BudgetDensifyAdapter(DenseSparseStore):
     def __init__(self, budget_table: BudgetTable) -> None:
         self._budget_table = budget_table
 
-    def scan_carry_rows(self) -> list[CarryRow]:
+    def scan_stored_values(self) -> list[StoredValue]:
         """Return every Budget row as `(yearMonth, categoryId, amount)`."""
 
         return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan()]
 
-    def put_carry_row(self, year_month: str, key: str, value: Any) -> None:
+    def put_stored_value(self, year_month: str, key: str, value: Any) -> None:
         """Write one Budget row."""
 
         self._budget_table.set_single_budget_target(year_month, key, value)

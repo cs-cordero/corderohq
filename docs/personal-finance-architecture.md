@@ -59,7 +59,8 @@ lambda/src/corderohq/
                            the budget and the net worth record both use them
     networth/              Profile keys and the snapshot logic of the net worth record
     aws/dynamodb/          One file for each DynamoDB table; __init__.py exports every name
-        util.py            The shared boto3 resource, the budget time zone, scan_pages(), query_pages()
+        util.py            The shared boto3 resource, the budget time zone, and the paging helpers:
+                           scan_all_items() and query_all_items() return every page
         summary.py         compute_summary()
         income_summary.py  compute_income()
         budget.py, budget_audit_log.py, category.py, category_group.py, transactions.py,
@@ -896,10 +897,11 @@ A Budget row and a payment row of the income plan can each hold **two values**:
 
 - **What a month shows:** its this-month-only value if it has one, else its carried value, else
   the carried value from the walk back (`effective_value()` in `budget/densify.py`).
-- **The densify step and the walk back read carried values only.** The carry stores
-  (`BudgetDensifyAdapter`, `IncomePlanDensifyAdapter`) give them through `scan_carry_rows()`, and give the
-  this-month-only values through `scan_only_rows()`. When the densify step fills the carried value
-  of a month, `put_carry_row()` keeps a this-month-only value that the row already has.
+- **The densify step and the walk back read carried values only.** The densify adapters
+  (`BudgetDensifyAdapter`, `IncomePlanDensifyAdapter`) give them through `scan_stored_values()`, and
+  give the this-month-only values through `scan_only_values()`. When the densify step fills the
+  carried value of a month, `put_stored_value()` keeps a this-month-only value that the row already
+  has.
 - **A future month can hold a row with only a this-month-only value,** and no carried value. Such a
   row is not a pin: `pinned` is false, and `downstreamPins` leaves it out.
 - **The writes:**
