@@ -8,7 +8,7 @@ from ulid import ULID
 
 from corderohq.accounts import CreateAccountArgs, UpdateAccountArgs
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, scan_all_items, update_expression
-from corderohq.field_changes import FieldChange, Keep, Remove, SetTo
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class AccountTable:
             "assetClasses": args.asset_classes,
             "targetYear": args.target_year,
             "loanTerms": loan_terms,
-            "budgetRole": args.budget_role,
+            "cashFlowRole": args.cash_flow_role,
             "lastFour": args.last_four,
         }
         response = self._table.update_item(

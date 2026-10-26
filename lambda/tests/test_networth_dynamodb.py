@@ -7,7 +7,7 @@ import pytest
 from corderohq.accounts import (
     AccountType,
     AssetClass,
-    BudgetRole,
+    CashFlowRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
@@ -17,7 +17,7 @@ from corderohq.accounts import (
     UpdateAccountArgs,
 )
 from corderohq.aws.dynamodb import AccountTable, NetWorthSnapshotTable, ProfileTable
-from corderohq.field_changes import Keep, Remove, SetTo
+from corderohq.common import Keep, Remove, SetTo
 
 
 # Same split-fixture trick as test_budget_categories: share one MagicMock as
@@ -174,7 +174,7 @@ def _update_args(**changes: Any) -> UpdateAccountArgs:
         "asset_classes": Keep(),
         "target_year": Keep(),
         "loan_terms": Keep(),
-        "budget_role": Keep(),
+        "cash_flow_role": Keep(),
         "last_four": Keep(),
     }
     return UpdateAccountArgs(**(fields | changes))
@@ -215,10 +215,12 @@ class TestAccountTableUpdate:
 
     def test_sets_and_removes_the_budget_fields(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
-        accounts.update_account("a1", _update_args(budget_role=SetTo(BudgetRole.SPENDING), last_four=Remove()))
+        accounts.update_account("a1", _update_args(cash_flow_role=SetTo(CashFlowRole.SPENDING), last_four=Remove()))
         kwargs = mock.update_item.call_args.kwargs
-        assert kwargs["UpdateExpression"] == "SET updatedAt = :updatedAt, #budgetRole = :budgetRole REMOVE #lastFour"
-        assert kwargs["ExpressionAttributeValues"][":budgetRole"] == "SPENDING"
+        assert kwargs["UpdateExpression"] == (
+            "SET updatedAt = :updatedAt, #cashFlowRole = :cashFlowRole REMOVE #lastFour"
+        )
+        assert kwargs["ExpressionAttributeValues"][":cashFlowRole"] == "SPENDING"
 
     def test_with_no_changes_sets_only_the_time(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}

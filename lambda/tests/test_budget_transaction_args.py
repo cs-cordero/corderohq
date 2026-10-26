@@ -2,7 +2,7 @@ import pytest
 
 from corderohq.budget.dispositions import Disposition
 from corderohq.budget.transactions import UpdateTransactionArgs, parse_update_transaction_args
-from corderohq.field_changes import Keep, Remove, SetTo
+from corderohq.common import Keep, Remove, SetTo
 
 _STORED = {"yearMonth": "2026-03", "sortId": "s", "categoryId": "cat1", "note": "old"}
 

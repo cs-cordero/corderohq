@@ -234,7 +234,7 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | active, sortOrder, and     |
 |                          |                       |            | more. See accounts/.       |
 |                          |                       |            | For the CSV import:        |
-|                          |                       |            | budgetRole (SPENDING /     |
+|                          |                       |            | cashFlowRole (SPENDING /   |
 |                          |                       |            | HOLDING; absent means the  |
 |                          |                       |            | default for the type) and  |
 |                          |                       |            | lastFour (list of 4-digit  |
@@ -1295,11 +1295,11 @@ the claim for that stage.
 
 The CSV import uses two optional fields of an account, which the user sets on the Accounts page:
 
-- `budgetRole`: `SPENDING` or `HOLDING`. Absent means the default for the account type.
+- `cashFlowRole`: `SPENDING` or `HOLDING`. Absent means the default for the account type.
 - `lastFour`: a list of 4-digit strings. The import uses them to find the other side of a
   transfer.
 
-| Account type | Default budget role |
+| Account type | Default cash flow role |
 |---|---|
 | `checking`, `credit_card` | SPENDING |
 | `savings`, `brokerage`, `529`, `530a` | HOLDING |
@@ -1318,7 +1318,7 @@ values of each mortgage and other liability from `other` to `debt`. With `--to-c
 
 ## LLM-Driven CSV Import (`budget/csv_import/`)
 
-Each upload belongs to one **account**, which the user chooses. The account needs a budget role:
+Each upload belongs to one **account**, which the user chooses. The account needs a cash flow role:
 SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, a 529). See **Accounts
 for the Budget**.
 
@@ -1363,7 +1363,7 @@ check in `suggestedBy`:
 4. **LLM.** The kind that the categorization gave the description.
 5. **DEFAULT.** No check gave an answer.
 
-An account with no budget role, such as a mortgage, counts as the outside world.
+An account with no cash flow role, such as a mortgage, counts as the outside world.
 
 ### The direction table
 
@@ -1560,7 +1560,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 ## Key Design Decisions
 
 - **An enum for each fixed set of values** — A set of strings that the app stores or sends is a
-  `StrEnum`, such as `Disposition`, `EditabilityState`, `AuditAction`, `BudgetRole`,
+  `StrEnum`, such as `Disposition`, `EditabilityState`, `AuditAction`, `CashFlowRole`,
   `IncomeLineType`, `PayFrequency`, `DeductionKind`, `TransactionKind`, `SuggestedBy`,
   `ReviewReason`, and `RowIssue`. A member is a `str`, so it compares equal to the stored string,
   and JSON and boto3 write its value. A set that never leaves the process is a plain `Enum`, such

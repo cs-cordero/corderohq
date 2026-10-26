@@ -227,7 +227,7 @@
 ## Accounts
 
 44. Each CSV upload belongs to one account. I choose the account when I upload. The app uses the
-    accounts of the net worth record. Each account that I use for an upload has a **budget role**:
+    accounts of the net worth record. Each account that I use for an upload has a **cash flow role**:
     spending or holding. Each transaction from an upload records its account.
 
 ## Transaction Dispositions
@@ -259,7 +259,7 @@
 ## CSV Import: Dispositions and Data Sent to the LLM
 
 52. The CSV import suggests a disposition for each row, from the direction of the money and the
-    budget roles of the accounts:
+    cash flow roles of the accounts:
 
     | From → to | Example | Suggested disposition |
     |---|---|---|

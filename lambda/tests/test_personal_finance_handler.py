@@ -19,7 +19,7 @@ os.environ.setdefault("STAGE", "test")
 from corderohq.accounts import AccountType, CreateAccountArgs, FixedClassAccount
 from corderohq.budget.dispositions import Disposition
 from corderohq.budget.transactions import UpdateTransactionArgs
-from corderohq.field_changes import Keep, Remove, SetTo
+from corderohq.common import Keep, Remove, SetTo
 from corderohq.personal_finance_handler import handler
 
 # Stable "now" used across editability-sensitive tests: June 15, 2026 noon UTC.

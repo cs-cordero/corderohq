@@ -5,7 +5,7 @@ from dataclasses import dataclass, fields
 from typing import Any
 
 from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition, resolve_disposition_fields
-from corderohq.field_changes import FieldChange, Keep, Remove, SetTo
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 
 
 @dataclass(frozen=True)

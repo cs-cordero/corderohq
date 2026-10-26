@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import boto3
 
-from corderohq.field_changes import FieldChange, Keep, Remove, SetTo
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 
 DYNAMO_RESOURCE = boto3.resource("dynamodb")
 BUDGET_TZ = ZoneInfo("America/New_York")

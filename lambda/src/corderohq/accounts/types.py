@@ -6,7 +6,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Any, NamedTuple
 
-from corderohq.field_changes import FieldChange, Keep, SetTo
+from corderohq.common import FieldChange, Keep, SetTo
 
 
 class AccountType(StrEnum):
@@ -38,8 +38,6 @@ class AssetClass(StrEnum):
     REAL_ESTATE = "real_estate"
     TARGET_DATE = "target_date"
     OTHER = "other"
-    # The class of every liability. Only a liability type has it, as its fixed class. An asset
-    # account can never choose it.
     DEBT = "debt"
 
 
@@ -85,32 +83,32 @@ def get_metadata_for_account_type(account_type: str) -> AccountTypeMeta:
     return _ACCOUNT_TYPE_META[AccountType(account_type)]
 
 
-class BudgetRole(StrEnum):
+class CashFlowRole(StrEnum):
     """Whether an account is where expenses are paid from, or where money is kept."""
 
     SPENDING = "SPENDING"  # checking, a credit card: expenses come from here
     HOLDING = "HOLDING"  # a savings fund, a brokerage, a 529: money sits here
 
 
-_DEFAULT_BUDGET_ROLE: dict[AccountType, BudgetRole] = {
-    AccountType.CHECKING: BudgetRole.SPENDING,
-    AccountType.CREDIT_CARD: BudgetRole.SPENDING,
-    AccountType.SAVINGS: BudgetRole.HOLDING,
-    AccountType.BROKERAGE: BudgetRole.HOLDING,
-    AccountType.PLAN_529: BudgetRole.HOLDING,
-    AccountType.PLAN_530A: BudgetRole.HOLDING,
+_DEFAULT_CASH_FLOW_ROLE: dict[AccountType, CashFlowRole] = {
+    AccountType.CHECKING: CashFlowRole.SPENDING,
+    AccountType.CREDIT_CARD: CashFlowRole.SPENDING,
+    AccountType.SAVINGS: CashFlowRole.HOLDING,
+    AccountType.BROKERAGE: CashFlowRole.HOLDING,
+    AccountType.PLAN_529: CashFlowRole.HOLDING,
+    AccountType.PLAN_530A: CashFlowRole.HOLDING,
 }
 
 
-def budget_role_of(account: Mapping[str, Any]) -> BudgetRole | None:
-    """Return the budget role of a stored account: its own `budgetRole`, else the default for its type."""
+def cash_flow_role_of(account: Mapping[str, Any]) -> CashFlowRole | None:
+    """Return the cash flow role of a stored account: its own `cashFlowRole`, else the default for its type."""
 
-    explicit = account.get("budgetRole")
-    if isinstance(explicit, str) and explicit in BudgetRole:
-        return BudgetRole(explicit)
+    explicit = account.get("cashFlowRole")
+    if isinstance(explicit, str) and explicit in CashFlowRole:
+        return CashFlowRole(explicit)
     account_type = account.get("accountType")
     if isinstance(account_type, str) and account_type in AccountType:
-        return _DEFAULT_BUDGET_ROLE.get(AccountType(account_type))
+        return _DEFAULT_CASH_FLOW_ROLE.get(AccountType(account_type))
     return None
 
 
@@ -217,5 +215,5 @@ class UpdateAccountArgs:
     asset_classes: Keep | SetTo[list[AssetClass]]
     target_year: FieldChange[int]
     loan_terms: FieldChange[LoanTerms]
-    budget_role: FieldChange[BudgetRole]
+    cash_flow_role: FieldChange[CashFlowRole]
     last_four: FieldChange[list[str]]

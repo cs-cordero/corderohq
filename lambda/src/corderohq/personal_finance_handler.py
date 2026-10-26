@@ -33,7 +33,7 @@ from corderohq.budget.dispositions import (
 )
 from corderohq.budget.editability import EditabilityState, editability
 from corderohq.budget.transactions import parse_update_transaction_args
-from corderohq.field_changes import Keep, Remove, SetTo
+from corderohq.common import Keep, Remove, SetTo
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 

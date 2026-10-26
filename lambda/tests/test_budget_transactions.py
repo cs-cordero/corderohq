@@ -6,7 +6,7 @@ import pytest
 from corderohq.aws.dynamodb import TransactionsTable
 from corderohq.budget.dispositions import Disposition
 from corderohq.budget.transactions import UpdateTransactionArgs
-from corderohq.field_changes import Keep, Remove, SetTo
+from corderohq.common import Keep, Remove, SetTo
 
 
 # `mock` and `table` are split into two fixtures sharing the same MagicMock instance

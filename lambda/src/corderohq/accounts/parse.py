@@ -6,7 +6,7 @@ from typing import Any, assert_never
 from corderohq.accounts.types import (
     AccountType,
     AssetClass,
-    BudgetRole,
+    CashFlowRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
@@ -15,7 +15,7 @@ from corderohq.accounts.types import (
     NewAccount,
     UpdateAccountArgs,
 )
-from corderohq.field_changes import FieldChange, Keep, Remove, SetTo
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 from corderohq.util import YEAR_MONTH_PATTERN
 
 _LOAN_TERMS_FIELDS = ("interestRate", "monthlyPayment", "payoffYearMonth")
@@ -28,7 +28,7 @@ _EDITABLE_ACCOUNT_KEYS = (
     "loanTerms",
     "notes",
     "sortOrder",
-    "budgetRole",
+    "cashFlowRole",
     "lastFour",
 )
 _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
@@ -148,17 +148,17 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
         asset_classes=asset_classes,
         target_year=_resolve_target_year_change(payload, existing, asset_classes),
         loan_terms=loan_terms,
-        budget_role=_parse_budget_role_change(payload),
+        cash_flow_role=_parse_cash_flow_role_change(payload),
         last_four=_parse_last_four_change(payload),
     )
 
 
-def _parse_budget_role_change(payload: Mapping[str, Any]) -> FieldChange[BudgetRole]:
-    """Return the change to `budgetRole`. A null value removes it, and the type default applies."""
+def _parse_cash_flow_role_change(payload: Mapping[str, Any]) -> FieldChange[CashFlowRole]:
+    """Return the change to `cashFlowRole`. A null value removes it, and the type default applies."""
 
-    if "budgetRole" not in payload:
+    if "cashFlowRole" not in payload:
         return Keep()
-    role = validate_budget_role(payload["budgetRole"])
+    role = validate_cash_flow_role(payload["cashFlowRole"])
     return Remove() if role is None else SetTo(role)
 
 
@@ -344,15 +344,15 @@ def validate_loan_terms(loan_terms: Any, amortizing: bool) -> dict[str, Any] | N
     }
 
 
-def validate_budget_role(value: Any) -> BudgetRole | None:
-    """Return the budget role, or None for a null value. Raise ValueError for an unknown role."""
+def validate_cash_flow_role(value: Any) -> CashFlowRole | None:
+    """Return the cash flow role, or None for a null value. Raise ValueError for an unknown role."""
 
     if value is None:
         return None
     try:
-        return BudgetRole(value)
+        return CashFlowRole(value)
     except ValueError:
-        raise ValueError(f"budgetRole must be one of {[r.value for r in BudgetRole]} or null") from None
+        raise ValueError(f"cashFlowRole must be one of {[r.value for r in CashFlowRole]} or null") from None
 
 
 def validate_last_four(value: Any) -> list[str]:

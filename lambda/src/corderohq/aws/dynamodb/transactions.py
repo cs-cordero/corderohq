@@ -9,7 +9,7 @@ from ulid import ULID
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
 from corderohq.budget.dispositions import DISPOSITION_ATTRIBUTES, Disposition
 from corderohq.budget.transactions import UpdateTransactionArgs
-from corderohq.field_changes import FieldChange
+from corderohq.common import FieldChange
 
 _LOGGER = logging.getLogger(__name__)
 

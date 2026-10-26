@@ -5,14 +5,14 @@ import pytest
 from corderohq.accounts import (
     AccountType,
     AssetClass,
-    BudgetRole,
+    CashFlowRole,
     ChosenClassAccount,
     CreateAccountArgs,
     FixedClassAccount,
     LoanAccount,
     LoanTerms,
     UpdateAccountArgs,
-    budget_role_of,
+    cash_flow_role_of,
     get_metadata_for_account_type,
     parse_create_account_args,
     parse_loan_terms,
@@ -21,13 +21,13 @@ from corderohq.accounts import (
     validate_account_type,
     validate_asset_class,
     validate_asset_classes,
-    validate_budget_role,
+    validate_cash_flow_role,
     validate_last_four,
     validate_loan_terms,
     validate_owners,
     validate_target_year,
 )
-from corderohq.field_changes import Keep, Remove, SetTo
+from corderohq.common import Keep, Remove, SetTo
 
 
 class TestEnumValues:
@@ -269,7 +269,7 @@ class TestParseUpdateAccountArgs:
             asset_classes=Keep(),
             target_year=Keep(),
             loan_terms=Keep(),
-            budget_role=Keep(),
+            cash_flow_role=Keep(),
             last_four=Keep(),
         )
 
@@ -373,7 +373,7 @@ class TestLiabilities:
             parse_create_account_args(_body("brokerage", assetClasses=["cash", "debt"]))
 
 
-class TestBudgetRole:
+class TestCashFlowRole:
     @pytest.mark.parametrize(
         ("account_type", "expected"),
         [
@@ -389,24 +389,24 @@ class TestBudgetRole:
         ],
     )
     def test_default_for_each_type(self, account_type: str, expected: str | None) -> None:
-        assert budget_role_of({"accountType": account_type}) == expected
+        assert cash_flow_role_of({"accountType": account_type}) == expected
 
     def test_explicit_role_wins(self) -> None:
-        assert budget_role_of({"accountType": "other_liability", "budgetRole": "SPENDING"}) == "SPENDING"
-        assert budget_role_of({"accountType": "savings", "budgetRole": "SPENDING"}) == "SPENDING"
+        assert cash_flow_role_of({"accountType": "other_liability", "cashFlowRole": "SPENDING"}) == "SPENDING"
+        assert cash_flow_role_of({"accountType": "savings", "cashFlowRole": "SPENDING"}) == "SPENDING"
 
-    def test_validate_budget_role(self) -> None:
-        assert validate_budget_role("HOLDING") == "HOLDING"
-        assert validate_budget_role(None) is None
-        with pytest.raises(ValueError, match="budgetRole must be one of"):
-            validate_budget_role("spending")
+    def test_validate_cash_flow_role(self) -> None:
+        assert validate_cash_flow_role("HOLDING") == "HOLDING"
+        assert validate_cash_flow_role(None) is None
+        with pytest.raises(ValueError, match="cashFlowRole must be one of"):
+            validate_cash_flow_role("spending")
 
     def test_update_sets_and_removes_the_budget_fields(self) -> None:
-        args = parse_update_account_args({"budgetRole": "SPENDING", "lastFour": ["1234"]}, _stored("other_liability"))
-        assert args.budget_role == SetTo(BudgetRole.SPENDING)
+        args = parse_update_account_args({"cashFlowRole": "SPENDING", "lastFour": ["1234"]}, _stored("other_liability"))
+        assert args.cash_flow_role == SetTo(CashFlowRole.SPENDING)
         assert args.last_four == SetTo(["1234"])
-        args = parse_update_account_args({"budgetRole": None, "lastFour": []}, _stored("other_liability"))
-        assert args.budget_role == Remove()
+        args = parse_update_account_args({"cashFlowRole": None, "lastFour": []}, _stored("other_liability"))
+        assert args.cash_flow_role == Remove()
         assert args.last_four == Remove()
 
 
