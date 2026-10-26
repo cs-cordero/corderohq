@@ -1315,8 +1315,8 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
 def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
     """Change the given fields of an account.
 
-    See `AccountTable.update` for the editable fields. The handler ignores `accountType` and `liability`, because they
-    cannot change.
+    See `AccountTable.update_account` for the editable fields. The handler ignores `accountType` and
+    `liability`, because they cannot change.
     """
 
     body = _parse_json_body(event)
@@ -1344,7 +1344,7 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
         updates["owners"] = owners
 
     try:
-        item = _ACCOUNT_TABLE.update(account_id, updates)
+        item = _ACCOUNT_TABLE.update_account(account_id, updates)
     except ValueError as e:
         return _response(400, str(e))
     if item is None:

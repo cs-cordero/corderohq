@@ -164,7 +164,7 @@ class TestAccountTableCreate:
 class TestAccountTableUpdate:
     def test_returns_none_when_absent(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
-        assert accounts.update("nope", {"name": "X"}) is None
+        assert accounts.update_account("nope", {"name": "X"}) is None
 
     def test_updates_name_and_asset_class_on_choose_type(self, accounts: AccountTable, mock: MagicMock) -> None:
         # Brokerage is a "choose" type, so its asset class is editable.
@@ -173,7 +173,7 @@ class TestAccountTableUpdate:
         }
         mock.scan.return_value = {"Items": [{"accountId": "a1", "name": "Old", "sortOrder": 0}]}
         mock.update_item.return_value = {"Attributes": {"accountId": "a1", "name": "New"}}
-        accounts.update("a1", {"name": "New", "assetClasses": ["bonds", "cash"]})
+        accounts.update_account("a1", {"name": "New", "assetClasses": ["bonds", "cash"]})
         kwargs = mock.update_item.call_args.kwargs
         expr = kwargs["UpdateExpression"]
         assert "assetClasses = :ac" in expr
@@ -187,7 +187,7 @@ class TestAccountTableUpdate:
             "Item": {"accountId": "a1", "name": "A", "accountType": "checking", "liability": False}
         }
         with pytest.raises(ValueError, match="assetClasses is fixed"):
-            accounts.update("a1", {"assetClasses": ["us_equity_large_cap"]})
+            accounts.update_account("a1", {"assetClasses": ["us_equity_large_cap"]})
 
     def test_adding_target_date_requires_year(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {
@@ -195,7 +195,7 @@ class TestAccountTableUpdate:
         }
         mock.scan.return_value = {"Items": [{"accountId": "a1", "name": "A", "sortOrder": 0}]}
         with pytest.raises(ValueError, match="targetYear is required"):
-            accounts.update("a1", {"assetClasses": ["target_date"]})
+            accounts.update_account("a1", {"assetClasses": ["target_date"]})
 
     def test_removing_target_date_clears_stale_year(self, accounts: AccountTable, mock: MagicMock) -> None:
         # Account had target_date + a year; switching classes to cash drops the year.
@@ -210,7 +210,7 @@ class TestAccountTableUpdate:
         }
         mock.scan.return_value = {"Items": [{"accountId": "a1", "name": "A", "sortOrder": 0}]}
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
-        accounts.update("a1", {"assetClasses": ["cash"]})
+        accounts.update_account("a1", {"assetClasses": ["cash"]})
         kwargs = mock.update_item.call_args.kwargs
         assert "REMOVE" in kwargs["UpdateExpression"]
         assert "targetYear" in kwargs["UpdateExpression"]
@@ -220,7 +220,7 @@ class TestAccountTableUpdate:
             "Item": {"accountId": "a1", "name": "A", "accountType": "brokerage", "liability": False, "owners": ["p1"]}
         }
         mock.update_item.return_value = {"Attributes": {"accountId": "a1", "name": "A", "owners": ["p1", "p2"]}}
-        accounts.update("a1", {"owners": ["p1", "p2"]})
+        accounts.update_account("a1", {"owners": ["p1", "p2"]})
         kwargs = mock.update_item.call_args.kwargs
         assert "#ow = :owners" in kwargs["UpdateExpression"]
         assert kwargs["ExpressionAttributeNames"]["#ow"] == "owners"
@@ -231,7 +231,7 @@ class TestAccountTableUpdate:
             "Item": {"accountId": "a1", "name": "A", "accountType": "brokerage", "excludedFromNetWorth": False}
         }
         mock.update_item.return_value = {"Attributes": {"accountId": "a1", "excludedFromNetWorth": True}}
-        accounts.update("a1", {"excludedFromNetWorth": True})
+        accounts.update_account("a1", {"excludedFromNetWorth": True})
         kwargs = mock.update_item.call_args.kwargs
         assert "excludedFromNetWorth = :exc" in kwargs["UpdateExpression"]
         assert kwargs["ExpressionAttributeValues"][":exc"] is True
@@ -239,14 +239,14 @@ class TestAccountTableUpdate:
     def test_rejects_non_bool_excluded_flag(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {"Item": {"accountId": "a1", "name": "A", "accountType": "brokerage"}}
         with pytest.raises(ValueError, match="excludedFromNetWorth must be a boolean"):
-            accounts.update("a1", {"excludedFromNetWorth": "yes"})
+            accounts.update_account("a1", {"excludedFromNetWorth": "yes"})
 
     def test_rejects_empty_owners_on_update(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {
             "Item": {"accountId": "a1", "name": "A", "accountType": "brokerage", "owners": ["p1"]}
         }
         with pytest.raises(ValueError, match="owners must be a non-empty list"):
-            accounts.update("a1", {"owners": []})
+            accounts.update_account("a1", {"owners": []})
 
     def test_loan_terms_rejected_on_non_amortizing_type(self, accounts: AccountTable, mock: MagicMock) -> None:
         # Brokerage is not amortizing, so setting loanTerms must be rejected.
@@ -255,7 +255,7 @@ class TestAccountTableUpdate:
         }
         terms = {"interestRate": 0.04, "monthlyPayment": 1, "payoffYearMonth": "2030-01"}
         with pytest.raises(ValueError, match="only allowed on amortizing"):
-            accounts.update("a1", {"loanTerms": terms})
+            accounts.update_account("a1", {"loanTerms": terms})
 
     def test_rejects_duplicate_name_excluding_self(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {
@@ -268,7 +268,7 @@ class TestAccountTableUpdate:
             ]
         }
         with pytest.raises(ValueError, match="already exists"):
-            accounts.update("a1", {"name": "taken"})
+            accounts.update_account("a1", {"name": "taken"})
 
 
 class TestAccountTableMisc:

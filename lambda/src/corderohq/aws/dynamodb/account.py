@@ -77,7 +77,7 @@ class AccountTable:
         _LOGGER.info("Created account: %s (%s)", item["name"], item["accountId"])
         return item
 
-    def update(self, account_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
+    def update_account(self, account_id: str, updates: dict[str, Any]) -> dict[str, Any] | None:
         """Change the given fields of an account. Return the updated item, or None if it does not exist.
 
         The editable fields are name, assetClasses, owners, excludedFromNetWorth, targetYear,

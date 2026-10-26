@@ -1814,35 +1814,35 @@ class TestPostAccount:
 class TestPutAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_updates_fields(self, mock_at: MagicMock) -> None:
-        mock_at.update.return_value = {"accountId": "a1", "name": "Renamed"}
+        mock_at.update_account.return_value = {"accountId": "a1", "name": "Renamed"}
         result = handler(
             _make_event("PUT", "/api/accounts/a1", body={"name": "Renamed", "sortOrder": 3}),
             None,
         )
         assert result["statusCode"] == 200
-        account_id, updates = mock_at.update.call_args.args
+        account_id, updates = mock_at.update_account.call_args.args
         assert account_id == "a1"
         assert updates == {"name": "Renamed", "sortOrder": 3}
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_updates_excluded_from_net_worth(self, mock_at: MagicMock) -> None:
-        mock_at.update.return_value = {"accountId": "a1", "name": "A"}
+        mock_at.update_account.return_value = {"accountId": "a1", "name": "A"}
         result = handler(_make_event("PUT", "/api/accounts/a1", body={"excludedFromNetWorth": True}), None)
         assert result["statusCode"] == 200
-        _, updates = mock_at.update.call_args.args
+        _, updates = mock_at.update_account.call_args.args
         assert updates == {"excludedFromNetWorth": True}
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_account_type_and_liability_are_ignored(self, mock_at: MagicMock) -> None:
         # accountType and liability are immutable; the handler drops them from the
         # editable set, so only `name` reaches the table wrapper.
-        mock_at.update.return_value = {"accountId": "a1", "name": "X"}
+        mock_at.update_account.return_value = {"accountId": "a1", "name": "X"}
         result = handler(
             _make_event("PUT", "/api/accounts/a1", body={"name": "X", "accountType": "mortgage", "liability": True}),
             None,
         )
         assert result["statusCode"] == 200
-        _, updates = mock_at.update.call_args.args
+        _, updates = mock_at.update_account.call_args.args
         assert updates == {"name": "X"}
 
     def test_empty_body_returns_400(self) -> None:
@@ -1853,10 +1853,10 @@ class TestPutAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_updates_owners(self, mock_at: MagicMock, mock_pt: MagicMock) -> None:
         mock_pt.get_person.return_value = {"personId": "x", "name": "Someone"}
-        mock_at.update.return_value = {"accountId": "a1", "name": "A"}
+        mock_at.update_account.return_value = {"accountId": "a1", "name": "A"}
         result = handler(_make_event("PUT", "/api/accounts/a1", body={"owners": ["p1", "p2"]}), None)
         assert result["statusCode"] == 200
-        _, updates = mock_at.update.call_args.args
+        _, updates = mock_at.update_account.call_args.args
         assert updates == {"owners": ["p1", "p2"]}
 
     @patch("corderohq.personal_finance_handler._PROFILE_TABLE")
@@ -1867,7 +1867,7 @@ class TestPutAccount:
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_missing_account_returns_404(self, mock_at: MagicMock) -> None:
-        mock_at.update.return_value = None
+        mock_at.update_account.return_value = None
         result = handler(_make_event("PUT", "/api/accounts/nope", body={"name": "X"}), None)
         assert result["statusCode"] == 404
 
