@@ -19,21 +19,28 @@ _DEFAULT_CASH_FLOW_ROLE: dict[AccountType, CashFlowRole] = {
     AccountType.CREDIT_CARD: CashFlowRole.SPENDING,
     AccountType.SAVINGS: CashFlowRole.HOLDING,
     AccountType.BROKERAGE: CashFlowRole.HOLDING,
+    AccountType.RETIREMENT_401K: CashFlowRole.HOLDING,
+    AccountType.RETIREMENT_403B: CashFlowRole.HOLDING,
+    AccountType.ROTH_IRA: CashFlowRole.HOLDING,
+    AccountType.TRADITIONAL_IRA: CashFlowRole.HOLDING,
+    AccountType.HSA: CashFlowRole.HOLDING,
     AccountType.PLAN_529: CashFlowRole.HOLDING,
     AccountType.PLAN_530A: CashFlowRole.HOLDING,
+    AccountType.OTHER_ASSET: CashFlowRole.HOLDING,
+    AccountType.MORTGAGE: CashFlowRole.EXTERNAL,
+    AccountType.OTHER_LIABILITY: CashFlowRole.EXTERNAL,
+    AccountType.REAL_ESTATE: CashFlowRole.NON_CASH,
+    AccountType.VEHICLE: CashFlowRole.NON_CASH,
 }
 
 
-def get_cash_flow_role(account: Mapping[str, Any]) -> CashFlowRole | None:
+def get_cash_flow_role(account: Mapping[str, Any]) -> CashFlowRole:
     """Return the cash flow role of a stored account: its own `cashFlowRole`, else the default for its type."""
 
     explicit = account.get("cashFlowRole")
     if isinstance(explicit, str) and explicit in CashFlowRole:
         return CashFlowRole(explicit)
-    account_type = account.get("accountType")
-    if isinstance(account_type, str) and account_type in AccountType:
-        return _DEFAULT_CASH_FLOW_ROLE.get(AccountType(account_type))
-    return None
+    return _DEFAULT_CASH_FLOW_ROLE[AccountType(account["accountType"])]
 
 
 class AccountTable:

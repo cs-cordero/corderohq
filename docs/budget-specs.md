@@ -227,8 +227,9 @@
 ## Accounts
 
 44. Each CSV upload belongs to one account. I choose the account when I upload. The app uses the
-    accounts of the net worth record. Each account that I use for an upload has a **cash flow role**:
-    spending or holding. Each transaction from an upload records its account.
+    accounts of the net worth record. Each account has a **cash flow role**: spending, holding,
+    external, or non-cash. An account that I use for an upload is spending or holding. Each
+    transaction from an upload records its account.
 
 ## Transaction Dispositions
 

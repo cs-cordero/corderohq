@@ -99,7 +99,9 @@ class CashFlowRole(StrEnum):
     """
 
     SPENDING = "SPENDING"  # checking, a credit card: expenses come from here
-    HOLDING = "HOLDING"  # a savings fund, a brokerage, a 529: money sits here
+    HOLDING = "HOLDING"  # a savings fund, a brokerage, an IRA: money sits here
+    EXTERNAL = "EXTERNAL"  # a mortgage, a loan: money that goes here leaves the household
+    NON_CASH = "NON_CASH"  # a house, a car: it holds value, but no money moves in or out
 
 
 @dataclass(frozen=True)

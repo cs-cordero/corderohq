@@ -217,9 +217,9 @@ goal is `$0`. The summary page and the Allocations page show it.
    want to budget, add a one-time income line in that month. Extra money with no line is not part
    of the plan.
 4. **Set up the accounts for uploads.** On the Accounts page, each account that takes a CSV upload
-   needs a cash flow role. Checking and credit card accounts are "Spending" by default. Savings,
-   brokerage, and 529 accounts are "Holding" by default. Add the last four digits of each account,
-   so that the upload can find a transfer to it.
+   needs the cash flow role "Spending" or "Holding". Checking and credit card accounts are "Spending"
+   by default. Savings, brokerage, retirement, HSA, and 529 accounts are "Holding" by default. Add
+   the last four digits of each account, so that the upload can find a transfer to it.
 5. **Upload a CSV.** On the Upload page, choose the account of the file first. The review screen
    suggests a type for each row: Budget, Off-budget, or Skip. Look at the first list ("Look at
    these first"), change what is wrong, and commit. A row that you uploaded before starts

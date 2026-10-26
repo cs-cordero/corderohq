@@ -120,13 +120,21 @@ class TestGetCashFlowRole:
             ("brokerage", "HOLDING"),
             ("529", "HOLDING"),
             ("530a", "HOLDING"),
-            ("401k", None),
-            ("mortgage", None),
-            ("other_liability", None),
+            ("401k", "HOLDING"),
+            ("hsa", "HOLDING"),
+            ("other_asset", "HOLDING"),
+            ("mortgage", "EXTERNAL"),
+            ("other_liability", "EXTERNAL"),
+            ("real_estate", "NON_CASH"),
+            ("vehicle", "NON_CASH"),
         ],
     )
-    def test_default_for_each_type(self, account_type: str, expected: str | None) -> None:
+    def test_default_for_each_type(self, account_type: str, expected: str) -> None:
         assert get_cash_flow_role({"accountType": account_type}) == expected
+
+    @pytest.mark.parametrize("account_type", list(AccountType))
+    def test_every_account_type_has_a_default(self, account_type: AccountType) -> None:
+        assert get_cash_flow_role({"accountType": account_type.value}) in CashFlowRole
 
     def test_explicit_role_wins(self) -> None:
         assert get_cash_flow_role({"accountType": "other_liability", "cashFlowRole": "SPENDING"}) == "SPENDING"

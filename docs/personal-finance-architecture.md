@@ -235,7 +235,8 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | more. See accounts/.       |
 |                          |                       |            | For the CSV import:        |
 |                          |                       |            | cashFlowRole (SPENDING /   |
-|                          |                       |            | HOLDING; absent means the  |
+|                          |                       |            | HOLDING / EXTERNAL /       |
+|                          |                       |            | NON_CASH; absent means the |
 |                          |                       |            | default for the type) and  |
 |                          |                       |            | lastFour (list of 4-digit  |
 |                          |                       |            | strings). Every liability  |
@@ -1295,15 +1296,19 @@ the claim for that stage.
 
 The CSV import uses two optional fields of an account, which the user sets on the Accounts page:
 
-- `cashFlowRole`: `SPENDING` or `HOLDING`. Absent means the default for the account type.
+- `cashFlowRole`: `SPENDING`, `HOLDING`, `EXTERNAL`, or `NON_CASH`. Absent means the default for the
+  account type, so every account has a role.
 - `lastFour`: a list of 4-digit strings. The import uses them to find the other side of a
   transfer.
 
 | Account type | Default cash flow role |
 |---|---|
-| `checking`, `credit_card` | SPENDING |
-| `savings`, `brokerage`, `529`, `530a` | HOLDING |
-| All other types | none. The account cannot take a CSV upload until the user sets a role. |
+| `checking`, `credit_card` | SPENDING: expenses are paid from it |
+| `savings`, `brokerage`, `529`, `530a`, `401k`, `403b`, `roth_ira`, `traditional_ira`, `hsa`, `other_asset` | HOLDING: money is kept in it |
+| `mortgage`, `other_liability` | EXTERNAL: money that goes to it leaves the household |
+| `real_estate`, `vehicle` | NON_CASH: it holds value, but no money moves in or out |
+
+Only a SPENDING or HOLDING account can take a CSV upload.
 
 **The `credit_card` type and the `debt` class.** A credit card is a liability with the fixed asset
 class `debt`, and it has no loan terms. `debt` is the fixed class of every liability: `mortgage`,
@@ -1318,8 +1323,8 @@ values of each mortgage and other liability from `other` to `debt`. With `--to-c
 
 ## LLM-Driven CSV Import (`budget/csv_import/`)
 
-Each upload belongs to one **account**, which the user chooses. The account needs a cash flow role:
-SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, a 529). See **Accounts
+Each upload belongs to one **account**, which the user chooses. The account needs the cash flow role
+SPENDING (checking, a credit card) or HOLDING (a savings fund, a brokerage, an IRA). See **Accounts
 for the Budget**.
 
 The upload sends as little data as possible to the Anthropic API. Each call reads the API key from
@@ -1363,7 +1368,7 @@ check in `suggestedBy`:
 4. **LLM.** The kind that the categorization gave the description.
 5. **DEFAULT.** No check gave an answer.
 
-An account with no cash flow role, such as a mortgage, counts as the outside world.
+An EXTERNAL or NON_CASH account, such as a mortgage, counts as the outside world.
 
 ### The direction table
 
