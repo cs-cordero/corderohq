@@ -212,7 +212,7 @@ class TestParseRecurringIncomeChanges:
             ({"action": "STOP"}, "STOP needs plannedIncomeId"),
             ({"action": "UNPIN"}, "UNPIN needs plannedIncomeId"),
             ({"action": "DROP", "plannedIncomeId": "REC#a"}, "action must be one of"),
-            ({"action": "STOP", "plannedIncomeId": "ONE#a"}, "must be the id of a recurring income"),
+            ({"action": "STOP", "plannedIncomeId": "ONE#a"}, "plannedIncomeId must be the id of a recurring income"),
             ({"action": "SET"}, "recurringIncome must be an object"),
         ],
     )
@@ -542,6 +542,7 @@ class TestDeactivateIncomeSource:
             _recurring_item(_CURRENT, "REC#a"),
             _recurring_item(_FUTURE, "REC#a", _RAISED_BODY),
         ]
+        tables["source"].set_active.return_value = _source("s1", active=False)
         body = {"explanation": "job ended"}
         result = handler(_event("POST", "/api/income-sources/s1/deactivate", body), None)
         assert result["statusCode"] == 409
