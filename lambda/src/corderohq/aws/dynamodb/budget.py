@@ -10,13 +10,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class BudgetTable:
-    """Monthly budget target management.
-
-    A row can hold two targets. `amount` is the **carried** target: later months copy it. A
-    `null` amount means "no target". `onlyAmount` is an optional **this-month-only** target: only
-    this month uses it, and it never carries forward. A future month can hold a row with only
-    `onlyAmount`, and no `amount` attribute at all.
-    """
+    """Monthly budget target management."""
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -29,11 +23,7 @@ class BudgetTable:
         )
 
     def set_all_budget_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Set the budget targets for one month. This writes over every target in that month.
-
-        Each target has `categoryId` and `amount`, and an optional `onlyAmount`. An `onlyAmount` of
-        None is not stored.
-        """
+        """Set the budget targets for one month. This writes over every target in that month."""
 
         existing = self.get_budget_targets(year_month)
         with self._table.batch_writer() as batch:
@@ -105,10 +95,7 @@ class BudgetTable:
 
 
 class BudgetDensifyAdapter(DenseSparseStore):
-    """Implements the DenseSparseStore protocol for the BudgetTable class.
-
-    The carried value of a row is `amount`, and its this-month-only value is `onlyAmount`.
-    """
+    """Implements the DenseSparseStore protocol for the BudgetTable class."""
 
     def __init__(self, budget_table: BudgetTable) -> None:
         self._budget_table = budget_table
