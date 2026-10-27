@@ -19,10 +19,10 @@ _EDITABLE_INCOME_SOURCE_KEYS = ("label", "owners")
 
 
 class PlannedIncomeKind(StrEnum):
-    """The kind of a planned income. The value is stored in `PlannedIncome.kind`."""
+    """The kind of a planned income."""
 
-    RECURRING = "RECURRING"  # plannedIncomeId "REC#{ULID}"; carries forward
-    ONE_TIME = "ONE_TIME"  # plannedIncomeId "ONE#{ULID}"; this month only
+    RECURRING = "RECURRING"
+    ONE_TIME = "ONE_TIME"
 
 
 class PayFrequency(StrEnum):
@@ -37,8 +37,10 @@ class PayFrequency(StrEnum):
     def times_per_month(self) -> int:
         """The number of times that the plan counts the income in each month.
 
-        It is an estimate. A weekly income pays 5 times in some months, and a biweekly income pays 3 times in two
-        months of each year.
+        Budgeting is a monthly endeavor. Pay frequencies of bi-weekly and weekly do not fit this cleanly: some months
+        in a bi-weekly schedule will receive 3 payments instead of 2. Some months in a weekly schedule will receive 5
+        payments instead of 4. For smoothing purposes, we floor the times_per_month for all frequencies, which provides
+        a consistent assumed income from month to month.
         """
 
         match self:
@@ -53,18 +55,22 @@ class PayFrequency(StrEnum):
 
 
 class DeductionKind(StrEnum):
-    """The kind of a deduction. For display only. No calculation uses it."""
+    """Amounts that reduce gross pay immediately from a paycheck."""
 
+    # A tax that is withheld from the payment, such as federal income tax or Social Security tax.
     TAX = "TAX"
+    # Savings that come out before tax, such as a traditional 401k contribution or an HSA contribution.
     PRETAX_SAVINGS = "PRETAX_SAVINGS"
+    # A benefit that is paid for before tax, such as a medical insurance premium or a DCFSA contribution.
     PRETAX_BENEFIT = "PRETAX_BENEFIT"
+    # Savings that come out after tax, such as a Roth 401k contribution.
     POSTTAX_SAVINGS = "POSTTAX_SAVINGS"
 
 
 class RecurringIncomeAction(StrEnum):
-    """What one entry of a `/replace` or `/pin` body does to a recurring income."""
+    """Identifies the type of update a user can make to a RecurringIncome."""
 
-    SET = "SET"  # set the value; with no plannedIncomeId, create a new recurring income
+    SET = "SET"
     STOP = "STOP"  # stop the recurring income from this month on
     UNPIN = "UNPIN"  # remove the entry of a future month, which is a pin or a stop
 
@@ -85,7 +91,7 @@ class Deduction:
 
 @dataclass(frozen=True)
 class RecurringIncome:
-    """An income that repeats each month, such as a salary or the rent of a property. Later months copy it.
+    """An income that repeats each month, such as a salary or the rent of a property.
 
     `gross` and each deduction are for one payment. The frequency sets the number of payments in the month.
     """
