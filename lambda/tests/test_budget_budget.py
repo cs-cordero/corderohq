@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 
-from corderohq.aws.dynamodb import BudgetTable
+from corderohq.aws.dynamodb import BudgetTable, BudgetTargetAmounts
 
 
 def _make_table() -> tuple[BudgetTable, MagicMock]:
@@ -22,7 +22,7 @@ class TestGetTargets:
         table, mock = _make_table()
         mock.query.return_value = {
             "Items": [
-                {"yearMonth": "2026-03", "categoryId": "cat1", "amount": 500000000},
+                {"yearMonth": "2026-03", "categoryId": "cat1", "carriedAmount": 500000000},
             ]
         }
         result = table.get_budget_targets("2026-03")
@@ -42,21 +42,24 @@ class TestPutTargets:
         batch_mock = MagicMock()
         mock.batch_writer.return_value.__enter__ = MagicMock(return_value=batch_mock)
         mock.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
-        mock.query.return_value = {"Items": [{"yearMonth": "2026-03", "categoryId": "old_cat", "amount": 100}]}
+        mock.query.return_value = {"Items": [{"yearMonth": "2026-03", "categoryId": "old_cat", "carriedAmount": 100}]}
 
-        result = table.set_all_budget_targets("2026-03", [{"categoryId": "new_cat", "amount": 200}])
+        result = table.set_all_budget_targets("2026-03", {"new_cat": BudgetTargetAmounts(carried_amount=200)})
 
         assert len(result) == 1
         assert result[0]["categoryId"] == "new_cat"
-        assert result[0]["amount"] == 200
+        assert result[0]["carriedAmount"] == 200
 
 
 class TestScan:
     def test_paginates_through_all_items(self) -> None:
         table, mock = _make_table()
         mock.scan.side_effect = [
-            {"Items": [{"yearMonth": "2026-03", "categoryId": "a", "amount": 100}], "LastEvaluatedKey": {"k": "v"}},
-            {"Items": [{"yearMonth": "2026-04", "categoryId": "b", "amount": 200}]},
+            {
+                "Items": [{"yearMonth": "2026-03", "categoryId": "a", "carriedAmount": 100}],
+                "LastEvaluatedKey": {"k": "v"},
+            },
+            {"Items": [{"yearMonth": "2026-04", "categoryId": "b", "carriedAmount": 200}]},
         ]
         result = table.scan()
         assert len(result) == 2
@@ -71,8 +74,8 @@ class TestScan:
 class TestSetSingleBudgetTarget:
     def test_writes_one_row(self) -> None:
         table, mock = _make_table()
-        table.set_single_budget_target("2026-03", "cat1", 500)
-        mock.put_item.assert_called_once_with(Item={"yearMonth": "2026-03", "categoryId": "cat1", "amount": 500})
+        table.set_single_budget_target("2026-03", "cat1", BudgetTargetAmounts(carried_amount=500))
+        mock.put_item.assert_called_once_with(Item={"yearMonth": "2026-03", "categoryId": "cat1", "carriedAmount": 500})
 
 
 class TestRowsForCategory:

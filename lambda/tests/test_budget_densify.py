@@ -56,7 +56,7 @@ def _cat(category_id: str, active: bool = True) -> dict[str, object]:
 
 
 def _row(ym: str, cat: str, amount: int) -> dict[str, object]:
-    return {"yearMonth": ym, "categoryId": cat, "amount": amount}
+    return {"yearMonth": ym, "categoryId": cat, "carriedAmount": amount}
 
 
 class TestDensifyColdStart:
@@ -99,7 +99,7 @@ class TestDensifyWalkForward:
 
         _densify(budget, cats, "2026-05")
 
-        written_amounts = [call.kwargs["Item"]["amount"] for call in mock_b.put_item.call_args_list]
+        written_amounts = [call.kwargs["Item"]["carriedAmount"] for call in mock_b.put_item.call_args_list]
         assert written_amounts == [500, 500]
 
     def test_walk_forward_starts_after_m_last_and_respects_pin(self) -> None:
@@ -114,7 +114,8 @@ class TestDensifyWalkForward:
         _densify(budget, cats, "2026-06")
 
         written_keys = [
-            (call.kwargs["Item"]["yearMonth"], call.kwargs["Item"]["amount"]) for call in mock_b.put_item.call_args_list
+            (call.kwargs["Item"]["yearMonth"], call.kwargs["Item"]["carriedAmount"])
+            for call in mock_b.put_item.call_args_list
         ]
         assert written_keys == [("2026-06", 999)]
 
@@ -139,7 +140,7 @@ class TestResolveFutureTargets:
         result = _resolve(budget, cats, "2026-09")
 
         assert len(result) == 1
-        assert result[0]["amount"] == 1234
+        assert result[0]["carriedAmount"] == 1234
         assert result[0]["pinned"] is True
 
     def test_walk_back_returns_pinned_false(self) -> None:
@@ -148,7 +149,7 @@ class TestResolveFutureTargets:
 
         result = _resolve(budget, cats, "2026-09")
 
-        assert result[0]["amount"] == 500
+        assert result[0]["carriedAmount"] == 500
         assert result[0]["pinned"] is False
 
     def test_walk_back_stops_at_first_intermediate_pin(self) -> None:
@@ -159,7 +160,7 @@ class TestResolveFutureTargets:
 
         result = _resolve(budget, cats, "2026-09")
 
-        assert result[0]["amount"] == 777
+        assert result[0]["carriedAmount"] == 777
         assert result[0]["pinned"] is False
 
     def test_omits_categories_with_no_history(self) -> None:
@@ -265,11 +266,11 @@ class TestThisMonthOnly:
         # 2026-06 has only a this-month-only target. Densify writes its carried target, and the
         # row must keep the this-month-only target.
         budget, mock_b = _make_budget_table(
-            [_row("2026-05", "a", 500), {"yearMonth": "2026-06", "categoryId": "a", "onlyAmount": 80}]
+            [_row("2026-05", "a", 500), {"yearMonth": "2026-06", "categoryId": "a", "pinnedAmount": 80}]
         )
         cats, _ = _make_category_table([_cat("a")])
 
         _densify(budget, cats, "2026-06")
 
         items = [call.kwargs["Item"] for call in mock_b.put_item.call_args_list]
-        assert items == [{"yearMonth": "2026-06", "categoryId": "a", "amount": 500, "onlyAmount": 80}]
+        assert items == [{"yearMonth": "2026-06", "categoryId": "a", "carriedAmount": 500, "pinnedAmount": 80}]

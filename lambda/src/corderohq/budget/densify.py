@@ -159,9 +159,8 @@ def resolve_future_targets(
 ) -> list[dict[str, Any]]:
     """Return the budget targets of a future month, in the shape that the API sends.
 
-    Each target is `{yearMonth, categoryId, amount, pinned}`, plus `onlyAmount` when the month has a
-    this-month-only target. `amount` is the carried target. The month shows `onlyAmount` if it is
-    present, else `amount`.
+    Each target is `{yearMonth, categoryId, carriedAmount, pinned}`, plus `pinnedAmount` when the month has a pinned
+    amount. The month shows `pinnedAmount` if it is present, else `carriedAmount`.
     """
 
     targets: list[dict[str, Any]] = []
@@ -169,11 +168,11 @@ def resolve_future_targets(
         target: dict[str, Any] = {
             "yearMonth": year_month,
             "categoryId": resolved.key,
-            "amount": resolved.value,
+            "carriedAmount": resolved.value,
             "pinned": resolved.pinned,
         }
         if resolved.has_only:
-            target["onlyAmount"] = resolved.only
+            target["pinnedAmount"] = resolved.only
         targets.append(target)
     return targets
 

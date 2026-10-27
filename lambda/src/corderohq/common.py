@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, assert_never
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,20 @@ class Remove:
 
 
 type FieldChange[T] = Keep | SetTo[T] | Remove
+
+
+def resolve_change[T](change: FieldChange[T], current: T | None) -> T | None:
+    """Return the value of a field after `change`: `current` for Keep, the new value for SetTo, and None for Remove."""
+
+    match change:
+        case Keep():
+            return current
+        case SetTo(value=value):
+            return value
+        case Remove():
+            return None
+        case _:
+            assert_never(change)
 
 
 def parse_optional_str(value: Any, name: str) -> str | None:

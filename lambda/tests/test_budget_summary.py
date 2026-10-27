@@ -44,8 +44,8 @@ class TestComputeSummary:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
         budget_mock.query.return_value = {
             "Items": [
-                {"categoryId": "cat1", "amount": 1_000_000},
-                {"categoryId": "cat2", "amount": 500_000},
+                {"categoryId": "cat1", "carriedAmount": 1_000_000},
+                {"categoryId": "cat2", "carriedAmount": 500_000},
             ]
         }
         txn_mock.query.return_value = {
@@ -70,7 +70,7 @@ class TestComputeSummary:
 
     def test_refund_produces_negative_actual_and_higher_delta(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100_000_000}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100_000_000}]}
         txn_mock.query.return_value = {
             "Items": [
                 {"categoryId": "cat1", "amount": 5_000_000},
@@ -101,7 +101,7 @@ class TestEditableMonthMembership:
     def test_excludes_inactive_with_no_txn(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
         # Inactive category has a budget row but no txn. Editable rule should exclude it.
-        budget_mock.query.return_value = {"Items": [{"categoryId": "dead_cat", "amount": 500_000}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "dead_cat", "carriedAmount": 500_000}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {"Items": [_cat("dead_cat", active=False)]}
 
@@ -134,7 +134,7 @@ class TestLockedMonthMembership:
     def test_includes_inactive_with_budget_row_no_txn(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
         # Past month, well outside the grace window → LOCKED.
-        budget_mock.query.return_value = {"Items": [{"categoryId": "dead_cat", "amount": 500_000}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "dead_cat", "carriedAmount": 500_000}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {"Items": [_cat("dead_cat", active=False)]}
 
@@ -145,7 +145,7 @@ class TestLockedMonthMembership:
     def test_includes_zero_budget_row(self) -> None:
         # Even a $0 budget row makes the category a member on locked months.
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 0}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 0}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
 
@@ -168,7 +168,7 @@ class TestHistoricalNameResolution:
 
     def test_no_history_returns_null(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {"Items": [_cat("cat1", name="Groceries")]}
 
@@ -181,7 +181,7 @@ class TestHistoricalNameResolution:
         # 2026-01 was locked. Rename happened at 2026-03. Locked-month summary for
         # 2026-01 should return historicalName = "Old name".
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {
             "Items": [
@@ -201,7 +201,7 @@ class TestHistoricalNameResolution:
     def test_rename_before_month_returns_null(self) -> None:
         # Rename happened BEFORE 2026-04 (the locked month). Current name was in effect.
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {
             "Items": [
@@ -224,7 +224,7 @@ class TestHistoricalNameResolution:
         # transition would be wrong; Groceries→Food is the correct one because its
         # replacedAt is the first one POST-dating 2026-01's end.
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {
             "Items": [
@@ -246,7 +246,7 @@ class TestHistoricalNameResolution:
         # Editable months don't carry historicalName even if history exists, since no
         # rename can have post-dated a still-editable month.
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {
             "Items": [
@@ -268,7 +268,7 @@ class TestHistoricalNameResolution:
         # it should NOT be considered post-dating — historicalName must be None.
         # If the cutoff were computed naively as UTC-5 (EST), this test would fail.
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 100}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 100}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {
             "Items": [
@@ -293,7 +293,9 @@ class TestCurrentMonthInEasternTime:
         # 2026-06-30 at 22:00 ET is 2026-07-01 at 02:00 UTC. The current month is still June,
         # so July is a future month and its summary walks back to the June row.
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.scan.return_value = {"Items": [{"yearMonth": "2026-06", "categoryId": "cat1", "amount": 500}]}
+        budget_mock.scan.return_value = {
+            "Items": [{"yearMonth": "2026-06", "categoryId": "cat1", "carriedAmount": 500}]
+        }
         budget_mock.query.return_value = {"Items": []}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
@@ -309,7 +311,7 @@ class TestBudgetTreatments:
 
     def test_off_budget_and_skip_rows_do_not_change_a_category(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 1_000_000}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 1_000_000}]}
         txn_mock.query.return_value = {
             "Items": [
                 {"categoryId": "cat1", "amount": 300_000},
@@ -330,7 +332,7 @@ class TestBudgetTreatments:
 
     def test_no_off_budget_rows_gives_zero(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 1_000_000}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 1_000_000}]}
         txn_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 300_000}]}
         cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
 
@@ -373,7 +375,7 @@ class TestBudgetTreatments:
 class TestThisMonthOnlyTargets:
     def test_dense_month_uses_the_this_month_only_target(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
-        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "amount": 500, "onlyAmount": 800}]}
+        budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 500, "pinnedAmount": 800}]}
         txn_mock.query.return_value = {"Items": []}
         cat_mock.scan.return_value = {"Items": [_cat("cat1")]}
 
@@ -385,8 +387,8 @@ class TestThisMonthOnlyTargets:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
         budget_mock.scan.return_value = {
             "Items": [
-                {"yearMonth": "2026-06", "categoryId": "cat1", "amount": 500},
-                {"yearMonth": "2026-09", "categoryId": "cat1", "onlyAmount": 800},
+                {"yearMonth": "2026-06", "categoryId": "cat1", "carriedAmount": 500},
+                {"yearMonth": "2026-09", "categoryId": "cat1", "pinnedAmount": 800},
             ]
         }
         txn_mock.query.return_value = {"Items": []}

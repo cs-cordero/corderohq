@@ -15,6 +15,7 @@ from corderohq.aws.dynamodb import (
     BudgetAuditLogTable,
     BudgetDensifyAdapter,
     BudgetTable,
+    BudgetTargetAmounts,
     CategoryGroupTable,
     CategoryTable,
     IncomeSourceTable,
@@ -63,7 +64,7 @@ from corderohq.budget.transaction_args import (
     parse_update_transaction_args,
 )
 from corderohq.budget.treatment import BudgetTreatment, Classification, parse_classification
-from corderohq.common import Keep, Remove, SetTo
+from corderohq.common import FieldChange, Keep, Remove, SetTo, resolve_change
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -347,9 +348,8 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if not name:
         return _response(400, "name is required")
 
-    # initialTarget is 0 by default. That is a real target, and it means "no spend this
-    # month". It differs from null, which means that no one set a target. If the caller gives
-    # a value, it must be an integer in millionths of a dollar, and it must not be negative.
+    # initialTarget is 0 by default, which means "no spend this month". A given value must be an
+    # integer in millionths of a dollar, and it must not be negative.
     initial_target = body.get("initialTarget", 0)
     if not isinstance(initial_target, int) or initial_target < 0:
         return _response(400, "initialTarget must be a non-negative integer (millionths of a dollar)")
@@ -371,7 +371,9 @@ def _post_category(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     # A new category appears in the current month at once, so that a summary of the kind
     # Spec 1 describes shows it. A walk-back from a later month then finds initialTarget,
     # until the user pins a different amount. See "Category lifecycle" in the architecture.
-    _BUDGET_TABLE.set_single_budget_target(_year_month_of(now), item["categoryId"], initial_target)
+    _BUDGET_TABLE.set_single_budget_target(
+        _year_month_of(now), item["categoryId"], BudgetTargetAmounts(carried_amount=initial_target)
+    )
 
     return _json_response(201, json.dumps(item, default=_json_default))
 
@@ -456,7 +458,7 @@ def _deactivate_category(
     # audit trail then holds the amounts that were there before.
     for month in affected_months:
         existing = _BUDGET_TABLE.get_budget_targets(month)
-        old_amount = next((t.get("amount") for t in existing if t["categoryId"] == category_id), None)
+        old_amount = next((t.get("carriedAmount") for t in existing if t["categoryId"] == category_id), None)
         _BUDGET_TABLE.delete_single_budget_target(month, category_id)
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=month,
@@ -464,7 +466,7 @@ def _deactivate_category(
             action=AuditAction.UNPIN,
             explanation=explanation,
             user=user,
-            changes={"amount": {"before": old_amount, "after": None}},
+            changes={"carriedAmount": {"before": old_amount, "after": None}},
         )
 
     item = _CATEGORY_TABLE.deactivate(category_id)
@@ -724,9 +726,8 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     use /pin for it. The body must hold each category that has a row, or a transaction that is not zero, in the month.
     Else a 409 lists the missing categories. Each new or changed target writes one CREATE or UPDATE audit entry.
 
-    Each target is `{categoryId, amount, onlyAmount?}`. `amount` is the carried target. An `onlyAmount` key sets the
-    this-month-only target (a number) or clears it (`null`). A target without the key keeps the stored this-month-only
-    target.
+    Each target is `{categoryId, carriedAmount, pinnedAmount?}`. `carriedAmount` is a number. A `pinnedAmount` key sets
+    the pinned amount (a number) or clears it (null). A target without the key keeps the stored pinned amount.
     """
 
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -743,12 +744,17 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     if not explanation:
         return _response(400, "explanation is required")
 
+    parsed: dict[str, tuple[int, FieldChange[int]]] = {}
     for target in targets:
-        if "categoryId" not in target or "amount" not in target:
-            return _response(400, "Each target must have categoryId and amount")
-        only = target.get("onlyAmount")
-        if only is not None and (isinstance(only, bool) or not isinstance(only, int)):
-            return _response(400, "onlyAmount must be an integer or null")
+        if not isinstance(target, dict) or not isinstance(target.get("categoryId"), str):
+            return _response(400, "Each target must have categoryId")
+        carried = target.get("carriedAmount")
+        if not _is_amount(carried):
+            return _response(400, "carriedAmount must be an integer")
+        try:
+            parsed[target["categoryId"]] = (carried, _parse_amount_change(target, "pinnedAmount"))
+        except ValueError as e:
+            return _response(400, str(e))
 
     override_active, err = _resolve_override(event, body)
     if err:
@@ -780,8 +786,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     }
     required_cat_ids = existing_cat_ids | txn_cat_ids
 
-    body_cat_ids = {t["categoryId"] for t in targets}
-    missing = sorted(required_cat_ids - body_cat_ids)
+    missing = sorted(required_cat_ids - set(parsed))
     if missing:
         return _json_response(
             409,
@@ -796,31 +801,30 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             ),
         )
 
-    # A target without an `onlyAmount` key keeps the stored this-month-only target.
-    existing_by_category = {t["categoryId"]: t for t in existing}
-    targets = [
-        t if "onlyAmount" in t else {**t, "onlyAmount": existing_by_category.get(t["categoryId"], {}).get("onlyAmount")}
-        for t in targets
-    ]
+    old_by_category = {t["categoryId"]: BudgetTargetAmounts.from_item(t) for t in existing}
+    new_by_category = {
+        cat_id: BudgetTargetAmounts(
+            carried_amount=carried,
+            pinned_amount=resolve_change(
+                pinned_change, old.pinned_amount if (old := old_by_category.get(cat_id)) is not None else None
+            ),
+        )
+        for cat_id, (carried, pinned_change) in parsed.items()
+    }
+    items = _BUDGET_TABLE.set_all_budget_targets(year_month, new_by_category)
 
-    old_by_category = {t["categoryId"]: t.get("amount") for t in existing}
-    old_only_by_category = {t["categoryId"]: t.get("onlyAmount") for t in existing}
-    items = _BUDGET_TABLE.set_all_budget_targets(year_month, targets)
-
-    for item in items:
-        cat_id = item["categoryId"]
-        new_amount = item["amount"]
-        old_amount = old_by_category.get(cat_id)
-        new_only = item.get("onlyAmount")
-        old_only = old_only_by_category.get(cat_id)
+    for cat_id, new in new_by_category.items():
+        old = old_by_category.get(cat_id)
+        old_carried = old.carried_amount if old is not None else None
+        old_pinned = old.pinned_amount if old is not None else None
         changes: dict[str, Any] = {}
-        if old_amount != new_amount:
-            changes["amount"] = {"before": old_amount, "after": new_amount}
-        if old_only != new_only:
-            changes["onlyAmount"] = {"before": old_only, "after": new_only}
+        if old_carried != new.carried_amount:
+            changes["carriedAmount"] = {"before": old_carried, "after": new.carried_amount}
+        if old_pinned != new.pinned_amount:
+            changes["pinnedAmount"] = {"before": old_pinned, "after": new.pinned_amount}
         if not changes:
             continue
-        action = AuditAction.CREATE if "amount" in changes and old_amount is None else AuditAction.UPDATE
+        action = AuditAction.CREATE if "carriedAmount" in changes and old_carried is None else AuditAction.UPDATE
 
         _AUDIT_LOG_TABLE.write_entry(
             effective_year_month=year_month,
@@ -838,12 +842,13 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
 def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
     """Set or clear the pins of a future month.
 
-    The body is `{targets: [{categoryId, amount?: number | null, onlyAmount?: number | null}], explanation}`. Each
-    target needs `amount`, `onlyAmount`, or both. A category that is not in `targets` does not change, and neither does
-    a key that a target leaves out. Only a future month is accepted, also with an override.
-    - `amount` is the carried pin: a number sets it (PIN), and null removes it (UNPIN). Later months carry it forward.
-    - `onlyAmount` is the this-month-only target: a number sets it (PIN), and null removes it (UNPIN). It never carries
-      forward. The audit entry names it in `changes.onlyAmount`.
+    The body is `{targets: [{categoryId, carriedAmount?: number | null, pinnedAmount?: number | null}], explanation}`.
+    Each target needs `carriedAmount`, `pinnedAmount`, or both. A category that is not in `targets` does not change,
+    and neither does a key that a target leaves out. Only a future month is accepted, also with an override.
+    - `carriedAmount` is the carried pin: a number sets it (PIN), and null removes it (UNPIN). Later months carry it
+      forward.
+    - `pinnedAmount` is the amount of this month only: a number sets it (PIN), and null removes it (UNPIN). It never
+      carries forward. The audit entry names it in `changes.pinnedAmount`.
     A row with neither value left is deleted. The same value again does nothing, and writes no audit entry.
 
     Return `{targets, warnings: {downstreamPins, pinMatchesCarriedValue}}`, where `targets` holds the resolved values of
@@ -864,13 +869,19 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     if not explanation:
         return _response(400, "explanation is required")
 
+    parsed: dict[str, tuple[FieldChange[int], FieldChange[int]]] = {}
     for target in targets:
-        if "categoryId" not in target or ("amount" not in target and "onlyAmount" not in target):
-            return _response(400, "Each target must have categoryId, and amount and/or onlyAmount (each may be null)")
-        for name in ("amount", "onlyAmount"):
-            value = target.get(name)
-            if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
-                return _response(400, f"{name} must be an integer or null")
+        if not isinstance(target, dict) or not isinstance(target.get("categoryId"), str):
+            return _response(400, "Each target must have categoryId")
+        if "carriedAmount" not in target and "pinnedAmount" not in target:
+            return _response(400, "Each target must have carriedAmount and/or pinnedAmount (each may be null)")
+        try:
+            parsed[target["categoryId"]] = (
+                _parse_amount_change(target, "carriedAmount"),
+                _parse_amount_change(target, "pinnedAmount"),
+            )
+        except ValueError as e:
+            return _response(400, str(e))
 
     current_ym = _year_month_of(now)
     if year_month <= current_ym:
@@ -900,37 +911,36 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
 
     # Snapshot table state before any writes so walk-back warnings are computed
     # against the pre-write world.
-    rows_before = {(r["yearMonth"], r["categoryId"]): r for r in _BUDGET_TABLE.scan()}
-    carried_before: dict[tuple[str, str], Any] = {key: r["amount"] for key, r in rows_before.items() if "amount" in r}
+    rows_before = {(r["yearMonth"], r["categoryId"]): BudgetTargetAmounts.from_item(r) for r in _BUDGET_TABLE.scan()}
+    carried_before: dict[tuple[str, str], Any] = {
+        key: amounts.carried_amount for key, amounts in rows_before.items() if amounts.carried_amount is not None
+    }
 
     pin_matches_carried: list[str] = []
 
-    for target in targets:
-        cat_id = target["categoryId"]
-        stored = rows_before.get((year_month, cat_id), {})
-        fields = {name: stored[name] for name in ("amount", "onlyAmount") if name in stored}
-        new_fields = dict(fields)
-        for name in ("amount", "onlyAmount"):
-            if name in target:
-                if target[name] is None:
-                    new_fields.pop(name, None)
-                else:
-                    new_fields[name] = target[name]
-        if new_fields == fields:
+    for cat_id, (carried_change, pinned_change) in parsed.items():
+        old = rows_before.get((year_month, cat_id))
+        old_carried = old.carried_amount if old is not None else None
+        old_pinned = old.pinned_amount if old is not None else None
+        new_carried = resolve_change(carried_change, old_carried)
+        new_pinned = resolve_change(pinned_change, old_pinned)
+        if (new_carried, new_pinned) == (old_carried, old_pinned):
             continue
 
-        if not new_fields:
+        if new_carried is None and new_pinned is None:
             _BUDGET_TABLE.delete_single_budget_target(year_month, cat_id)
-        elif set(new_fields) == {"amount"}:
-            _BUDGET_TABLE.set_single_budget_target(year_month, cat_id, new_fields["amount"])
         else:
-            _BUDGET_TABLE.set_budget_row(year_month, cat_id, new_fields)
+            _BUDGET_TABLE.set_single_budget_target(
+                year_month, cat_id, BudgetTargetAmounts(carried_amount=new_carried, pinned_amount=new_pinned)
+            )
 
-        for name in ("amount", "onlyAmount"):
-            before, after = fields.get(name), new_fields.get(name)
+        for name, before, after in (
+            ("carriedAmount", old_carried, new_carried),
+            ("pinnedAmount", old_pinned, new_pinned),
+        ):
             if before == after:
                 continue
-            if name == "amount" and after is not None:
+            if name == "carriedAmount" and after is not None:
                 # Warning: would walk-back have resolved to this same value without the pin?
                 sans_pin = {k: v for k, v in carried_before.items() if k != (year_month, cat_id)}
                 if walk_back_for(sans_pin, year_month, cat_id) == after:
@@ -946,13 +956,13 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
 
     # Re-scan for fresh state, then compute downstream pins + resolved view.
     rows_after = _BUDGET_TABLE.scan()
-    touched_cat_ids = {t["categoryId"] for t in targets}
+    touched_cat_ids = set(parsed)
     downstream_pins = sorted(
         (
             {"categoryId": r["categoryId"], "yearMonth": r["yearMonth"]}
             for r in rows_after
-            # Only a carried pin stops a change from moving forward. A this-month-only target does not.
-            if r["categoryId"] in touched_cat_ids and r["yearMonth"] > year_month and "amount" in r
+            # Only a carried pin stops a change from moving forward. A pinned amount does not.
+            if r["categoryId"] in touched_cat_ids and r["yearMonth"] > year_month and "carriedAmount" in r
         ),
         key=lambda p: (p["yearMonth"], p["categoryId"]),
     )
@@ -973,6 +983,25 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
             default=_json_default,
         ),
     )
+
+
+def _is_amount(value: Any) -> bool:
+    """Return True if `value` is an amount: an integer in millionths of a dollar. A bool is not an amount."""
+
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _parse_amount_change(target: dict[str, Any], key: str) -> FieldChange[int]:
+    """Return Keep() for an absent key, Remove() for null, and SetTo(amount) for an amount. Raise ValueError else."""
+
+    if key not in target:
+        return Keep()
+    value = target[key]
+    if value is None:
+        return Remove()
+    if not _is_amount(value):
+        raise ValueError(f"{key} must be an integer or null")
+    return SetTo(value)
 
 
 # --- Income sources and the income plan ---

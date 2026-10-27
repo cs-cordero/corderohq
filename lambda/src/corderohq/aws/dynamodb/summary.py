@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
+from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable, BudgetTargetAmounts
 from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.transactions import TransactionsTable, get_budget_treatment
 from corderohq.aws.dynamodb.util import BUDGET_TZ
@@ -93,8 +93,8 @@ def compute_summary(
             budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))
     else:
         for target in budget.get_budget_targets(year_month):
-            raw = target["onlyAmount"] if target.get("onlyAmount") is not None else target.get("amount")
-            budget_by_category[target["categoryId"]] = Decimal("0") if raw is None else Decimal(str(raw))
+            amounts = BudgetTargetAmounts.from_item(target)
+            budget_by_category[target["categoryId"]] = Decimal(amounts.effective_amount)
 
     actual_by_category: dict[str, Decimal] = {}
     nonzero_transaction_cat_ids: set[str] = set()
