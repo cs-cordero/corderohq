@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, assert_never
 from zoneinfo import ZoneInfo
 
 from corderohq.accounts import parse_create_account_args, parse_update_account_args, validate_asset_class
@@ -17,16 +17,44 @@ from corderohq.aws.dynamodb import (
     BudgetTable,
     CategoryGroupTable,
     CategoryTable,
+    IncomeSourceTable,
     NetWorthSnapshotTable,
+    PlannedIncomeTable,
     ProfileTable,
+    RecurringIncomeDensifyAdapter,
     TransactionsTable,
+    compute_income_plan,
     compute_summary,
     get_budget_treatment,
+    new_recurring_income_id,
 )
 from corderohq.budget.auth import is_budget_admin
 from corderohq.budget.csv_import import categorize_transactions, map_columns
-from corderohq.budget.densify import densify, resolve_future_targets, walk_back_for
+from corderohq.budget.densify import (
+    carry_map,
+    densify,
+    next_year_month,
+    resolve_future_targets,
+    value_at_or_before,
+    walk_back_for,
+)
 from corderohq.budget.editability import EditabilityState, editability
+from corderohq.budget.income import (
+    CreateOneTimeIncomeArgs,
+    DeleteOneTimeIncomeArgs,
+    OneTimeIncome,
+    RecurringIncome,
+    RecurringIncomeChange,
+    SetRecurringIncome,
+    StopRecurringIncome,
+    UnpinRecurringIncome,
+    UpdateOneTimeIncomeArgs,
+    parse_create_income_source_args,
+    parse_one_time_income,
+    parse_one_time_income_args,
+    parse_recurring_income_changes,
+    parse_update_income_source_args,
+)
 from corderohq.budget.transaction_args import (
     CreateTransactionArgs,
     parse_create_transaction_args,
@@ -43,6 +71,8 @@ _CATEGORY_GROUP_TABLE = CategoryGroupTable(get_env_var("CATEGORY_GROUP_TABLE_NAM
 _CATEGORY_TABLE = CategoryTable(get_env_var("CATEGORY_TABLE_NAME"))
 _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
 _TRANSACTIONS_TABLE = TransactionsTable(get_env_var("TRANSACTIONS_TABLE_NAME"))
+_INCOME_SOURCE_TABLE = IncomeSourceTable(get_env_var("INCOME_SOURCE_TABLE_NAME"))
+_PLANNED_INCOME_TABLE = PlannedIncomeTable(get_env_var("PLANNED_INCOME_TABLE_NAME"))
 _AUDIT_LOG_TABLE = BudgetAuditLogTable(get_env_var("BUDGET_AUDIT_LOG_TABLE_NAME"))
 _PROFILE_TABLE = ProfileTable(get_env_var("PROFILE_TABLE_NAME"))
 _ACCOUNT_TABLE = AccountTable(get_env_var("ACCOUNT_TABLE_NAME"))
@@ -120,12 +150,15 @@ def _ensure_hydrated(now: datetime) -> None:
     Call this before any work that needs the dense rows of past and current months.
     """
 
+    current_ym = _year_month_of(now)
     densify(
         BudgetDensifyAdapter(_BUDGET_TABLE),
         [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()],
-        _year_month_of(now),
+        current_ym,
         cold_start_value=0,
     )
+    recurring_incomes = RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE)
+    densify(recurring_incomes, recurring_incomes.recurring_income_ids(), current_ym, cold_start_value=None)
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -204,6 +237,37 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _put_transaction(event, now)
         elif path == "/api/transactions/delete" and method == "POST":
             return _delete_transaction(event, now)
+
+        # Income sources
+        elif path == "/api/income-sources" and method == "GET":
+            return _get_income_sources(event)
+        elif path == "/api/income-sources" and method == "POST":
+            return _post_income_source(event)
+        elif path == "/api/income-sources/reorder" and method == "POST":
+            return _post_income_sources_reorder(event)
+        elif path.startswith("/api/income-sources/") and path.endswith("/deactivate") and method == "POST":
+            income_source_id = path.split("/")[-2]
+            return _deactivate_income_source(event, income_source_id, user, now)
+        elif path.startswith("/api/income-sources/") and path.endswith("/reactivate") and method == "POST":
+            income_source_id = path.split("/")[-2]
+            return _reactivate_income_source(income_source_id)
+        elif path.startswith("/api/income-sources/") and method == "PUT":
+            income_source_id = path.split("/")[-1]
+            return _put_income_source(event, income_source_id)
+
+        # The income plan of a month
+        elif path.startswith("/api/income/") and method == "GET":
+            year_month = path.split("/")[-1]
+            return _get_income(year_month, now)
+        elif path.startswith("/api/income/") and path.endswith("/replace") and method == "POST":
+            year_month = path.split("/")[-2]
+            return _post_income_replace(event, year_month, user, now)
+        elif path.startswith("/api/income/") and path.endswith("/pin") and method == "POST":
+            year_month = path.split("/")[-2]
+            return _post_income_pin(event, year_month, user, now)
+        elif path.startswith("/api/income/") and path.endswith("/one-time") and method == "POST":
+            year_month = path.split("/")[-2]
+            return _post_one_time(event, year_month, user, now)
 
         # Summary
         elif path == "/api/summary" and method == "GET":
@@ -880,6 +944,628 @@ def _post_budget_pin(event: dict[str, Any], year_month: str, user: dict[str, str
     )
 
 
+# --- Income sources and the income plan ---
+
+
+def _get_income_sources(event: dict[str, Any]) -> dict[str, Any]:
+    include_inactive = (event.get("queryStringParameters") or {}).get("include_inactive") == "true"
+    sources = _INCOME_SOURCE_TABLE.get_all_income_sources()
+    if not include_inactive:
+        sources = [s for s in sources if s.get("active", False)]
+    return _json_response(200, json.dumps(sources, default=_json_default))
+
+
+def _post_income_source(event: dict[str, Any]) -> dict[str, Any]:
+    """Create an income source. Body: `{owners, label}`.
+
+    `owners` is one or more personIds, the same as on an account. A source holds no money, so this makes no audit
+    entry. Its recurring and one-time incomes come through the income plan routes.
+    """
+
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    try:
+        args = parse_create_income_source_args(body)
+    except ValueError as e:
+        return _response(400, str(e))
+    err = _check_owners_exist(args.owners)
+    if err:
+        return err
+    source = _INCOME_SOURCE_TABLE.create_income_source(args)
+    return _json_response(201, json.dumps(source, default=_json_default))
+
+
+def _put_income_source(event: dict[str, Any], income_source_id: str) -> dict[str, Any]:
+    """Change the label or the owners. This has no editability check, and no audit entry."""
+
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    try:
+        args = parse_update_income_source_args(body)
+    except ValueError as e:
+        return _response(400, str(e))
+    match args.owners:
+        case SetTo(value=owners):
+            err = _check_owners_exist(owners)
+            if err:
+                return err
+        case Keep():
+            pass
+
+    item = _INCOME_SOURCE_TABLE.update_income_source(income_source_id, args)
+    if item is None:
+        return _response(404, "Income source not found")
+    return _json_response(200, json.dumps(item, default=_json_default))
+
+
+def _post_income_sources_reorder(event: dict[str, Any]) -> dict[str, Any]:
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    order = body.get("order")
+    if not isinstance(order, list) or not all(isinstance(i, str) for i in order):
+        return _response(400, "'order' must be a list of incomeSourceId strings")
+    _INCOME_SOURCE_TABLE.reorder(order)
+    return _json_response(200, json.dumps(_INCOME_SOURCE_TABLE.get_all_income_sources(), default=_json_default))
+
+
+def _deactivate_income_source(
+    event: dict[str, Any], income_source_id: str, user: dict[str, str], now: datetime
+) -> dict[str, Any]:
+    """Set an income source to inactive, and stop each of its recurring incomes from the next month on.
+
+    Each recurring income of the source with a value in the next month gets a stop there, with one
+    RECURRING_INCOME_STOP entry. Its pins after the next month are deleted, with one RECURRING_INCOME_UNPIN entry each.
+    Without `confirm: true`, a source with such pins gets a 409 that lists them. The current and past months do not
+    change, so they keep their plan.
+    """
+
+    body = _parse_json_body(event) or {}
+    confirm = bool(body.get("confirm", False))
+    explanation = (body.get("explanation") or "").strip()
+
+    if _INCOME_SOURCE_TABLE.get_income_source_by_id(income_source_id) is None:
+        return _response(404, "Income source not found")
+
+    next_ym = next_year_month(_year_month_of(now))
+    by_key = carry_map(RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE).scan_stored_values())
+    keys = sorted(
+        {
+            key
+            for (_, key), income in by_key.items()
+            if isinstance(income, RecurringIncome) and income.income_source_id == income_source_id
+        }
+    )
+    to_stop = [key for key in keys if value_at_or_before(by_key, next_ym, key) is not None]
+    later_pins = sorted((year_month, key) for (year_month, key) in by_key if key in keys and year_month > next_ym)
+    if later_pins and not confirm:
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "Income source has recurring incomes with future pins; confirm to drop them",
+                    "incomeSourceId": income_source_id,
+                    "futurePins": [{"yearMonth": ym, "plannedIncomeId": key} for ym, key in later_pins],
+                }
+            ),
+        )
+    if (to_stop or later_pins) and not explanation:
+        return _response(400, "explanation is required to stop the recurring incomes of this source")
+
+    for year_month, key in later_pins:
+        _PLANNED_INCOME_TABLE.delete_recurring_income(year_month, key)
+        _write_recurring_income_audit(
+            year_month,
+            AuditAction.RECURRING_INCOME_UNPIN,
+            key,
+            income_source_id,
+            by_key[(year_month, key)],
+            None,
+            explanation,
+            user,
+            override_active=False,
+        )
+    for key in to_stop:
+        _PLANNED_INCOME_TABLE.put_recurring_income(next_ym, key, None)
+        _write_recurring_income_audit(
+            next_ym,
+            AuditAction.RECURRING_INCOME_STOP,
+            key,
+            income_source_id,
+            value_at_or_before(by_key, next_ym, key),
+            None,
+            explanation,
+            user,
+            override_active=False,
+        )
+
+    item = _INCOME_SOURCE_TABLE.set_active(income_source_id, False)
+    return _json_response(
+        200,
+        json.dumps(
+            {
+                "incomeSource": item,
+                "stoppedRecurringIncomes": to_stop,
+                "deletedPins": [{"yearMonth": ym, "plannedIncomeId": key} for ym, key in later_pins],
+            },
+            default=_json_default,
+        ),
+    )
+
+
+def _reactivate_income_source(income_source_id: str) -> dict[str, Any]:
+    """Make an income source active again. Its stopped recurring incomes stay stopped."""
+
+    item = _INCOME_SOURCE_TABLE.set_active(income_source_id, True)
+    if item is None:
+        return _response(404, "Income source not found")
+    return _json_response(200, json.dumps(item, default=_json_default))
+
+
+def _income_plan_response(year_month: str, now: datetime) -> dict[str, Any]:
+    return compute_income_plan(_PLANNED_INCOME_TABLE, _INCOME_SOURCE_TABLE, year_month, now)
+
+
+def _get_income(year_month: str, now: datetime) -> dict[str, Any]:
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    _ensure_hydrated(now)
+    return _json_response(200, json.dumps(_income_plan_response(year_month, now), default=_json_default))
+
+
+def _check_recurring_income_changes(changes: list[RecurringIncomeChange], known_ids: set[str]) -> dict[str, Any] | None:
+    """Return a 400 response if a change names an unknown recurring income or income source, else None."""
+
+    for index, change in enumerate(changes):
+        planned_income_id = change.planned_income_id
+        if planned_income_id is not None and planned_income_id not in known_ids:
+            return _response(400, f"recurring[{index}]: recurring income '{planned_income_id}' does not exist")
+        match change:
+            case SetRecurringIncome(income=income):
+                if _INCOME_SOURCE_TABLE.get_income_source_by_id(income.income_source_id) is None:
+                    return _response(
+                        400, f"recurring[{index}]: income source '{income.income_source_id}' does not exist"
+                    )
+            case StopRecurringIncome() | UnpinRecurringIncome():
+                pass
+            case _:
+                assert_never(change)
+    return None
+
+
+def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Write the recurring incomes of a dense month (current, grace, or locked through the override).
+
+    Body: `{recurring: [{action, plannedIncomeId?, recurringIncome?}], explanation, override?}`. The body must hold each
+    recurring income with a value in that month. SET writes a value, and with no `plannedIncomeId` it creates a new
+    recurring income (RECURRING_INCOME_CREATE, else RECURRING_INCOME_UPDATE). STOP stops a recurring income from this
+    month on (RECURRING_INCOME_STOP). UNPIN is only for a future month. The same value again is a no-op with no audit
+    entry.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+    try:
+        changes = parse_recurring_income_changes(body)
+    except ValueError as e:
+        return _response(400, str(e))
+    if any(isinstance(change, UnpinRecurringIncome) for change in changes):
+        return _response(400, "UNPIN is only for a future month; use /pin")
+
+    override_active, err = _resolve_override(event, body)
+    if err:
+        return err
+    err = _check_year_month_editable(year_month, override_active, now)
+    if err:
+        return err
+
+    _ensure_hydrated(now)
+
+    if year_month > _year_month_of(now):
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "/replace is for dense months only; use /pin for future months",
+                    "yearMonth": year_month,
+                }
+            ),
+        )
+
+    by_key = carry_map(RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE).scan_stored_values())
+    err = _check_recurring_income_changes(changes, {key for _, key in by_key})
+    if err:
+        return err
+
+    with_value = sorted(key for (ym, key), income in by_key.items() if ym == year_month and income is not None)
+    missing = sorted(set(with_value) - {change.planned_income_id for change in changes})
+    if missing:
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "body must include every recurring income with a value in this month",
+                    "yearMonth": year_month,
+                    "missingPlannedIncomeIds": missing,
+                }
+            ),
+        )
+
+    for change in changes:
+        match change:
+            case SetRecurringIncome(planned_income_id=planned_income_id, income=income):
+                key = planned_income_id or new_recurring_income_id()
+                before = by_key.get((year_month, key))
+                if before == income:
+                    continue
+                _PLANNED_INCOME_TABLE.put_recurring_income(year_month, key, income)
+                action = (
+                    AuditAction.RECURRING_INCOME_CREATE
+                    if planned_income_id is None
+                    else AuditAction.RECURRING_INCOME_UPDATE
+                )
+                _write_recurring_income_audit(
+                    year_month, action, key, income.income_source_id, before, income, explanation, user, override_active
+                )
+            case StopRecurringIncome(planned_income_id=key):
+                if (year_month, key) in by_key and by_key[(year_month, key)] is None:
+                    continue
+                before = value_at_or_before(by_key, year_month, key)
+                _PLANNED_INCOME_TABLE.put_recurring_income(year_month, key, None)
+                _write_recurring_income_audit(
+                    year_month,
+                    AuditAction.RECURRING_INCOME_STOP,
+                    key,
+                    before.income_source_id if before is not None else None,
+                    before,
+                    None,
+                    explanation,
+                    user,
+                    override_active,
+                )
+            case UnpinRecurringIncome():
+                pass
+            case _:
+                assert_never(change)
+
+    return _json_response(200, json.dumps(_income_plan_response(year_month, now), default=_json_default))
+
+
+def _post_income_pin(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Pin, stop, or unpin recurring incomes in a future month.
+
+    The same rules as the budget /pin: the month must be EDITABLE and later than the current month, and the override
+    does not change that. Body: `{recurring: [{action, plannedIncomeId?, recurringIncome?}], explanation}`. A recurring
+    income left out of the body does not change.
+    - SET writes a pin (RECURRING_INCOME_PIN). With no `plannedIncomeId`, it creates a new recurring income from this
+      month on (RECURRING_INCOME_CREATE).
+    - STOP stops a recurring income from this month on (RECURRING_INCOME_STOP).
+    - UNPIN removes the pin or the stop of this month (RECURRING_INCOME_UNPIN).
+    The same value again is a no-op with no audit entry.
+
+    Returns `{incomePlan: <the month, as GET /api/income>, warnings: {downstreamPins, pinMatchesCarriedValue}}`.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+    try:
+        changes = parse_recurring_income_changes(body)
+    except ValueError as e:
+        return _response(400, str(e))
+
+    if year_month <= _year_month_of(now):
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": "/pin is for future months only; use /replace for current/grace/locked months",
+                    "yearMonth": year_month,
+                }
+            ),
+        )
+    state = editability(year_month, now)
+    if state != EditabilityState.EDITABLE:
+        return _json_response(
+            409,
+            json.dumps(
+                {
+                    "error": f"/pin requires an editable future month; year-month is {state}",
+                    "yearMonth": year_month,
+                    "state": state,
+                }
+            ),
+        )
+
+    _ensure_hydrated(now)
+
+    # Read the plan before any write, so that the warnings compare with the plan as it was.
+    by_key = carry_map(RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE).scan_stored_values())
+    err = _check_recurring_income_changes(changes, {key for _, key in by_key})
+    if err:
+        return err
+    pin_matches_carried: list[str] = []
+    touched_ids: set[str] = set()
+
+    for change in changes:
+        match change:
+            case SetRecurringIncome(planned_income_id=planned_income_id, income=income):
+                key = planned_income_id or new_recurring_income_id()
+                touched_ids.add(key)
+                held = (year_month, key) in by_key
+                before = by_key.get((year_month, key))
+                if held and before == income:
+                    continue
+                _PLANNED_INCOME_TABLE.put_recurring_income(year_month, key, income)
+                if planned_income_id is None:
+                    action = AuditAction.RECURRING_INCOME_CREATE
+                else:
+                    action = AuditAction.RECURRING_INCOME_PIN
+                    if walk_back_for(by_key, year_month, key) == income:
+                        pin_matches_carried.append(key)
+                _write_recurring_income_audit(
+                    year_month, action, key, income.income_source_id, before, income, explanation, user, False
+                )
+            case StopRecurringIncome(planned_income_id=key):
+                touched_ids.add(key)
+                if (year_month, key) in by_key and by_key[(year_month, key)] is None:
+                    continue
+                before = value_at_or_before(by_key, year_month, key)
+                _PLANNED_INCOME_TABLE.put_recurring_income(year_month, key, None)
+                _write_recurring_income_audit(
+                    year_month,
+                    AuditAction.RECURRING_INCOME_STOP,
+                    key,
+                    before.income_source_id if before is not None else None,
+                    before,
+                    None,
+                    explanation,
+                    user,
+                    False,
+                )
+            case UnpinRecurringIncome(planned_income_id=key):
+                touched_ids.add(key)
+                if (year_month, key) not in by_key:
+                    continue
+                before = by_key[(year_month, key)]
+                _PLANNED_INCOME_TABLE.delete_recurring_income(year_month, key)
+                _write_recurring_income_audit(
+                    year_month,
+                    AuditAction.RECURRING_INCOME_UNPIN,
+                    key,
+                    before.income_source_id if before is not None else None,
+                    before,
+                    None,
+                    explanation,
+                    user,
+                    False,
+                )
+            case _:
+                assert_never(change)
+
+    # A later pin or stop holds its own value, so a change in this month does not reach it.
+    downstream_pins = sorted(
+        (
+            {"plannedIncomeId": key, "yearMonth": ym}
+            for ym, key, _ in RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE).scan_stored_values()
+            if key in touched_ids and ym > year_month
+        ),
+        key=lambda p: (p["yearMonth"], p["plannedIncomeId"]),
+    )
+
+    return _json_response(
+        200,
+        json.dumps(
+            {
+                "incomePlan": _income_plan_response(year_month, now),
+                "warnings": {
+                    "downstreamPins": downstream_pins,
+                    "pinMatchesCarriedValue": sorted(pin_matches_carried),
+                },
+            },
+            default=_json_default,
+        ),
+    )
+
+
+def _write_recurring_income_audit(
+    year_month: str,
+    action: AuditAction,
+    planned_income_id: str,
+    income_source_id: str | None,
+    before: RecurringIncome | None,
+    after: RecurringIncome | None,
+    explanation: str,
+    user: dict[str, str],
+    override_active: bool,
+) -> None:
+    """Write the audit entry of one change to a recurring income. A value of None is a stop or no value."""
+
+    _AUDIT_LOG_TABLE.write_entry(
+        effective_year_month=year_month,
+        category_id=None,
+        action=action,
+        explanation=explanation,
+        user=user,
+        changes={
+            "recurringIncome": {
+                "before": before.to_item() if before is not None else None,
+                "after": after.to_item() if after is not None else None,
+            }
+        },
+        override=override_active,
+        income_source_id=income_source_id,
+        planned_income_id=planned_income_id,
+    )
+
+
+def _post_one_time(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
+    """Create, change, or delete a one-time income. One route does all three, from the body:
+
+    - Create: `{label, incomeSourceId?, gross, deductions, explanation, override?}` (no `plannedIncomeId`)
+    - Change: `{plannedIncomeId, label, incomeSourceId?, gross, deductions, explanation, override?}`
+    - Delete: `{plannedIncomeId, delete: true, explanation, override?}`
+
+    The month must be EDITABLE or GRACE, or LOCKED with the override. A future month is permitted. Each call makes one
+    ONE_TIME_INCOME_CREATE, ONE_TIME_INCOME_UPDATE, or ONE_TIME_INCOME_DELETE entry. The entry holds the label, because
+    the income can be deleted later.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    body = _parse_json_body(event)
+    if body is None:
+        return _response(400, "Request body is required")
+    explanation = (body.get("explanation") or "").strip()
+    if not explanation:
+        return _response(400, "explanation is required")
+    try:
+        args = parse_one_time_income_args(body)
+    except ValueError as e:
+        return _response(400, str(e))
+
+    override_active, err = _resolve_override(event, body)
+    if err:
+        return err
+    err = _check_year_month_editable(year_month, override_active, now)
+    if err:
+        return err
+
+    match args:
+        case CreateOneTimeIncomeArgs():
+            return _create_one_time_income(year_month, args, explanation, user, override_active)
+        case UpdateOneTimeIncomeArgs():
+            return _update_one_time_income(year_month, args, explanation, user, override_active)
+        case DeleteOneTimeIncomeArgs():
+            return _delete_one_time_income(year_month, args, explanation, user, override_active)
+        case _:
+            assert_never(args)
+
+
+def _create_one_time_income(
+    year_month: str, args: CreateOneTimeIncomeArgs, explanation: str, user: dict[str, str], override_active: bool
+) -> dict[str, Any]:
+    """Create a one-time income, and write a ONE_TIME_INCOME_CREATE audit entry."""
+
+    err = _check_one_time_income_source(args.income)
+    if err:
+        return err
+    item = _PLANNED_INCOME_TABLE.create_one_time_income(year_month, args.income)
+    _write_one_time_income_audit(
+        year_month,
+        AuditAction.ONE_TIME_INCOME_CREATE,
+        str(item["plannedIncomeId"]),
+        before=None,
+        after=args.income,
+        explanation=explanation,
+        user=user,
+        override_active=override_active,
+    )
+    return _json_response(201, json.dumps(item, default=_json_default))
+
+
+def _update_one_time_income(
+    year_month: str, args: UpdateOneTimeIncomeArgs, explanation: str, user: dict[str, str], override_active: bool
+) -> dict[str, Any]:
+    """Change a one-time income, and write a ONE_TIME_INCOME_UPDATE audit entry."""
+
+    stored = _PLANNED_INCOME_TABLE.get_planned_income(year_month, args.planned_income_id)
+    if stored is None:
+        return _response(404, "One-time income not found")
+    err = _check_one_time_income_source(args.income)
+    if err:
+        return err
+    item = _PLANNED_INCOME_TABLE.update_one_time_income(year_month, args.planned_income_id, args.income)
+    _write_one_time_income_audit(
+        year_month,
+        AuditAction.ONE_TIME_INCOME_UPDATE,
+        args.planned_income_id,
+        before=parse_one_time_income(stored),
+        after=args.income,
+        explanation=explanation,
+        user=user,
+        override_active=override_active,
+    )
+    return _json_response(200, json.dumps(item, default=_json_default))
+
+
+def _delete_one_time_income(
+    year_month: str, args: DeleteOneTimeIncomeArgs, explanation: str, user: dict[str, str], override_active: bool
+) -> dict[str, Any]:
+    """Delete a one-time income, and write a ONE_TIME_INCOME_DELETE audit entry that keeps its value."""
+
+    stored = _PLANNED_INCOME_TABLE.get_planned_income(year_month, args.planned_income_id)
+    if stored is None:
+        return _response(404, "One-time income not found")
+    _PLANNED_INCOME_TABLE.delete_one_time_income(year_month, args.planned_income_id)
+    _write_one_time_income_audit(
+        year_month,
+        AuditAction.ONE_TIME_INCOME_DELETE,
+        args.planned_income_id,
+        before=parse_one_time_income(stored),
+        after=None,
+        explanation=explanation,
+        user=user,
+        override_active=override_active,
+    )
+    return _json_response(200, json.dumps({"deleted": args.planned_income_id}, default=_json_default))
+
+
+def _check_one_time_income_source(income: OneTimeIncome) -> dict[str, Any] | None:
+    """Return a 400 response if the one-time income names an income source that does not exist, else None."""
+
+    if income.income_source_id is None:
+        return None
+    if _INCOME_SOURCE_TABLE.get_income_source_by_id(income.income_source_id) is None:
+        return _response(400, f"income source '{income.income_source_id}' does not exist")
+    return None
+
+
+def _write_one_time_income_audit(
+    year_month: str,
+    action: AuditAction,
+    planned_income_id: str,
+    *,
+    before: OneTimeIncome | None,
+    after: OneTimeIncome | None,
+    explanation: str,
+    user: dict[str, str],
+    override_active: bool,
+) -> None:
+    """Write the audit entry of one change to a one-time income."""
+
+    source = after or before
+    _AUDIT_LOG_TABLE.write_entry(
+        effective_year_month=year_month,
+        category_id=None,
+        action=action,
+        explanation=explanation,
+        user=user,
+        changes={
+            "oneTimeIncome": {
+                "before": before.to_item() if before is not None else None,
+                "after": after.to_item() if after is not None else None,
+            }
+        },
+        override=override_active,
+        income_source_id=source.income_source_id if source is not None else None,
+        planned_income_id=planned_income_id,
+    )
+
+
 # --- Transactions ---
 
 
@@ -1205,6 +1891,10 @@ def _get_summary(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     _ensure_hydrated(now)
 
     result = compute_summary(_BUDGET_TABLE, _TRANSACTIONS_TABLE, _CATEGORY_TABLE, month, now)
+    # Left to assign: the planned net income minus every budget target. It uses the same
+    # category membership as `totals.budgeted`. No transaction changes it.
+    planned = int(compute_income_plan(_PLANNED_INCOME_TABLE, _INCOME_SOURCE_TABLE, month, now)["plannedNetIncome"])
+    result["income"] = {"plannedNetIncome": planned, "leftToAssign": planned - int(result["totals"]["budgeted"])}
     return _json_response(200, json.dumps(result, default=_json_default))
 
 
@@ -1277,14 +1967,16 @@ def _delete_profile(profile_id: str) -> dict[str, Any]:
         return _response(404, "Profile not found")
 
     blocking = _ACCOUNT_TABLE.accounts_with_owner(profile_id)
-    if blocking:
+    blocking_sources = _INCOME_SOURCE_TABLE.sources_with_owner(profile_id)
+    if blocking or blocking_sources:
         return _json_response(
             409,
             json.dumps(
                 {
-                    "error": "Profile is the owner of one or more accounts; reassign them first",
+                    "error": "Profile is the owner of one or more accounts or income sources; reassign them first",
                     "personId": profile_id,
                     "blockingAccounts": blocking,
+                    "blockingIncomeSources": blocking_sources,
                 }
             ),
         )

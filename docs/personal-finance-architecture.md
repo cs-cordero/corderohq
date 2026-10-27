@@ -10,11 +10,12 @@ uploads a CSV export from a bank or a credit card, and the app fills in the tran
 can then compare the actual amounts against the budget. The app records each budget change in an
 audit log, and each change needs an explanation.
 
-The budget also has an **income plan**. Each income source (any stream of income, such as a job,
-interest, or dividends) has a payment
-with gross amount and deductions, and the app calculates the net amount. The top line of the budget is
-**left to assign**: the planned net income minus the budget targets. The goal is `$0`, so every
-dollar of net amount has a job. See **Income Plan and Left to Assign**.
+The budget also has an **income plan**. Each month holds its **planned incomes**: the recurring
+incomes that carry forward, such as a salary or the rent of a property, and the one-time incomes,
+such as a bonus. Each one has a gross amount and deductions, and the app calculates the net amount.
+An **income source**, such as a job or a landlord business, is who pays it. The top line of the
+budget is **left to assign**: the planned net income minus the budget targets. The goal is `$0`, so
+every dollar of net amount has a job. See **Income Plan and Left to Assign**.
 
 Each transaction has a **budget treatment**: Budget (a normal expense), Off-budget (such as work travel
 that an employer pays back), or Skip (such as a paycheck or a transfer). Only Budget rows are
@@ -53,7 +54,7 @@ lambda/src/corderohq/
     budget/treatment.py    The Budget-impacting / Off-budget / Skip rules of a transaction
     budget/transaction_args.py
                            The checks of a new or changed transaction, at the API boundary
-    budget/income.py       Payment rules, net amount, and the IncomePlan row IDs
+    budget/income.py       The planned income types, their rules, and the checks of each request
     budget/densify.py      Densify step and future-month walk-back, for any DenseSparseStore
     budget/editability.py  The editability state function
     budget/auth.py         Admin group check
@@ -64,9 +65,9 @@ lambda/src/corderohq/
         util.py            The shared boto3 resource, the budget time zone, and the paging helpers:
                            scan_all_items() and query_all_items() return every page
         summary.py         compute_summary()
-        income_summary.py  compute_income()
+        income_summary.py  compute_income_plan()
         budget.py, budget_audit_log.py, category.py, category_group.py, transactions.py,
-        income_source.py, income_plan.py, profile.py, account.py, net_worth_snapshot.py
+        income_source.py, planned_income.py, profile.py, account.py, net_worth_snapshot.py
                            One file for each table; the file name matches the table name
 infra/lib/
     personal-finance-dynamodb-stack.ts   DynamoDB tables
@@ -172,20 +173,25 @@ it.
 |                        |                    |            | within a month.             |
 +------------------------+--------------------+------------+-----------------------------+
 | IncomeSource-{stage}   | incomeSourceId     | —          | ULID. Fields: owners (one or|
-|                        |                    |            | more personIds),            |
-|                        |                    |            | label, frequency (display   |
-|                        |                    |            | only), active, sortOrder,   |
-|                        |                    |            | timestamps.                 |
+|                        |                    |            | more personIds), label,     |
+|                        |                    |            | active, sortOrder,          |
+|                        |                    |            | timestamps. It holds no     |
+|                        |                    |            | money.                      |
 +------------------------+--------------------+------------+-----------------------------+
-| IncomePlan-{stage}     | yearMonth          | lineId     | "SRC#{incomeSourceId}": a   |
-|                        |                    |            | payment row (lineType       |
-|                        |                    |            | PAYMENT; paymentsPerMonth,  |
-|                        |                    |            | gross, deductions[{label,   |
-|                        |                    |            | kind, amount}]). Dense/     |
-|                        |                    |            | sparse like Budget rows.    |
-|                        |                    |            | "ONE#{ULID}": a one-time    |
-|                        |                    |            | line (lineType ONE_TIME;    |
-|                        |                    |            | label, amount). Never       |
+| PlannedIncome-{stage}  | yearMonth          | planned-   | "REC#{ULID}": a recurring   |
+|                        |                    | IncomeId   | income (kind RECURRING;     |
+|                        |                    |            | incomeSourceId, label,      |
+|                        |                    |            | frequency, gross,           |
+|                        |                    |            | deductions[{label, kind,    |
+|                        |                    |            | amount}]), with the same id |
+|                        |                    |            | in each month. Dense/sparse |
+|                        |                    |            | like Budget rows. `stopped: |
+|                        |                    |            | true` stops it from that    |
+|                        |                    |            | month on. "ONE#{ULID}": a   |
+|                        |                    |            | one-time income (kind       |
+|                        |                    |            | ONE_TIME; label,            |
+|                        |                    |            | incomeSourceId (optional),  |
+|                        |                    |            | gross, deductions). Never   |
 |                        |                    |            | carries forward.            |
 +------------------------+--------------------+------------+-----------------------------+
 | BudgetAuditLog-{stage} | entityType         | sortId     | Single-partition design so  |
@@ -201,7 +207,7 @@ it.
 |                        |                    |            | timestamp), effectiveYear-  |
 |                        |                    |            | Month (nullable),           |
 |                        |                    |            | categoryId (a budget entry) |
-|                        |                    |            | or incomeLineId and         |
+|                        |                    |            | or plannedIncomeId and      |
 |                        |                    |            | incomeSourceId (an income   |
 |                        |                    |            | entry), action (CREATE/     |
 |                        |                    |            | UPDATE/PIN/UNPIN/CATEGORY_  |
@@ -444,21 +450,23 @@ Assign** for the bodies and the responses.
 | Method | Path                                       | Purpose                                |
 +--------+--------------------------------------------+----------------------------------------+
 | GET    | /api/income-sources?include_inactive=true  | List the income sources.               |
-| POST   | /api/income-sources                        | Create a source with its first         |
-|        |                                            | payment in the current month. One      |
-|        |                                            | INCOME_CREATE audit entry.             |
+| POST   | /api/income-sources                        | Create a source. It holds no money, so |
+|        |                                            | it has no audit entry.                 |
 | POST   | /api/income-sources/reorder                | Write the full order.                  |
-| PUT    | /api/income-sources/{id}                   | Change the label, the frequency, or    |
-|        |                                            | the owners. No editability check. No   |
-|        |                                            | audit entry.                           |
-| POST   | /api/income-sources/{id}/deactivate        | The same flow as a category.           |
+| PUT    | /api/income-sources/{id}                   | Change the label or the owners. No     |
+|        |                                            | editability check. No audit entry.     |
+| POST   | /api/income-sources/{id}/deactivate        | Stop each of its recurring incomes     |
+|        |                                            | from the next month on.                |
 | POST   | /api/income-sources/{id}/reactivate        | The same as a category.                |
 | GET    | /api/income/{YYYY-MM}                      | The income plan of one month.          |
-| POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the payments.     |
-| POST   | /api/income/{YYYY-MM}/pin                  | Future-month write of the payments.    |
-| POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time line (no `lineId`),  |
-|        |                                            | change it (a `lineId`), or delete it   |
-|        |                                            | (a `lineId` and `delete: true`).       |
+| POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the recurring     |
+|        |                                            | incomes.                               |
+| POST   | /api/income/{YYYY-MM}/pin                  | Future-month write of the recurring    |
+|        |                                            | incomes.                               |
+| POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time income (no           |
+|        |                                            | `plannedIncomeId`), change it (an id), |
+|        |                                            | or delete it (an id and `delete:       |
+|        |                                            | true`).                                |
 +--------+--------------------------------------------+----------------------------------------+
 ```
 
@@ -614,19 +622,22 @@ The shape of the `changes` field on a `BudgetAuditLog-{stage}` row depends on th
 ### Audit entries of the income plan
 
 The income plan writes these actions to the same log. An income entry has no `categoryId`. It has
-`incomeLineId`, and a payment entry also has `incomeSourceId`.
+`plannedIncomeId`, and also `incomeSourceId` when the income has a source.
 
 | Action | Made by | `changes` |
 |---|---|---|
-| `INCOME_CREATE` | the create of an income source; `/replace` writes a new payment row | `{payment: {before: null, after: P}}` (the create also has `label`) |
-| `INCOME_UPDATE` | `/replace` changes a payment row | `{payment: {before: P, after: P}}` |
-| `INCOME_PIN` | `/pin` writes a future payment | `{payment: {before: P \| null, after: P}}` |
-| `INCOME_UNPIN` | `/pin` with `payment: null`; a deactivation that drops a pin | `{payment: {before: P, after: null}}` |
-| `ONE_TIME_CREATE` / `_UPDATE` / `_DELETE` | the `/one-time` routes | `{line: {before: L \| null, after: L \| null}}` |
+| `RECURRING_INCOME_CREATE` | a `SET` with no `plannedIncomeId` | `{recurringIncome: {before: null, after: R}}` |
+| `RECURRING_INCOME_UPDATE` | a `SET` in `/replace` | `{recurringIncome: {before: R \| null, after: R}}` |
+| `RECURRING_INCOME_PIN` | a `SET` in `/pin` | `{recurringIncome: {before: R \| null, after: R}}` |
+| `RECURRING_INCOME_STOP` | a `STOP`; the deactivation of a source | `{recurringIncome: {before: R \| null, after: null}}` |
+| `RECURRING_INCOME_UNPIN` | an `UNPIN` in `/pin`; a deactivation that drops a pin | `{recurringIncome: {before: R \| null, after: null}}` |
+| `ONE_TIME_INCOME_CREATE` / `_UPDATE` / `_DELETE` | the `/one-time` route | `{oneTimeIncome: {before: O \| null, after: O \| null}}` |
 
-`P` is `{paymentsPerMonth, gross, deductions}`. `L` is `{label, amount}`. The entry holds the label
-of a one-time line, because the line can be deleted later. The rename, the reorder, and the
-reactivation of an income source make no entry, the same as for a category.
+`R` is a recurring income, `{incomeSourceId, label, frequency, gross, deductions}`, and `null` is a
+stop or no value. `O` is a one-time income, `{label, incomeSourceId?, gross, deductions}`. The
+entry holds the whole value, because a one-time income can be deleted later. The create, the
+rename, the reorder, and the reactivation of an income source make no entry, the same as for a
+category.
 
 ### Audit entry `override` field
 
@@ -894,35 +905,35 @@ both of these:
 
 ### This-month-only values (Spec 58)
 
-A Budget row and a payment row of the income plan can each hold **two values**:
+A Budget row and a recurring income can each hold **two values**:
 
-| | Budget row | Payment row (IncomePlan) | Later months |
+| | Budget row | Recurring income (PlannedIncome) | Later months |
 |---|---|---|---|
-| Carried value | `amount` (`null` means no target) | `paymentsPerMonth`, `gross`, `deductions` | copy it |
-| This-month-only value | `onlyAmount` | `onlyPayment` (a map of the same three fields) | never see it |
+| Carried value | `amount` (`null` means no target) | the recurring income itself | copy it |
+| This-month-only value | `onlyAmount` | `onlyThisMonth` (a whole recurring income) | never see it |
 
 - **What a month shows:** its this-month-only value if it has one, else its carried value, else
   the carried value from the walk back (`effective_value()` in `budget/densify.py`).
 - **The densify step and the walk back read carried values only.** The densify adapters
-  (`BudgetDensifyAdapter`, `IncomePlanDensifyAdapter`) give them through `scan_stored_values()`, and
+  (`BudgetDensifyAdapter`, `RecurringIncomeDensifyAdapter`) give them through `scan_stored_values()`, and
   give the this-month-only values through `scan_only_values()`. When the densify step fills the
   carried value of a month, `put_stored_value()` keeps a this-month-only value that the row already
   has.
 - **A future month can hold a row with only a this-month-only value,** and no carried value. Such a
   row is not a pin: `pinned` is false, and `downstreamPins` leaves it out.
 - **The writes:**
-  - `/replace` (a dense month): each target or payment sends its carried value, as before. An
-    `onlyAmount` or `onlyPayment` key sets the this-month-only value (a value) or clears it
+  - `/replace` (a dense month): each target or recurring income sends its carried value, as before.
+    An `onlyAmount` or `onlyThisMonth` key sets the this-month-only value (a value) or clears it
     (`null`). Without the key, the stored one stays.
   - `/pin` (a future month): each of the two keys is optional. A value sets it, `null` removes it,
     and a missing key does not change it. A row with neither value is deleted.
   - The frontend sends "From this month on" as the carried value plus a cleared this-month-only
     value, and "This month only" as the this-month-only value alone.
-- **The audit log** uses the same actions (CREATE, UPDATE, PIN, UNPIN, and the INCOME_ forms). The
-  `changes` payload names `onlyAmount` or `onlyPayment` for a this-month-only change.
+- **The audit log** uses the same actions (CREATE, UPDATE, PIN, UNPIN, and the RECURRING_INCOME_
+  forms). The `changes` payload names `onlyAmount` or `onlyThisMonth` for a this-month-only change.
 - **The responses:** a future budget target has `amount` (carried), `pinned`, and `onlyAmount` when
-  present. An income payment entry has the fields that the month shows, plus `carriedPayment` and
-  `onlyThisMonth`.
+  present. A recurring income entry has the fields that the month shows, plus
+  `carriedRecurringIncome` and `hasOnlyThisMonth`.
 
 ### Edge cases
 
@@ -954,53 +965,60 @@ active keys:
 
 - `BudgetDensifyAdapter(budget_table)`: the key is a `categoryId`, and the value is the amount.
   The cold-start value is `0`.
-- `IncomePlanDensifyAdapter(income_plan_table)`: the key is an `incomeSourceId`, and the value is the
-  payment. It reads only the `SRC#` rows, so a one-time line never carries forward. The
-  cold-start value is `None`, and the store writes no row for `None`: an income source always gets
-  its first payment row when it is made.
+- `RecurringIncomeDensifyAdapter(planned_income_table)`: the key is a `plannedIncomeId`, and the
+  value is the recurring income, or `None` for a stop. It reads only the `REC#` items, so a one-time
+  income never carries forward. The keys are every recurring income in the table. The store writes
+  nothing for `None`, so a stop stays in effect for the walk back.
 
 `_ensure_hydrated()` and the scheduled Lambda densify both tables. `compute_summary()` and
-`compute_income()` use the shared walk-back functions (`walk_back_for()`,
+`compute_income_plan()` use the shared walk-back functions (`walk_back_for()`,
 `value_at_or_before()`).
 
 ## Income Plan and Left to Assign
 
-### Income sources and payments
+### Income sources and planned incomes
 
-An **income source** is one stream of income that the plan counts, such as a job, interest, or
-dividends (`IncomeSource-{stage}`). It has one or more owners, the same as an account, so a joint
-source has two. A person can own any number of them, and the app does not delete a person who still
-owns one. Every kind works the same way: for a source with no deductions, the gross amount equals
-the net amount. The label of a source is real data, so it lives only in DynamoDB, and never in the
-code.
+An **income source** is who pays the household, such as a job, a bank, or a landlord business
+(`IncomeSource-{stage}`). It holds no money. It has one or more owners, the same as an account, so
+a joint source has two. A person can own any number of them, and the app does not delete a person
+who still owns one. The label of a source is real data, so it lives only in DynamoDB, and never in
+the code.
 
-Each dense month holds one **payment row** for each active income source, in `IncomePlan-{stage}`,
-with the same month rules as a Budget row: dense past and current months, sparse future pins,
-carry-forward, the grace period, the lock, the admin override, and an audit entry with an
-explanation for each change.
+A **planned income** is money that one month expects (`PlannedIncome-{stage}`). It is one of two
+kinds, and both have a label, a gross amount, and deductions:
 
-A payment is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount for
-one payment. The order of the deductions is the display order.
+- A **recurring income** (`REC#{ULID}`) repeats each month, such as a salary or the rent of one
+  property. It has an income source, and one source can have many recurring incomes. It has the
+  same id in each month, and obeys the month rules of a Budget row: dense past and current months,
+  sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
+  entry with an explanation for each change. A rename starts in the month where it is made, the same
+  as a change of amount.
+- A **one-time income** (`ONE#{ULID}`) is money in one month only, such as a bonus, an RSU vest, a
+  tax refund, or a third paycheck. Its income source is optional. It never carries forward, and the
+  densify step never copies it.
+
+The money fields are `gross` and `deductions: [{label, kind, amount}]`. The order of the deductions
+is the display order.
 
 - The deduction kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`. They are
   for display only. No calculation uses them.
-- `net = gross − sum(deductions)` and `monthlyNet = net × paymentsPerMonth`. The app calculates the
-  net amount on each read, and never stores it.
-- The rules: `gross >= 0`, each deduction amount `>= 0`, `net >= 0`, `paymentsPerMonth` is an
-  integer from 1 to 5, and no label is empty.
-- Two payments are equal when `paymentsPerMonth`, `gross`, and the full list of deductions are
-  equal. A write of an equal payment does nothing, and makes no audit entry.
-- The whole payment is one value. A change to one deduction writes the whole row again, so the
-  walk back copies one value, the same as for a Budget row.
+- `net = gross − sum(deductions)`. For a recurring income, `monthlyNet = net × the times per month
+  of its frequency`. The app calculates both on each read, and never stores them.
+- The rules: `gross >= 0`, each deduction amount `>= 0`, `net >= 0`, and no label is empty. A
+  deduction is optional, so for interest or a gift the gross amount is the net amount.
+- Two recurring incomes are equal when every field is equal. A write of an equal value does
+  nothing, and makes no audit entry.
 
-The pay frequency sets the default `paymentsPerMonth`: weekly 4, every two weeks 2, twice a month
-2, and monthly 1. The count is stored on the payment of each month, so a change of frequency does
-not alter a locked month. The plan uses the same count in every month, so a third paycheck is not
-in the plan.
+The frequency of a recurring income sets the times per month that the plan counts it: weekly 4,
+every two weeks 2, twice a month 2, and monthly 1. This is an estimate. A weekly income pays 5
+times in some months, and an income that pays every two weeks pays 3 times in two months of each
+year. Put an extra paycheck in the plan as a one-time income. The frequency is part of the value
+that carries forward, so a change of frequency starts in the month where it is made.
 
-A **one-time income line** (`ONE#{ULID}`) is a net amount in one month only, such as a bonus, an
-RSU payout, a DCFSA payout, or a third paycheck. The amount must be more than 0. It never carries
-forward, and the densify step never copies it.
+**A stop.** To stop a recurring income, store a stop (`stopped: true`) in the month where it ends.
+The stop carries forward, the same as a value. The month view shows the stop only in its own month,
+with the value from before it, so that the user can undo it. To undo a stop, write that value again
+with `SET`. A later `SET` starts the same recurring income again.
 
 **Why a separate table, and not more rows in `Budget-{stage}`?** The SK of the Budget table is a
 `categoryId`. The `/replace` body rule, the summary, the hard delete, and the densify step all read
@@ -1014,43 +1032,48 @@ each row of a month as a category row. A separate table keeps each of them as it
 {
   "yearMonth": "2026-11",
   "state": "EDITABLE" | "GRACE" | "LOCKED",
-  "payments": [
+  "recurring": [
     {
-      "incomeSourceId", "label", "owners", "active",
-      "paymentsPerMonth", "gross", "deductions": [...],
-      "net",              // one payment
-      "monthlyNet",       // net × paymentsPerMonth
-      "carriedPayment",   // the value that carries forward, or null
-      "onlyThisMonth",    // true if the month shows a this-month-only payment
-      "pinned"            // future months only
-    }, ...
+      "plannedIncomeId", "incomeSourceId", "label", "frequency", "gross", "deductions": [...],
+      "sourceLabel", "owners", "sourceSortOrder",
+      "net",                     // one payment
+      "monthlyNet",              // net × the times per month of the frequency
+      "stopped": false,
+      "carriedRecurringIncome",  // the value that carries forward, or null
+      "hasOnlyThisMonth",        // true if the month shows a this-month-only value
+      "pinned"                   // future months only
+    },
+    { "plannedIncomeId", "stopped": true, "before": R | null, ... },  // a stop, in its own month only
+    ...
   ],
-  "oneTime": [{ "lineId", "label", "amount" }, ...],
+  "oneTime": [{ "plannedIncomeId", "label", "incomeSourceId"?, "gross", "deductions", "net" }, ...],
   "plannedNetIncome": number
 }
 ```
 
-`plannedNetIncome = sum(monthlyNet) + sum(one-time amounts)`. Membership copies the summary:
-
-- **A future month** — each active income source, with a pin or a value from the walk back.
-- **The current month and the grace month** — each active income source with a payment row.
-- **A locked month** — each income source with a payment row, active or not. A locked month uses
-  its own dense rows only, so its value never changes after the lock.
+`plannedNetIncome = sum(monthlyNet of each recurring income that is not stopped) + sum(net of each
+one-time income)`. A current or past month shows each recurring income that it holds. A future month
+shows each recurring income with a pin there, or a value from the walk back. A locked month uses its
+own dense rows only, so its value never changes after the lock.
 
 ### Writes
 
-`/replace` and `/pin` copy the budget endpoints. The body key is `payments`, a list of
-`{incomeSourceId, payment}`, in place of `targets`. Each income source in the body must exist. Each
-body has an `explanation`, and an optional `override`.
+`/replace` and `/pin` copy the budget endpoints. The body key is `recurring`, a list of
+`{action, plannedIncomeId?, recurringIncome?}`, in place of `targets`. Each body has an
+`explanation`, and `/replace` takes an optional `override`.
 
-- `/replace` needs every income source with a row in that month. It does not take a `null`
-  payment: to stop a source, deactivate it. The response is the month.
-- `/pin` takes `null` to remove a pin. It returns
-  `{income: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`, the same two
-  warnings as the budget `/pin`.
-- The `/one-time` route needs an `explanation`. A `lineId` must start with `ONE#`.
-- A deactivation drops the future pins after a confirmation, the same as for a category. There is
-  no hard delete for an income source. A mistake is fixed by a deactivation.
+- `SET` writes `recurringIncome`. With no `plannedIncomeId`, it creates a new recurring income from
+  this month on.
+- `STOP` stops a recurring income from this month on.
+- `UNPIN` removes the pin or the stop of a future month. It is for `/pin` only.
+- Each `plannedIncomeId` and each income source must exist.
+- `/replace` needs every recurring income with a value in that month. The response is the month.
+- `/pin` returns `{incomePlan: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`,
+  the same two warnings as the budget `/pin`.
+- The `/one-time` route needs an `explanation`. A `plannedIncomeId` must start with `ONE#`.
+- The deactivation of a source stops each of its recurring incomes in the next month, so the
+  current month keeps its plan. It drops their pins after the next month after a confirmation, the
+  same as for a category. There is no hard delete for an income source.
 
 ### Left to assign
 
@@ -1499,14 +1522,14 @@ the path for a CSV commit.
 | ACCOUNT_TABLE_NAME          | DynamoDB Account table            |
 | NETWORTH_SNAPSHOT_TABLE_NAME| DynamoDB NetWorthSnapshot table   |
 | INCOME_SOURCE_TABLE_NAME    | DynamoDB IncomeSource table       |
-| INCOME_PLAN_TABLE_NAME      | DynamoDB IncomePlan table         |
+| PLANNED_INCOME_TABLE_NAME   | DynamoDB PlannedIncome table      |
 | SSM_API_KEY_PARAM           | SSM path to the Anthropic API key |
 +-----------------------------+-----------------------------------+
 ```
 
 The scheduled densify Lambda gets `CATEGORY_TABLE_NAME`, `BUDGET_TABLE_NAME`,
-`INCOME_SOURCE_TABLE_NAME`, `INCOME_PLAN_TABLE_NAME`, and `STAGE`. It can read the Category and
-IncomeSource tables, and it can read and write the Budget and IncomePlan tables.
+`PLANNED_INCOME_TABLE_NAME`, and `STAGE`. It can read the Category table, and it can read and write
+the Budget and PlannedIncome tables.
 
 Every environment variable goes through `get_env_var()`. That function raises an error if the value
 is absent or blank.
@@ -1517,7 +1540,7 @@ React and TypeScript, built by Vite.
 
 The pages are `SummaryPage`, `BudgetPage`, `IncomePage`, `TransactionsPage`, `UploadPage`,
 `CategoriesPage`, `AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. `IncomePage` shows the
-payment breakdown of each income source for a month, the one-time lines, and the income sources.
+recurring and one-time incomes of a month, with the breakdown of each one, and the income sources.
 The summary page and the budget page show the shared `LeftToAssign` line at the top. The net worth record adds `AccountsPage` and
 `NetWorthEntryPage`. `App.tsx` holds the routes. `components/Layout.tsx` holds the navigation, with
 one list of links for the budget (`BUDGET_LINKS`) and one for the net worth record.
@@ -1571,7 +1594,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 
 - **An enum for each fixed set of values** — A set of strings that the app stores or sends is a
   `StrEnum`, such as `BudgetTreatment`, `EditabilityState`, `AuditAction`, `CashFlowRole`,
-  `IncomeLineType`, `PayFrequency`, `DeductionKind`, `TransactionKind`, `SuggestedBy`,
+  `PlannedIncomeKind`, `RecurringIncomeAction`, `PayFrequency`, `DeductionKind`, `TransactionKind`, `SuggestedBy`,
   `ReviewReason`, and `RowIssue`. A member is a `str`, so it compares equal to the stored string,
   and JSON and boto3 write its value. A set that never leaves the process is a plain `Enum`, such
   as `BankHint` and `SideKind`.
@@ -1579,12 +1602,12 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 - **A plan-based budget** — Left to assign = planned net income − targets. The user wants a stable
   monthly plan. A cash-based plan needs work on each payday. The plan counts the same number of
   payments every month, so extra money (a third paycheck, a bonus, an RSU or DCFSA payout) is not in
-  the plan unless the user adds a one-time line. The app shows no surplus for it, and gives no
+  the plan unless the user adds a one-time income. The app shows no surplus for it, and gives no
   warning. The app does not track actual income, so a paycheck deposit is SKIP, and there is no
   "income" budget treatment.
 - **Gross amount and each deduction are recorded** — The user can then see why the net amount is
   the number that it is. The app does not model a change of the net amount during the year, such as
-  the 401k limit or the Social Security wage limit. The user changes the payment by hand.
+  the 401k limit or the Social Security wage limit. The user changes the recurring income by hand.
 - **A DCFSA is only a pre-tax deduction** — It has no link to a category, because the user can
   spend DCFSA money on any qualified expense.
 - **No category balances** — No envelopes and no carryover. Money counts one time, when it goes into

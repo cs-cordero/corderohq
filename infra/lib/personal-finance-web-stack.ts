@@ -31,6 +31,8 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
     readonly budgetTable: dynamodb.ITable;
     readonly budgetAuditLogTable: dynamodb.ITable;
     readonly transactionsTable: dynamodb.ITable;
+    readonly incomeSourceTable: dynamodb.ITable;
+    readonly plannedIncomeTable: dynamodb.ITable;
     readonly profileTable: dynamodb.ITable;
     readonly accountTable: dynamodb.ITable;
     readonly netWorthSnapshotTable: dynamodb.ITable;
@@ -45,15 +47,15 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
  * - Cognito User Pool Group: budget-admin-{stage} (admin override authorization for budget feature)
  * - CloudWatch log group: /aws/lambda/personal-finance-handler-{stage}
  * - Lambda function: personal-finance-handler-{stage} (Python 3.13)
- * - IAM policy: DynamoDB read/write on all personal-finance tables (incl. Profile, Account), SSM GetParameter for API key
+ * - IAM policy: DynamoDB read/write on all personal-finance tables (incl. IncomeSource, PlannedIncome, Profile, Account), SSM GetParameter for API key
  * - CloudWatch log group: /aws/lambda/budget-scheduled-densify-{stage}
- * - Lambda function: budget-scheduled-densify-{stage} (Python 3.13, cron-driven)
+ * - Lambda function: budget-scheduled-densify-{stage} (Python 3.13, cron-driven; densifies Budget and PlannedIncome)
  * - IAM role: scheduler invoke role for the densify Lambda
  * - EventBridge Schedule: budget-scheduled-densify-{stage} (cron(0 0 1 * ? *) America/New_York)
  * - CloudWatch alarm (prod stage only): personal-finance-handler-prod-errors → shared alert topic
  * - CloudWatch alarm (prod stage only): budget-scheduled-densify-prod-errors → shared alert topic
  * - API Gateway HTTP API: personal-finance-api-{stage} (Cognito JWT authorizer)
- * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /pin), /api/transactions (+ /upload, /commit, /update, /delete), /api/summary, /api/audit-log, /api/profiles (GET / POST, + /{profileId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
+ * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /pin), /api/transactions (+ /upload, /commit, /update, /delete), /api/income-sources (+ /reorder, /{incomeSourceId} PUT / deactivate / reactivate), /api/income/{yearMonth} (+ /replace, /pin, /one-time), /api/summary, /api/audit-log, /api/profiles (GET / POST, + /{profileId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
  * - S3 bucket: personal-finance-assets-{stage}-{account}-{region} (frontend assets)
  * - CloudFront distribution: S3 origin (frontend) + API Gateway origin (/api/*) + Cognito proxy (/oauth2/*)
  * - Route 53 A record: {stage domain} → CloudFront
@@ -161,6 +163,8 @@ export class PersonalFinanceWebStack extends cdk.Stack {
                 BUDGET_TABLE_NAME: props.budgetTable.tableName,
                 BUDGET_AUDIT_LOG_TABLE_NAME: props.budgetAuditLogTable.tableName,
                 TRANSACTIONS_TABLE_NAME: props.transactionsTable.tableName,
+                INCOME_SOURCE_TABLE_NAME: props.incomeSourceTable.tableName,
+                PLANNED_INCOME_TABLE_NAME: props.plannedIncomeTable.tableName,
                 PROFILE_TABLE_NAME: props.profileTable.tableName,
                 ACCOUNT_TABLE_NAME: props.accountTable.tableName,
                 NETWORTH_SNAPSHOT_TABLE_NAME: props.netWorthSnapshotTable.tableName,
@@ -174,6 +178,8 @@ export class PersonalFinanceWebStack extends cdk.Stack {
         props.budgetTable.grantReadWriteData(apiHandler);
         props.budgetAuditLogTable.grantReadWriteData(apiHandler);
         props.transactionsTable.grantReadWriteData(apiHandler);
+        props.incomeSourceTable.grantReadWriteData(apiHandler);
+        props.plannedIncomeTable.grantReadWriteData(apiHandler);
         props.profileTable.grantReadWriteData(apiHandler);
         props.accountTable.grantReadWriteData(apiHandler);
         props.netWorthSnapshotTable.grantReadWriteData(apiHandler);
@@ -232,12 +238,14 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             environment: {
                 CATEGORY_TABLE_NAME: props.categoryTable.tableName,
                 BUDGET_TABLE_NAME: props.budgetTable.tableName,
+                PLANNED_INCOME_TABLE_NAME: props.plannedIncomeTable.tableName,
                 STAGE: stage,
             },
         });
 
         props.categoryTable.grantReadData(densifyFn);
         props.budgetTable.grantReadWriteData(densifyFn);
+        props.plannedIncomeTable.grantReadWriteData(densifyFn);
 
         // EventBridge Scheduler needs a role of its own to call the Lambda.
         const schedulerRole = new iam.Role(this, "ScheduledDensifySchedulerRole", {
@@ -317,6 +325,17 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             { path: "/api/transactions/commit", methods: [apigatewayv2.HttpMethod.POST] }, // CP10
             { path: "/api/transactions/update", methods: [apigatewayv2.HttpMethod.POST] },
             { path: "/api/transactions/delete", methods: [apigatewayv2.HttpMethod.POST] },
+
+            // Income sources and the income plan
+            { path: "/api/income-sources", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST] },
+            { path: "/api/income-sources/reorder", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/income-sources/{incomeSourceId}", methods: [apigatewayv2.HttpMethod.PUT] },
+            { path: "/api/income-sources/{incomeSourceId}/deactivate", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/income-sources/{incomeSourceId}/reactivate", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/income/{yearMonth}", methods: [apigatewayv2.HttpMethod.GET] },
+            { path: "/api/income/{yearMonth}/replace", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/income/{yearMonth}/pin", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/income/{yearMonth}/one-time", methods: [apigatewayv2.HttpMethod.POST] },
 
             // Read endpoints
             { path: "/api/summary", methods: [apigatewayv2.HttpMethod.GET] },

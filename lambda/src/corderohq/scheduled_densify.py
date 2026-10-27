@@ -8,6 +8,8 @@ from corderohq.aws.dynamodb import (
     BudgetDensifyAdapter,
     BudgetTable,
     CategoryTable,
+    PlannedIncomeTable,
+    RecurringIncomeDensifyAdapter,
     current_year_month,
 )
 from corderohq.budget.densify import densify
@@ -18,6 +20,7 @@ LOGGER.setLevel(logging.INFO)
 
 _CATEGORY_TABLE = CategoryTable(get_env_var("CATEGORY_TABLE_NAME"))
 _BUDGET_TABLE = BudgetTable(get_env_var("BUDGET_TABLE_NAME"))
+_PLANNED_INCOME_TABLE = PlannedIncomeTable(get_env_var("PLANNED_INCOME_TABLE_NAME"))
 
 
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -35,6 +38,10 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()],
             current_ym,
             cold_start_value=0,
+        )
+        recurring_incomes = RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE)
+        rows_written += densify(
+            recurring_incomes, recurring_incomes.recurring_income_ids(), current_ym, cold_start_value=None
         )
     except Exception:
         LOGGER.exception(json.dumps({"event": "scheduled_densify_failed", "currentYearMonth": current_ym}))

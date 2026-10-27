@@ -205,17 +205,19 @@ npm run format:check
 The budget's top line is **left to assign**: the planned net income minus the budget targets. The
 goal is `$0`. The summary page and the Allocations page show it.
 
-1. **Set up the income.** On the Income page, add one income source for each stream of income
-   that you want to plan, such as each job, or interest or dividends. For a job, type the gross
-   amount and each deduction from a paystub. For a source with no deductions, type only the gross
-   amount. The app calculates the net amount. Set the payments per month that the plan counts,
-   usually 2 for pay every two weeks. The first payment goes in the current month and carries
-   forward.
-2. **Change a payment.** Change it in the month where the change starts. A change in the current
-   month carries forward. A change in a future month is a pin.
-3. **Add extra money.** For a bonus, an RSU payout, a third paycheck, or a DCFSA payout that you
-   want to budget, add a one-time income line in that month. Extra money with no line is not part
-   of the plan.
+1. **Set up the income.** On the Income page, add one income source for each payer, such as each
+   job, each bank, or a landlord business. Then add a recurring income for each stream of money
+   from it, such as a salary, or the rent of each property. For a salary, type the gross amount and
+   each deduction from a paystub. For an income with no deductions, type only the gross amount. The
+   app calculates the net amount. The pay frequency sets the times that the plan counts it in each
+   month: weekly 4, every two weeks 2, twice a month 2, and monthly 1. A recurring income starts in
+   the month where you add it, and carries forward.
+2. **Change a recurring income.** Change it in the month where the change starts. A change in the
+   current month carries forward. A change in a future month is a pin. To end it, stop it in the
+   month where it ends. That month shows the stop, so you can undo it.
+3. **Add extra money.** For a bonus, an RSU vest, a third paycheck, or a DCFSA payout that you want
+   to budget, add a one-time income in that month. It can name its income source, and it can have
+   deductions. Extra money with no one-time income is not part of the plan.
 4. **Set up the accounts for uploads.** On the Accounts page, each account that takes a CSV upload
    needs the cash flow role "Spending" or "Holding". Checking and credit card accounts are "Spending"
    by default. Savings, brokerage, retirement, HSA, and 529 accounts are "Holding" by default. Add
