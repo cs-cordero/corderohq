@@ -14,9 +14,10 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class IncomeSourceTable:
-    """CRUD operations for income sources. An income source is any stream of income, such as a job.
+    """An income source for the household.
 
-    The money is not here. Its recurring and one-time incomes are in `PlannedIncomeTable`.
+    This can be a job or a cash-producing investment, or the aether. It merely identifies a source entity that can be
+    associated with PlannedIncome events.
     """
 
     @staticmethod
