@@ -3,91 +3,115 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from corderohq.aws.dynamodb.income_plan import IncomePlanDensifyAdapter, IncomePlanTable, get_payment
 from corderohq.aws.dynamodb.income_source import IncomeSourceTable
+from corderohq.aws.dynamodb.planned_income import PlannedIncomeTable, RecurringIncomeDensifyAdapter
 from corderohq.aws.dynamodb.util import BUDGET_TZ
-from corderohq.budget.densify import resolve_future
-from corderohq.budget.editability import EditabilityState, editability
-from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, PayFrequency, Payment
+from corderohq.budget.densify import carry_map, value_at_or_before, walk_back_for
+from corderohq.budget.editability import editability
+from corderohq.budget.income import (
+    ONE_TIME_INCOME_PREFIX,
+    RECURRING_INCOME_PREFIX,
+    RecurringIncome,
+    parse_one_time_income,
+)
 
 
-def compute_income(
-    income_plan: IncomePlanTable,
+def compute_income_plan(
+    planned_income: PlannedIncomeTable,
     income_sources: IncomeSourceTable,
     year_month: str,
     now: datetime,
 ) -> dict[str, Any]:
-    """Return the income plan of one month, with the net amount of each payment and the planned net income.
+    """Return the income plan of one month: each recurring income, each one-time income, and the planned net income.
 
-    The pay frequency of each income source sets its number of paychecks in the month, also in a locked month.
-
-    Membership, the same as the categories of the summary:
-    - **A future month** — each active income source, with a pin or a value from the walk back.
-      A source with neither is left out.
-    - **The current month and the grace month** — each active income source with a payment row.
-    - **A locked month** — each income source with a payment row in that month, active or not.
-
-    The one-time lines of the month always count. Nothing here reads a transaction.
+    A current or past month shows each recurring income that it holds. A future month shows each recurring income
+    with a pin there or a value from the walk back. A stop shows only in the month that holds it, with the value from
+    before the stop, so that the stop can be undone. A stopped recurring income does not count. Nothing here reads a
+    transaction.
     """
 
     sources_by_id = {s["incomeSourceId"]: s for s in income_sources.get_all_income_sources()}
-    state = editability(year_month, now)
     now_et = now.astimezone(BUDGET_TZ)
-    current_ym = f"{now_et.year:04d}-{now_et.month:02d}"
-    is_future = year_month > current_ym
+    is_future = year_month > f"{now_et.year:04d}-{now_et.month:02d}"
 
-    month_rows = income_plan.get_income_plan_for_month(year_month)
-    payment_by_source: dict[str, Payment] = {}
-    pinned_ids: set[str] = set()
+    month_items = planned_income.get_planned_income_for_month(year_month)
+    by_key = carry_map(RecurringIncomeDensifyAdapter(planned_income).scan_stored_values())
     if is_future:
-        store = IncomePlanDensifyAdapter(income_plan)
-        active_ids = [source_id for source_id, source in sources_by_id.items() if source["active"]]
-        for resolved in resolve_future(store, active_ids, year_month):
-            payment_by_source[resolved.key] = resolved.value
-            if resolved.pinned:
-                pinned_ids.add(resolved.key)
+        keys = sorted({key for _, key in by_key})
     else:
-        for row in month_rows:
-            if not str(row["lineId"]).startswith(PAYMENT_LINE_PREFIX):
-                continue
-            source = sources_by_id.get(row["incomeSourceId"])
-            if state == EditabilityState.LOCKED or (source is not None and source.get("active", False)):
-                payment_by_source[str(row["incomeSourceId"])] = get_payment(row)
+        keys = sorted(
+            str(item["plannedIncomeId"])
+            for item in month_items
+            if str(item["plannedIncomeId"]).startswith(RECURRING_INCOME_PREFIX)
+        )
 
-    payments: list[dict[str, Any]] = []
-    for source_id, source in sources_by_id.items():
-        payment = payment_by_source.get(source_id)
-        if payment is None:
+    recurring: list[dict[str, Any]] = []
+    for key in keys:
+        income: RecurringIncome | None = value_at_or_before(by_key, year_month, key)
+        held_here = (year_month, key) in by_key
+        entry: dict[str, Any]
+        if income is not None:
+            entry = {
+                "plannedIncomeId": key,
+                **income.to_item(),
+                **_source_fields(sources_by_id, income.income_source_id),
+                "net": income.net,
+                "monthlyNet": income.monthly_net,
+                "stopped": False,
+            }
+        elif held_here:
+            before: RecurringIncome | None = walk_back_for(by_key, year_month, key)
+            entry = {
+                "plannedIncomeId": key,
+                "stopped": True,
+                "before": before.to_item() if before is not None else None,
+                **(_source_fields(sources_by_id, before.income_source_id) if before is not None else {}),
+            }
+        else:
             continue
-        frequency = PayFrequency(source["frequency"])
-        entry: dict[str, Any] = {
-            "incomeSourceId": source_id,
-            "label": source["label"],
-            "owners": list(source.get("owners", [])),
-            "active": bool(source.get("active", False)),
-            "frequency": frequency,
-            **payment.to_item(),
-            "net": payment.net,
-            "monthlyNet": payment.net * frequency.paychecks_per_month,
-        }
         if is_future:
-            entry["pinned"] = source_id in pinned_ids
-        payments.append(entry)
-
-    one_time = sorted(
-        (
-            {"lineId": row["lineId"], "label": row["label"], "amount": int(row["amount"])}
-            for row in month_rows
-            if str(row["lineId"]).startswith(ONE_TIME_LINE_PREFIX)
-        ),
-        key=lambda line: str(line["lineId"]),
+            entry["pinned"] = held_here
+        recurring.append(entry)
+    recurring.sort(
+        key=lambda entry: (entry.get("sourceSortOrder", 0), entry.get("sourceLabel", ""), entry["plannedIncomeId"])
     )
 
-    planned = sum(p["monthlyNet"] for p in payments) + sum(line["amount"] for line in one_time)
+    one_time: list[dict[str, Any]] = []
+    for item in sorted(month_items, key=lambda item: str(item["plannedIncomeId"])):
+        if not str(item["plannedIncomeId"]).startswith(ONE_TIME_INCOME_PREFIX):
+            continue
+        one_time_income = parse_one_time_income(item)
+        one_time.append(
+            {
+                "plannedIncomeId": item["plannedIncomeId"],
+                **one_time_income.to_item(),
+                **(
+                    _source_fields(sources_by_id, one_time_income.income_source_id)
+                    if one_time_income.income_source_id is not None
+                    else {}
+                ),
+                "net": one_time_income.net,
+            }
+        )
+
+    planned = sum(entry["monthlyNet"] for entry in recurring if not entry["stopped"]) + sum(
+        entry["net"] for entry in one_time
+    )
     return {
         "yearMonth": year_month,
-        "state": state,
-        "payments": payments,
+        "state": editability(year_month, now),
+        "recurring": recurring,
         "oneTime": one_time,
         "plannedNetIncome": planned,
+    }
+
+
+def _source_fields(sources_by_id: dict[str, dict[str, Any]], income_source_id: str) -> dict[str, Any]:
+    """Return the label, the owners, and the sort order of an income source, for the month view."""
+
+    source = sources_by_id.get(income_source_id, {})
+    return {
+        "sourceLabel": source.get("label", ""),
+        "owners": list(source.get("owners", [])),
+        "sourceSortOrder": int(source.get("sortOrder", 0)),
     }

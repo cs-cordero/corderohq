@@ -3,10 +3,15 @@ from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
 from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable
 from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.category_group import CategoryGroupTable
-from corderohq.aws.dynamodb.income_plan import IncomePlanDensifyAdapter, IncomePlanTable, get_payment
 from corderohq.aws.dynamodb.income_source import IncomeSourceTable
-from corderohq.aws.dynamodb.income_summary import compute_income
+from corderohq.aws.dynamodb.income_summary import compute_income_plan
 from corderohq.aws.dynamodb.net_worth_snapshot import NetWorthSnapshotTable
+from corderohq.aws.dynamodb.planned_income import (
+    PlannedIncomeTable,
+    RecurringIncomeDensifyAdapter,
+    get_recurring_income,
+    new_recurring_income_id,
+)
 from corderohq.aws.dynamodb.profile import ProfileTable
 from corderohq.aws.dynamodb.summary import compute_summary
 from corderohq.aws.dynamodb.transactions import TransactionsTable, get_budget_treatment
@@ -20,16 +25,17 @@ __all__ = [
     "BudgetTable",
     "CategoryGroupTable",
     "CategoryTable",
-    "IncomePlanDensifyAdapter",
-    "IncomePlanTable",
     "IncomeSourceTable",
     "NetWorthSnapshotTable",
+    "PlannedIncomeTable",
     "ProfileTable",
+    "RecurringIncomeDensifyAdapter",
     "TransactionsTable",
-    "compute_income",
+    "compute_income_plan",
     "compute_summary",
     "current_year_month",
     "get_budget_treatment",
     "get_cash_flow_role",
-    "get_payment",
+    "get_recurring_income",
+    "new_recurring_income_id",
 ]

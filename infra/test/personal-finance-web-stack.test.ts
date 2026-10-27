@@ -40,9 +40,9 @@ function createTestTemplate(stage: "dev" | "prod"): Template {
     const incomeSourceTable = new dynamodb.Table(helperStack, "IncomeSourceTable", {
         partitionKey: { name: "incomeSourceId", type: dynamodb.AttributeType.STRING },
     });
-    const incomePlanTable = new dynamodb.Table(helperStack, "IncomePlanTable", {
+    const plannedIncomeTable = new dynamodb.Table(helperStack, "PlannedIncomeTable", {
         partitionKey: { name: "yearMonth", type: dynamodb.AttributeType.STRING },
-        sortKey: { name: "lineId", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "plannedIncomeId", type: dynamodb.AttributeType.STRING },
     });
     const profileTable = new dynamodb.Table(helperStack, "ProfileTable", {
         partitionKey: { name: "householdId", type: dynamodb.AttributeType.STRING },
@@ -71,7 +71,7 @@ function createTestTemplate(stage: "dev" | "prod"): Template {
         budgetAuditLogTable,
         transactionsTable,
         incomeSourceTable,
-        incomePlanTable,
+        plannedIncomeTable,
         profileTable,
         accountTable,
         netWorthSnapshotTable,
@@ -118,7 +118,7 @@ describe("PersonalFinanceWebStack", () => {
                         BUDGET_AUDIT_LOG_TABLE_NAME: Match.anyValue(),
                         TRANSACTIONS_TABLE_NAME: Match.anyValue(),
                         INCOME_SOURCE_TABLE_NAME: Match.anyValue(),
-                        INCOME_PLAN_TABLE_NAME: Match.anyValue(),
+                        PLANNED_INCOME_TABLE_NAME: Match.anyValue(),
                         PROFILE_TABLE_NAME: Match.anyValue(),
                         ACCOUNT_TABLE_NAME: Match.anyValue(),
                         NETWORTH_SNAPSHOT_TABLE_NAME: Match.anyValue(),
@@ -128,15 +128,14 @@ describe("PersonalFinanceWebStack", () => {
             });
         });
 
-        test("scheduled densify Lambda has the budget and income plan table names", () => {
+        test("scheduled densify Lambda has the budget and planned income table names", () => {
             template.hasResourceProperties("AWS::Lambda::Function", {
                 FunctionName: "budget-scheduled-densify-prod",
                 Environment: {
                     Variables: Match.objectLike({
                         CATEGORY_TABLE_NAME: Match.anyValue(),
                         BUDGET_TABLE_NAME: Match.anyValue(),
-                        INCOME_SOURCE_TABLE_NAME: Match.anyValue(),
-                        INCOME_PLAN_TABLE_NAME: Match.anyValue(),
+                        PLANNED_INCOME_TABLE_NAME: Match.anyValue(),
                     }),
                 },
             });

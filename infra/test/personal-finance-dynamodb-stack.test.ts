@@ -67,12 +67,12 @@ describe("PersonalFinanceDynamoDbStack", () => {
             });
         });
 
-        test("IncomePlan table has correct key schema", () => {
+        test("PlannedIncome table has correct key schema", () => {
             template.hasResourceProperties("AWS::DynamoDB::Table", {
-                TableName: "IncomePlan-prod",
+                TableName: "PlannedIncome-prod",
                 KeySchema: [
                     { AttributeName: "yearMonth", KeyType: "HASH" },
-                    { AttributeName: "lineId", KeyType: "RANGE" },
+                    { AttributeName: "plannedIncomeId", KeyType: "RANGE" },
                 ],
             });
         });

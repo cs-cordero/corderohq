@@ -16,7 +16,7 @@ _LOGGER = logging.getLogger(__name__)
 class IncomeSourceTable:
     """CRUD operations for income sources. An income source is any stream of income, such as a job.
 
-    The money is not here. Each month of the plan holds a payment row in `IncomePlanTable`.
+    The money is not here. Its recurring and one-time incomes are in `PlannedIncomeTable`.
     """
 
     @staticmethod
@@ -47,8 +47,8 @@ class IncomeSourceTable:
     def create_income_source(self, args: CreateIncomeSourceArgs) -> dict[str, Any]:
         """Create an active income source at the end of the order. Returns the created item.
 
-        A joint source, such as the interest of a joint account, has two owners. The first payment is not part of
-        the item. It does not check that each person exists.
+        A joint source, such as the interest of a joint account, has two owners. It does not check that each person
+        exists.
         """
 
         existing = self.get_all_income_sources()
@@ -58,7 +58,6 @@ class IncomeSourceTable:
             "incomeSourceId": str(ULID()),
             "owners": args.owners,
             "label": args.label,
-            "frequency": args.frequency,
             "active": True,
             "sortOrder": sort_order,
             "createdAt": now,
@@ -73,7 +72,7 @@ class IncomeSourceTable:
 
         if self.get_income_source_by_id(income_source_id) is None:
             return None
-        changes: dict[str, FieldChange[Any]] = {"label": args.label, "frequency": args.frequency, "owners": args.owners}
+        changes: dict[str, FieldChange[Any]] = {"label": args.label, "owners": args.owners}
         response = self._table.update_item(
             Key={"incomeSourceId": income_source_id},
             ReturnValues="ALL_NEW",

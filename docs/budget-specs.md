@@ -13,15 +13,18 @@
 - **Locked year-month** — any year-month that is not editable.
 - **Override** — a way for the user to act on a locked year-month. The server must enforce the
   override. It is not enough to hide the action in the UI.
-- **Income source** — one stream of income that the plan counts, such as a job, interest, or
-  dividends. Each income source has one or more owners, the same as an account: a joint source,
-  such as the interest of a joint account, has two. A person can own any number of income sources.
-  Every kind of income source works the same way.
-- **Payment** — the gross amount of one payment from an income source, such as one paycheck, and
-  the list of deductions from it. A payment with no deductions, such as interest, is also valid.
-- **Net amount** — the gross amount of a payment minus all its deductions.
-- **Planned net income** — for one year-month, the net amount of each active income source times its
-  paychecks per month, plus every one-time income line in that year-month.
+- **Income source** — who pays the household, such as a job, a bank, or a landlord business. Each
+  income source has one or more owners, the same as an account: a joint source, such as the
+  interest of a joint account, has two. A person can own any number of income sources.
+- **Planned income** — money that one year-month expects. A **recurring income**, such as a salary
+  or the rent of one property, comes from an income source and carries forward. One income source
+  can have many recurring incomes. A **one-time income**, such as a bonus, is for one year-month
+  only, and its income source is optional.
+- **Net amount** — the gross amount of a planned income minus all its deductions. A planned income
+  with no deductions, such as interest, is also valid.
+- **Planned net income** — for one year-month, the net amount of each recurring income times the
+  times per month of its frequency, plus the net amount of every one-time income in that
+  year-month.
 - **Left to assign** — for one year-month, the planned net income minus the sum of all budget
   targets. The goal is `$0`.
 - **Budget treatment** — the effect of a transaction on the budget: **Budget**, **Off-budget**, or
@@ -155,7 +158,7 @@
     them. If I confirm, the app drops the pins. The category then leaves nothing behind in a
     future year-month.
 
-58. When I change a budget target or an income payment in an editable month, I choose how the
+58. When I change a budget target or a recurring income in an editable month, I choose how the
     change applies:
     - **From this month on** — later months carry the new value forward, until a later change.
       In a future month, this is a pin (Spec 18).
@@ -165,8 +168,8 @@
 
     The app shows which kind of change each month has: "changes here" for a change from this
     month on, and "this month only". I can undo either kind. The audit log records which kind each
-    change was. A one-time income line (Spec 35) is still the tool for extra money that is not
-    part of a payment.
+    change was. A one-time income (Spec 35) is still the tool for extra money that is not part of
+    a recurring income.
 
 ## Audit Log
 
@@ -176,39 +179,43 @@
 
 ## Income Plan
 
-31. I want to record each income source. An income source has one or more owners (people), a
-    label, and a pay frequency, such as every two weeks. A person can own any number of income
-    sources. I cannot delete a person who still owns an income source. The code
-    must not contain an employer name or any other real income data.
-32. For each income source, I want to record one payment: the gross amount, and a list of
-    deductions. Each deduction has a label, a kind, and an amount for one payment. The kinds are: tax, pre-tax
+31. I want to record each income source. An income source has one or more owners (people) and a
+    label. A person can own any number of income sources. I cannot delete a person who still owns
+    an income source. The code must not contain an employer name or any other real income data.
+32. For each income source, I want to record any number of **recurring incomes**, such as the
+    salary of a job, or the rent of each property of a landlord business. A recurring income has a
+    label, a pay frequency, the gross amount of one payment, and a list of deductions. Each
+    deduction has a label, a kind, and an amount for one payment. The kinds are: tax, pre-tax
     savings (such as a 401k or an HSA), pre-tax benefit (such as medical insurance or a DCFSA), and
     post-tax savings (such as a Roth 401k). The app calculates the net amount.
-33. The pay frequency of an income source sets its **paychecks per month** in the plan: weekly 4,
-    every two weeks 2, twice a month 2, and monthly 1. The app uses the same number in every month.
-    It does not add the third paycheck in a month that has three paychecks. I accept that the plan
-    is then lower than the real income. A change of frequency changes every month, also a locked
-    year-month.
+33. The pay frequency of a recurring income sets the **times per month** that the plan counts it:
+    weekly 4, every two weeks 2, twice a month 2, and monthly 1. The app uses the same number in
+    every month. It does not add the third paycheck in a month that has three paychecks. I accept
+    that the plan is then lower than the real income.
 34. The income plan obeys the same month rules as a budget target. These are the grace period and
     the lock (Spec 4), the editable year-months (Spec 12), the override, the carry-forward (Spec
-    17), and the pins (Specs 18 to 20). A change to a payment in one year-month carries forward to
-    later year-months. A locked year-month keeps the payment that it had (Spec 2).
-35. I want to add a **one-time income line** to an editable year-month. It has a label and a net
-    amount. It applies to that year-month only, and it never carries forward. I use it for a bonus,
-    an RSU payout, a DCFSA payout, a third paycheck, or any other extra money that I want to
-    budget. Extra money without a one-time income line is not part of the plan.
+    17), and the pins (Specs 18 to 20). A change to a recurring income in one year-month carries
+    forward to later year-months, also a change of its label or its frequency. A locked year-month
+    keeps the recurring incomes that it had (Spec 2).
+35. I want to add a **one-time income** to an editable year-month. It has a label, an optional
+    income source, a gross amount, and deductions, the same as a recurring income. It applies to
+    that year-month only, and it never carries forward. I use it for a bonus, an RSU vest, a DCFSA
+    payout, a tax refund, a third paycheck, or any other extra money that I want to budget. Extra
+    money without a one-time income is not part of the plan.
 36. The app does not model a change in the net amount during the year. Examples are a 401k deduction that
     stops at the annual limit, or a Social Security tax that stops at the wage limit. I change the
-    payment myself when I want to.
-37. I can deactivate an income source. The rules are the same as for a category (Spec 15). It keeps
-    its history in the current, grace, and locked year-months. It drops its future pins when I
-    confirm.
-38. I want an **Income** page. It shows each income source, and the breakdown from the gross amount
-    to the net amount for a year-month that I choose. It also shows the one-time income lines of that
-    year-month. I make every change to the income plan on this page.
-39. The audit log records each change to a payment, a pin or an unpin of a payment, and each
-    change to a one-time income line. Each change needs an explanation, the same as a change to a
-    budget target.
+    recurring income myself when I want to.
+37. I can stop a recurring income from a year-month on. The year-month of the stop shows the
+    stopped income, so that I can undo the stop. The later year-months do not show it. I can also
+    deactivate an income source. That stops each of its recurring incomes from the next year-month
+    on, so it keeps its history in the current, grace, and locked year-months. It drops their future
+    pins when I confirm.
+38. I want an **Income** page. It shows each income source, and the recurring and one-time incomes
+    of a year-month that I choose, with the breakdown from the gross amount to the net amount. I make
+    every change to the income plan on this page.
+39. The audit log records each change to a recurring income (a new value, a pin, an unpin, or a
+    stop), and each change to a one-time income. Each change needs an explanation, the same as a
+    change to a budget target.
 
 ## Left to Assign
 
@@ -308,9 +315,9 @@ These items are out of scope now. The design must not block them.
 - **Memory of past choices.** The import uses the category that I chose before for the same
   description, and it does not ask the LLM.
 - **A stored column mapping for each account.** The LLM then sees each bank format one time only.
-- **A retirement-limit estimate.** A rough guess, from the payments, of whether we reach the
+- **A retirement-limit estimate.** A rough guess, from the recurring incomes, of whether we reach the
   annual 401k limit.
-- **A paystub upload.** An LLM reads a paystub PDF and fills in the payment.
+- **A paystub upload.** An LLM reads a paystub PDF and fills in a recurring income.
 - **A link from a savings deduction to an account** of the net worth record.
 - **Actual income against the plan.**
 

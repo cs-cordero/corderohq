@@ -11,7 +11,7 @@ os.environ.setdefault("BUDGET_TABLE_NAME", "test-Budget")
 os.environ.setdefault("BUDGET_AUDIT_LOG_TABLE_NAME", "test-BudgetAuditLog")
 os.environ.setdefault("TRANSACTIONS_TABLE_NAME", "test-Transactions")
 os.environ.setdefault("INCOME_SOURCE_TABLE_NAME", "test-IncomeSource")
-os.environ.setdefault("INCOME_PLAN_TABLE_NAME", "test-IncomePlan")
+os.environ.setdefault("PLANNED_INCOME_TABLE_NAME", "test-PlannedIncome")
 os.environ.setdefault("PROFILE_TABLE_NAME", "test-Profile")
 os.environ.setdefault("ACCOUNT_TABLE_NAME", "test-Account")
 os.environ.setdefault("NETWORTH_SNAPSHOT_TABLE_NAME", "test-NetWorthSnapshot")
@@ -1127,7 +1127,7 @@ class TestDeleteTransactions:
 
 
 class TestGetSummary:
-    @patch("corderohq.personal_finance_handler.compute_income")
+    @patch("corderohq.personal_finance_handler.compute_income_plan")
     @patch("corderohq.personal_finance_handler.compute_summary")
     def test_returns_summary(self, mock_summary: MagicMock, mock_income: MagicMock) -> None:
         mock_summary.return_value = {
@@ -1139,7 +1139,7 @@ class TestGetSummary:
         result = handler(_make_event("GET", "/api/summary", query={"month": _EDITABLE_MONTH}), None)
         assert result["statusCode"] == 200
 
-    @patch("corderohq.personal_finance_handler.compute_income")
+    @patch("corderohq.personal_finance_handler.compute_income_plan")
     @patch("corderohq.personal_finance_handler.compute_summary")
     def test_left_to_assign_is_planned_income_minus_targets(
         self, mock_summary: MagicMock, mock_income: MagicMock

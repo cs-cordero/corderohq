@@ -17,7 +17,7 @@ interface PersonalFinanceDynamoDbStackProps extends cdk.StackProps {
  * - DynamoDB table: BudgetAuditLog-{stage} (PK: entityType [always "AUDIT"], SK: sortId [ULID])
  * - DynamoDB table: Transactions-{stage} (PK: yearMonth, SK: sortId)
  * - DynamoDB table: IncomeSource-{stage} (PK: incomeSourceId [ULID])
- * - DynamoDB table: IncomePlan-{stage} (PK: yearMonth, SK: lineId ["SRC#{incomeSourceId}" or "ONE#{ULID}"])
+ * - DynamoDB table: PlannedIncome-{stage} (PK: yearMonth, SK: plannedIncomeId ["REC#{ULID}" or "ONE#{ULID}"])
  * - DynamoDB table: Profile-{stage} (PK: householdId [always "HOUSEHOLD"], SK: personId [ULID])
  * - DynamoDB table: Account-{stage} (PK: accountId [ULID])
  * - DynamoDB table: NetWorthSnapshot-{stage} (PK: yearMonth, SK: accountId)
@@ -29,7 +29,7 @@ export class PersonalFinanceDynamoDbStack extends cdk.Stack {
     readonly budgetAuditLogTable: dynamodb.Table;
     readonly transactionsTable: dynamodb.Table;
     readonly incomeSourceTable: dynamodb.Table;
-    readonly incomePlanTable: dynamodb.Table;
+    readonly plannedIncomeTable: dynamodb.Table;
     readonly profileTable: dynamodb.Table;
     readonly accountTable: dynamodb.Table;
     readonly netWorthSnapshotTable: dynamodb.Table;
@@ -93,9 +93,9 @@ export class PersonalFinanceDynamoDbStack extends cdk.Stack {
             removalPolicy,
         });
 
-        // The tables for the income plan. An income source is any stream of income, such as a job,
-        // interest, or dividends. The plan holds one paycheck row ("SRC#{incomeSourceId}") for each
-        // source in each dense month, and the one-time income lines ("ONE#{ULID}") of each month.
+        // The tables for the income plan. An income source is anyone who pays the household, such as a
+        // job or a landlord business. Each month holds its planned incomes: each recurring income
+        // ("REC#{ULID}", the same id in each month), and each one-time income ("ONE#{ULID}").
         this.incomeSourceTable = new dynamodb.Table(this, "IncomeSourceTable", {
             tableName: `IncomeSource-${stage}`,
             partitionKey: { name: "incomeSourceId", type: dynamodb.AttributeType.STRING },
@@ -104,10 +104,10 @@ export class PersonalFinanceDynamoDbStack extends cdk.Stack {
             removalPolicy,
         });
 
-        this.incomePlanTable = new dynamodb.Table(this, "IncomePlanTable", {
-            tableName: `IncomePlan-${stage}`,
+        this.plannedIncomeTable = new dynamodb.Table(this, "PlannedIncomeTable", {
+            tableName: `PlannedIncome-${stage}`,
             partitionKey: { name: "yearMonth", type: dynamodb.AttributeType.STRING },
-            sortKey: { name: "lineId", type: dynamodb.AttributeType.STRING },
+            sortKey: { name: "plannedIncomeId", type: dynamodb.AttributeType.STRING },
             billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
             pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
             removalPolicy,

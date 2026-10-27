@@ -32,7 +32,7 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
     readonly budgetAuditLogTable: dynamodb.ITable;
     readonly transactionsTable: dynamodb.ITable;
     readonly incomeSourceTable: dynamodb.ITable;
-    readonly incomePlanTable: dynamodb.ITable;
+    readonly plannedIncomeTable: dynamodb.ITable;
     readonly profileTable: dynamodb.ITable;
     readonly accountTable: dynamodb.ITable;
     readonly netWorthSnapshotTable: dynamodb.ITable;
@@ -47,9 +47,9 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
  * - Cognito User Pool Group: budget-admin-{stage} (admin override authorization for budget feature)
  * - CloudWatch log group: /aws/lambda/personal-finance-handler-{stage}
  * - Lambda function: personal-finance-handler-{stage} (Python 3.13)
- * - IAM policy: DynamoDB read/write on all personal-finance tables (incl. IncomeSource, IncomePlan, Profile, Account), SSM GetParameter for API key
+ * - IAM policy: DynamoDB read/write on all personal-finance tables (incl. IncomeSource, PlannedIncome, Profile, Account), SSM GetParameter for API key
  * - CloudWatch log group: /aws/lambda/budget-scheduled-densify-{stage}
- * - Lambda function: budget-scheduled-densify-{stage} (Python 3.13, cron-driven; densifies Budget and IncomePlan)
+ * - Lambda function: budget-scheduled-densify-{stage} (Python 3.13, cron-driven; densifies Budget and PlannedIncome)
  * - IAM role: scheduler invoke role for the densify Lambda
  * - EventBridge Schedule: budget-scheduled-densify-{stage} (cron(0 0 1 * ? *) America/New_York)
  * - CloudWatch alarm (prod stage only): personal-finance-handler-prod-errors → shared alert topic
@@ -164,7 +164,7 @@ export class PersonalFinanceWebStack extends cdk.Stack {
                 BUDGET_AUDIT_LOG_TABLE_NAME: props.budgetAuditLogTable.tableName,
                 TRANSACTIONS_TABLE_NAME: props.transactionsTable.tableName,
                 INCOME_SOURCE_TABLE_NAME: props.incomeSourceTable.tableName,
-                INCOME_PLAN_TABLE_NAME: props.incomePlanTable.tableName,
+                PLANNED_INCOME_TABLE_NAME: props.plannedIncomeTable.tableName,
                 PROFILE_TABLE_NAME: props.profileTable.tableName,
                 ACCOUNT_TABLE_NAME: props.accountTable.tableName,
                 NETWORTH_SNAPSHOT_TABLE_NAME: props.netWorthSnapshotTable.tableName,
@@ -179,7 +179,7 @@ export class PersonalFinanceWebStack extends cdk.Stack {
         props.budgetAuditLogTable.grantReadWriteData(apiHandler);
         props.transactionsTable.grantReadWriteData(apiHandler);
         props.incomeSourceTable.grantReadWriteData(apiHandler);
-        props.incomePlanTable.grantReadWriteData(apiHandler);
+        props.plannedIncomeTable.grantReadWriteData(apiHandler);
         props.profileTable.grantReadWriteData(apiHandler);
         props.accountTable.grantReadWriteData(apiHandler);
         props.netWorthSnapshotTable.grantReadWriteData(apiHandler);
@@ -238,16 +238,14 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             environment: {
                 CATEGORY_TABLE_NAME: props.categoryTable.tableName,
                 BUDGET_TABLE_NAME: props.budgetTable.tableName,
-                INCOME_SOURCE_TABLE_NAME: props.incomeSourceTable.tableName,
-                INCOME_PLAN_TABLE_NAME: props.incomePlanTable.tableName,
+                PLANNED_INCOME_TABLE_NAME: props.plannedIncomeTable.tableName,
                 STAGE: stage,
             },
         });
 
         props.categoryTable.grantReadData(densifyFn);
         props.budgetTable.grantReadWriteData(densifyFn);
-        props.incomeSourceTable.grantReadData(densifyFn);
-        props.incomePlanTable.grantReadWriteData(densifyFn);
+        props.plannedIncomeTable.grantReadWriteData(densifyFn);
 
         // EventBridge Scheduler needs a role of its own to call the Lambda.
         const schedulerRole = new iam.Role(this, "ScheduledDensifySchedulerRole", {
