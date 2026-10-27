@@ -921,14 +921,18 @@ A Budget row and a recurring income can each hold **two values**:
   has.
 - **A future month can hold a row with only a this-month-only value,** and no carried value. Such a
   row is not a pin: `pinned` is false, and `downstreamPins` leaves it out.
-- **The writes:**
-  - `/replace` (a dense month): each target or recurring income sends its carried value, as before.
-    An `onlyAmount` or `onlyThisMonth` key sets the this-month-only value (a value) or clears it
-    (`null`). Without the key, the stored one stays.
+- **The writes of a budget target:**
+  - `/replace` (a dense month): each target sends its carried value, as before. An `onlyAmount` key
+    sets the this-month-only value (a value) or clears it (`null`). Without the key, the stored one
+    stays.
   - `/pin` (a future month): each of the two keys is optional. A value sets it, `null` removes it,
     and a missing key does not change it. A row with neither value is deleted.
-  - The frontend sends "From this month on" as the carried value plus a cleared this-month-only
-    value, and "This month only" as the this-month-only value alone.
+- **The writes of a recurring income:** two more actions, in `/replace` and in `/pin`, each with a
+  `plannedIncomeId`. `SET_ONLY_THIS_MONTH` sets the this-month-only value, and
+  `CLEAR_ONLY_THIS_MONTH` removes it. `SET`, `STOP`, and `UNPIN` change only the carried value, and
+  keep the this-month-only value. An entry with neither value is deleted.
+- **The frontend** sends "From this month on" as the carried value plus a cleared this-month-only
+  value, and "This month only" as the this-month-only value alone.
 - **The audit log** uses the same actions (CREATE, UPDATE, PIN, UNPIN, and the RECURRING_INCOME_
   forms). The `changes` payload names `onlyAmount` or `onlyThisMonth` for a this-month-only change.
 - **The responses:** a future budget target has `amount` (carried), `pinned`, and `onlyAmount` when
@@ -1066,6 +1070,8 @@ own dense rows only, so its value never changes after the lock.
   this month on.
 - `STOP` stops a recurring income from this month on.
 - `UNPIN` removes the pin or the stop of a future month. It is for `/pin` only.
+- `SET_ONLY_THIS_MONTH` and `CLEAR_ONLY_THIS_MONTH` set or remove the value that only this month
+  uses. See **This-month-only values**.
 - Each `plannedIncomeId` and each income source must exist.
 - `/replace` needs every recurring income with a value in that month. The response is the month.
 - `/pin` returns `{incomePlan: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`,

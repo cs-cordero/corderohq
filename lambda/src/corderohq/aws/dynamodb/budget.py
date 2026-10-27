@@ -10,7 +10,13 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class BudgetTable:
-    """Monthly budget target management."""
+    """Monthly budget target management.
+
+    A row can hold two targets. `amount` is the **carried** target: later months copy it. A
+    `null` amount means "no target". `onlyAmount` is an optional **this-month-only** target: only
+    this month uses it, and it never carries forward. A future month can hold a row with only
+    `onlyAmount`, and no `amount` attribute at all.
+    """
 
     def __init__(self, table_name: str) -> None:
         self._table = DYNAMO_RESOURCE.Table(table_name)
@@ -23,7 +29,11 @@ class BudgetTable:
         )
 
     def set_all_budget_targets(self, year_month: str, targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Set the budget targets for one month. This writes over every target in that month."""
+        """Set the budget targets for one month. This writes over every target in that month.
+
+        Each target has `categoryId` and `amount`, and an optional `onlyAmount`. An `onlyAmount` of
+        None is not stored.
+        """
 
         existing = self.get_budget_targets(year_month)
         with self._table.batch_writer() as batch:
@@ -38,6 +48,8 @@ class BudgetTable:
                     "categoryId": target["categoryId"],
                     "amount": target["amount"],
                 }
+                if target.get("onlyAmount") is not None:
+                    item["onlyAmount"] = target["onlyAmount"]
                 batch.put_item(Item=item)
                 items.append(item)
 
@@ -48,6 +60,11 @@ class BudgetTable:
         """Return every row in the table."""
 
         return scan_all_items(self._table)
+
+    def set_budget_row(self, year_month: str, category_id: str, fields: dict[str, Any]) -> None:
+        """Write one Budget row with the given `amount` and/or `onlyAmount`. It replaces the row."""
+
+        self._table.put_item(Item={"yearMonth": year_month, "categoryId": category_id, **fields})
 
     def set_single_budget_target(self, year_month: str, category_id: str, amount: Any) -> None:
         """Write one budget row."""
@@ -88,17 +105,39 @@ class BudgetTable:
 
 
 class BudgetDensifyAdapter(DenseSparseStore):
-    """Implements the DenseSparseStore protocol for the BudgetTable class."""
+    """Implements the DenseSparseStore protocol for the BudgetTable class.
+
+    The carried value of a row is `amount`, and its this-month-only value is `onlyAmount`.
+    """
 
     def __init__(self, budget_table: BudgetTable) -> None:
         self._budget_table = budget_table
+        self._rows: list[dict[str, Any]] | None = None
 
     def scan_stored_values(self) -> list[StoredValue]:
-        """Return every Budget row as `(yearMonth, categoryId, amount)`."""
+        """Return each Budget row with a carried target, as `(yearMonth, categoryId, amount)`."""
 
-        return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._budget_table.scan()]
+        return [(r["yearMonth"], r["categoryId"], r["amount"]) for r in self._scan() if "amount" in r]
+
+    def scan_only_values(self) -> list[StoredValue]:
+        """Return each Budget row with a this-month-only target, as `(yearMonth, categoryId, onlyAmount)`."""
+
+        return [(r["yearMonth"], r["categoryId"], r["onlyAmount"]) for r in self._scan() if "onlyAmount" in r]
 
     def put_stored_value(self, year_month: str, key: str, value: Any) -> None:
-        """Write one Budget row."""
+        """Write the carried target of one row, and keep its this-month-only target if it has one."""
 
-        self._budget_table.set_single_budget_target(year_month, key, value)
+        only = next(
+            (r.get("onlyAmount") for r in self._scan() if r["yearMonth"] == year_month and r["categoryId"] == key),
+            None,
+        )
+        if only is None:
+            self._budget_table.set_single_budget_target(year_month, key, value)
+        else:
+            self._budget_table.set_budget_row(year_month, key, {"amount": value, "onlyAmount": only})
+
+    def _scan(self) -> list[dict[str, Any]]:
+        # One scan serves both lists, and put_stored_value reads it to keep a this-month-only value.
+        if self._rows is None:
+            self._rows = self._budget_table.scan()
+        return self._rows

@@ -5,6 +5,7 @@ from corderohq.aws.dynamodb import BudgetDensifyAdapter, BudgetTable, CategoryTa
 from corderohq.budget.densify import (
     ResolvedValue,
     densify,
+    effective_value,
     resolve_future,
     resolve_future_targets,
     value_at_or_before,
@@ -182,11 +183,15 @@ class TestResolveFutureTargets:
 class _MemoryStore:
     """A `DenseSparseStore` in memory. The densify code must not depend on the Budget table."""
 
-    def __init__(self, rows: list[tuple[str, str, object]]) -> None:
+    def __init__(self, rows: list[tuple[str, str, object]], only: list[tuple[str, str, object]] | None = None) -> None:
         self.rows = list(rows)
+        self.only = list(only or [])
 
     def scan_stored_values(self) -> list[tuple[str, str, object]]:
         return list(self.rows)
+
+    def scan_only_values(self) -> list[tuple[str, str, object]]:
+        return list(self.only)
 
     def put_stored_value(self, year_month: str, key: str, value: object) -> None:
         self.rows.append((year_month, key, value))
@@ -199,10 +204,10 @@ class TestGenericStore:
         assert store.rows == [("2026-06", "x", "start")]
 
     def test_walk_forward_copies_any_value_type(self) -> None:
-        paycheck = {"gross": 100, "deductions": []}
-        store = _MemoryStore([("2026-04", "x", paycheck)])
+        payment = {"gross": 100, "deductions": []}
+        store = _MemoryStore([("2026-04", "x", payment)])
         densify(store, ["x"], "2026-06", cold_start_value=None)
-        assert store.rows[1:] == [("2026-05", "x", paycheck), ("2026-06", "x", paycheck)]
+        assert store.rows[1:] == [("2026-05", "x", payment), ("2026-06", "x", payment)]
 
     def test_resolve_future_gives_pinned_and_carried_values(self) -> None:
         store = _MemoryStore([("2026-06", "x", 1), ("2026-06", "y", 2), ("2026-09", "y", 3)])
@@ -224,3 +229,47 @@ class TestValueAtOrBefore:
 
     def test_returns_none_with_no_history(self) -> None:
         assert value_at_or_before({}, "2026-09", "x") is None
+
+
+class TestThisMonthOnly:
+    """A this-month-only value applies to its own month, and never carries forward."""
+
+    def test_resolve_future_reports_the_only_value_and_keeps_the_carried_one(self) -> None:
+        store = _MemoryStore([("2026-06", "x", 100)], only=[("2026-09", "x", 50)])
+        [resolved] = resolve_future(store, ["x"], "2026-09")
+        assert resolved == ResolvedValue(key="x", value=100, pinned=False, only=50, has_only=True)
+        assert resolved.effective == 50
+
+    def test_the_next_month_goes_back_to_the_carried_value(self) -> None:
+        store = _MemoryStore([("2026-06", "x", 100)], only=[("2026-09", "x", 50)])
+        [resolved] = resolve_future(store, ["x"], "2026-10")
+        assert (resolved.effective, resolved.has_only) == (100, False)
+
+    def test_a_key_with_only_a_this_month_value_is_kept(self) -> None:
+        store = _MemoryStore([], only=[("2026-09", "x", 50)])
+        [resolved] = resolve_future(store, ["x"], "2026-09")
+        assert (resolved.value, resolved.effective) == (None, 50)
+
+    def test_densify_ignores_this_month_only_values(self) -> None:
+        store = _MemoryStore([("2026-04", "x", 100)], only=[("2026-05", "x", 50)])
+        densify(store, ["x"], "2026-06", cold_start_value=None)
+        assert store.rows[1:] == [("2026-05", "x", 100), ("2026-06", "x", 100)]
+
+    def test_effective_value(self) -> None:
+        carried = {("2026-06", "x"): 100}
+        only = {("2026-09", "x"): 50}
+        assert effective_value(carried, only, "2026-09", "x") == 50
+        assert effective_value(carried, only, "2026-10", "x") == 100
+
+    def test_budget_store_keeps_the_only_target_when_densify_fills_the_month(self) -> None:
+        # 2026-06 has only a this-month-only target. Densify writes its carried target, and the
+        # row must keep the this-month-only target.
+        budget, mock_b = _make_budget_table(
+            [_row("2026-05", "a", 500), {"yearMonth": "2026-06", "categoryId": "a", "onlyAmount": 80}]
+        )
+        cats, _ = _make_category_table([_cat("a")])
+
+        _densify(budget, cats, "2026-06")
+
+        items = [call.kwargs["Item"] for call in mock_b.put_item.call_args_list]
+        assert items == [{"yearMonth": "2026-06", "categoryId": "a", "amount": 500, "onlyAmount": 80}]
