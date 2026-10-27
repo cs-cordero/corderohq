@@ -173,15 +173,16 @@ it.
 +------------------------+--------------------+------------+-----------------------------+
 | IncomeSource-{stage}   | incomeSourceId     | —          | ULID. Fields: owners (one or|
 |                        |                    |            | more personIds),            |
-|                        |                    |            | label, frequency (display   |
-|                        |                    |            | only), active, sortOrder,   |
+|                        |                    |            | label, frequency (sets the  |
+|                        |                    |            | paychecks per month),       |
+|                        |                    |            | active, sortOrder,          |
 |                        |                    |            | timestamps.                 |
 +------------------------+--------------------+------------+-----------------------------+
 | IncomePlan-{stage}     | yearMonth          | lineId     | "SRC#{incomeSourceId}": a   |
 |                        |                    |            | payment row (lineType       |
-|                        |                    |            | PAYMENT; paymentsPerMonth,  |
-|                        |                    |            | gross, deductions[{label,   |
-|                        |                    |            | kind, amount}]). Dense/     |
+|                        |                    |            | PAYMENT; gross,             |
+|                        |                    |            | deductions[{label, kind,    |
+|                        |                    |            | amount}]). Dense/           |
 |                        |                    |            | sparse like Budget rows.    |
 |                        |                    |            | "ONE#{ULID}": a one-time    |
 |                        |                    |            | line (lineType ONE_TIME;    |
@@ -624,7 +625,7 @@ The income plan writes these actions to the same log. An income entry has no `ca
 | `INCOME_UNPIN` | `/pin` with `payment: null`; a deactivation that drops a pin | `{payment: {before: P, after: null}}` |
 | `ONE_TIME_CREATE` / `_UPDATE` / `_DELETE` | the `/one-time` routes | `{line: {before: L \| null, after: L \| null}}` |
 
-`P` is `{paymentsPerMonth, gross, deductions}`. `L` is `{label, amount}`. The entry holds the label
+`P` is `{gross, deductions}`. `L` is `{label, amount}`. The entry holds the label
 of a one-time line, because the line can be deleted later. The rename, the reorder, and the
 reactivation of an income source make no entry, the same as for a category.
 
@@ -898,8 +899,8 @@ A Budget row and a payment row of the income plan can each hold **two values**:
 
 | | Budget row | Payment row (IncomePlan) | Later months |
 |---|---|---|---|
-| Carried value | `amount` (`null` means no target) | `paymentsPerMonth`, `gross`, `deductions` | copy it |
-| This-month-only value | `onlyAmount` | `onlyPayment` (a map of the same three fields) | never see it |
+| Carried value | `amount` (`null` means no target) | `gross`, `deductions` | copy it |
+| This-month-only value | `onlyAmount` | `onlyPayment` (a map of the same two fields) | never see it |
 
 - **What a month shows:** its this-month-only value if it has one, else its carried value, else
   the carried value from the walk back (`effective_value()` in `budget/densify.py`).
@@ -979,24 +980,24 @@ with the same month rules as a Budget row: dense past and current months, sparse
 carry-forward, the grace period, the lock, the admin override, and an audit entry with an
 explanation for each change.
 
-A payment is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`, with each amount for
-one payment. The order of the deductions is the display order.
+A payment is one paycheck: `{gross, deductions: [{label, kind, amount}]}`. The order of the
+deductions is the display order.
 
 - The deduction kinds are `TAX`, `PRETAX_SAVINGS`, `PRETAX_BENEFIT`, and `POSTTAX_SAVINGS`. They are
   for display only. No calculation uses them.
-- `net = gross − sum(deductions)` and `monthlyNet = net × paymentsPerMonth`. The app calculates the
-  net amount on each read, and never stores it.
-- The rules: `gross >= 0`, each deduction amount `>= 0`, `net >= 0`, `paymentsPerMonth` is an
-  integer from 1 to 5, and no label is empty.
-- Two payments are equal when `paymentsPerMonth`, `gross`, and the full list of deductions are
-  equal. A write of an equal payment does nothing, and makes no audit entry.
+- `net = gross − sum(deductions)` and `monthlyNet = net × paychecks per month`. The app calculates
+  both on each read, and never stores them.
+- The rules: `gross >= 0`, each deduction amount `>= 0`, `net >= 0`, and no label is empty.
+- Two payments are equal when `gross` and the full list of deductions are equal. A write of an
+  equal payment does nothing, and makes no audit entry.
 - The whole payment is one value. A change to one deduction writes the whole row again, so the
   walk back copies one value, the same as for a Budget row.
 
-The pay frequency sets the default `paymentsPerMonth`: weekly 4, every two weeks 2, twice a month
-2, and monthly 1. The count is stored on the payment of each month, so a change of frequency does
-not alter a locked month. The plan uses the same count in every month, so a third paycheck is not
-in the plan.
+The pay frequency of the income source sets the number of paychecks in each month: weekly 4, every
+two weeks 2, twice a month 2, and monthly 1. This is an estimate. A weekly source pays 5 times in
+some months, and a source that pays every two weeks pays 3 times in two months of each year. Put
+an extra paycheck in the plan as a one-time line. The count is not stored, so a change of
+frequency also changes the planned income of a locked month.
 
 A **one-time income line** (`ONE#{ULID}`) is a net amount in one month only, such as a bonus, an
 RSU payout, a DCFSA payout, or a third paycheck. The amount must be more than 0. It never carries
@@ -1016,10 +1017,10 @@ each row of a month as a category row. A separate table keeps each of them as it
   "state": "EDITABLE" | "GRACE" | "LOCKED",
   "payments": [
     {
-      "incomeSourceId", "label", "owners", "active",
-      "paymentsPerMonth", "gross", "deductions": [...],
-      "net",              // one payment
-      "monthlyNet",       // net × paymentsPerMonth
+      "incomeSourceId", "label", "owners", "active", "frequency",
+      "gross", "deductions": [...],
+      "net",              // one paycheck
+      "monthlyNet",       // net × the paychecks per month of the frequency
       "carriedPayment",   // the value that carries forward, or null
       "onlyThisMonth",    // true if the month shows a this-month-only payment
       "pinned"            // future months only

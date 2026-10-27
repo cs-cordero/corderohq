@@ -8,7 +8,7 @@ from corderohq.aws.dynamodb.income_source import IncomeSourceTable
 from corderohq.aws.dynamodb.util import BUDGET_TZ
 from corderohq.budget.densify import resolve_future
 from corderohq.budget.editability import EditabilityState, editability
-from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, Payment
+from corderohq.budget.income import ONE_TIME_LINE_PREFIX, PAYMENT_LINE_PREFIX, PayFrequency, Payment
 
 
 def compute_income(
@@ -18,6 +18,8 @@ def compute_income(
     now: datetime,
 ) -> dict[str, Any]:
     """Return the income plan of one month, with the net amount of each payment and the planned net income.
+
+    The pay frequency of each income source sets its number of paychecks in the month, also in a locked month.
 
     Membership, the same as the categories of the summary:
     - **A future month** — each active income source, with a pin or a value from the walk back.
@@ -57,14 +59,16 @@ def compute_income(
         payment = payment_by_source.get(source_id)
         if payment is None:
             continue
+        frequency = PayFrequency(source["frequency"])
         entry: dict[str, Any] = {
             "incomeSourceId": source_id,
             "label": source["label"],
             "owners": list(source.get("owners", [])),
             "active": bool(source.get("active", False)),
+            "frequency": frequency,
             **payment.to_item(),
             "net": payment.net,
-            "monthlyNet": payment.monthly_net,
+            "monthlyNet": payment.net * frequency.paychecks_per_month,
         }
         if is_future:
             entry["pinned"] = source_id in pinned_ids

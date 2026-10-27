@@ -29,10 +29,9 @@ def get_payment(row: dict[str, Any]) -> Payment:
 class IncomePlanTable:
     """The income plan of each month: payment rows and one-time income lines.
 
-    PK `yearMonth`, SK `lineId`. A payment row has `lineId = "SRC#{incomeSourceId}"`. It obeys
-    the dense-past, sparse-future rules of a Budget row (see `IncomePlanDensifyAdapter`). Its
-    payment is in `paymentsPerMonth`, `gross`, and `deductions`, and later months copy it. A one-time
-    line has `lineId = "ONE#{ULID}"`. It belongs to its month only.
+    PK `yearMonth`, SK `lineId`. A payment row has `lineId = "SRC#{incomeSourceId}"`. It obeys the dense-past,
+    sparse-future rules of a Budget row (see `IncomePlanDensifyAdapter`). Its payment is in `gross` and `deductions`,
+    and later months copy it. A one-time line has `lineId = "ONE#{ULID}"`. It belongs to its month only.
     """
 
     def __init__(self, table_name: str) -> None:

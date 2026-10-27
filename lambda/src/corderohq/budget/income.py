@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
+from typing import Any, assert_never
 
 from corderohq.accounts import validate_owners
 from corderohq.common import Keep, SetTo
@@ -13,8 +13,6 @@ from corderohq.common import Keep, SetTo
 PAYMENT_LINE_PREFIX = "SRC#"
 ONE_TIME_LINE_PREFIX = "ONE#"
 
-MIN_PAYMENTS_PER_MONTH = 1
-MAX_PAYMENTS_PER_MONTH = 5
 LABEL_MAX_LENGTH = 100
 
 _EDITABLE_INCOME_SOURCE_KEYS = ("label", "frequency", "owners")
@@ -28,12 +26,30 @@ class IncomeLineType(StrEnum):
 
 
 class PayFrequency(StrEnum):
-    """How often an income source pays. For display only. No calculation uses it."""
+    """How often an income source pays."""
 
     WEEKLY = "weekly"
     BIWEEKLY = "biweekly"
     SEMIMONTHLY = "semimonthly"
     MONTHLY = "monthly"
+
+    @property
+    def paychecks_per_month(self) -> int:
+        """The number of paychecks that the plan counts in each month.
+
+        It is an estimate. A weekly source pays 5 times in some months, and a biweekly source pays 3 times in two
+        months of each year.
+        """
+
+        match self:
+            case PayFrequency.WEEKLY:
+                return 4
+            case PayFrequency.BIWEEKLY | PayFrequency.SEMIMONTHLY:
+                return 2
+            case PayFrequency.MONTHLY:
+                return 1
+            case _:
+                assert_never(self)
 
 
 class DeductionKind(StrEnum):
@@ -61,36 +77,24 @@ class Deduction:
 
 @dataclass(frozen=True)
 class Payment:
-    """The pay of one income source in one month.
+    """One paycheck of an income source in one month: the gross amount and its deductions.
 
-    `gross` and each deduction are for one payment. `payments_per_month` is the number of payments that the plan counts
-    in the month.
+    The pay frequency of the income source sets the number of paychecks in the month.
     """
 
-    payments_per_month: int
     gross: int  # millionths of a dollar
     deductions: tuple[Deduction, ...]
 
     @property
     def net(self) -> int:
-        """The net amount of one payment: the gross amount minus every deduction."""
+        """The net amount of one paycheck: the gross amount minus every deduction."""
 
         return self.gross - sum(deduction.amount for deduction in self.deductions)
-
-    @property
-    def monthly_net(self) -> int:
-        """The net amount that the plan counts in one month."""
-
-        return self.net * self.payments_per_month
 
     def to_item(self) -> dict[str, Any]:
         """Converts an instance of Payment to how it is stored in DynamoDB."""
 
-        return {
-            "paymentsPerMonth": self.payments_per_month,
-            "gross": self.gross,
-            "deductions": [deduction.to_item() for deduction in self.deductions],
-        }
+        return {"gross": self.gross, "deductions": [deduction.to_item() for deduction in self.deductions]}
 
 
 @dataclass(frozen=True)
@@ -185,16 +189,12 @@ def validate_one_time_amount(value: Any) -> int:
 def parse_payment(raw: Any) -> Payment:
     """Convert a payment from a request body or a stored row into a Payment. Raise ValueError if a rule fails.
 
-    The shape is `{paymentsPerMonth, gross, deductions: [{label, kind, amount}]}`. A value read back from DynamoDB is a
-    `Decimal`, so an integral `Decimal` is accepted. The net amount must not be negative.
+    The shape is `{gross, deductions: [{label, kind, amount}]}`. A value read back from DynamoDB is a `Decimal`, so an
+    integral `Decimal` is accepted. The net amount must not be negative.
     """
 
     if not isinstance(raw, Mapping):
         raise ValueError("payment must be an object")
-
-    payments_per_month = _as_int(raw.get("paymentsPerMonth"), "paymentsPerMonth")
-    if not MIN_PAYMENTS_PER_MONTH <= payments_per_month <= MAX_PAYMENTS_PER_MONTH:
-        raise ValueError(f"paymentsPerMonth must be from {MIN_PAYMENTS_PER_MONTH} to {MAX_PAYMENTS_PER_MONTH}")
 
     gross = _as_int(raw.get("gross"), "gross")
     if gross < 0:
@@ -207,7 +207,7 @@ def parse_payment(raw: Any) -> Payment:
         _parse_deduction(raw_deduction, f"deductions[{index}]") for index, raw_deduction in enumerate(raw_deductions)
     )
 
-    payment = Payment(payments_per_month=payments_per_month, gross=gross, deductions=deductions)
+    payment = Payment(gross=gross, deductions=deductions)
     if payment.net < 0:
         raise ValueError("the deductions must not be more than the gross amount")
     return payment

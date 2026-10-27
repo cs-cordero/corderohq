@@ -21,7 +21,7 @@
   the list of deductions from it. A payment with no deductions, such as interest, is also valid.
 - **Net amount** — the gross amount of a payment minus all its deductions.
 - **Planned net income** — for one year-month, the net amount of each active income source times its
-  payments per month, plus every one-time income line in that year-month.
+  paychecks per month, plus every one-time income line in that year-month.
 - **Left to assign** — for one year-month, the planned net income minus the sum of all budget
   targets. The goal is `$0`.
 - **Budget treatment** — the effect of a transaction on the budget: **Budget**, **Off-budget**, or
@@ -184,11 +184,11 @@
     deductions. Each deduction has a label, a kind, and an amount for one payment. The kinds are: tax, pre-tax
     savings (such as a 401k or an HSA), pre-tax benefit (such as medical insurance or a DCFSA), and
     post-tax savings (such as a Roth 401k). The app calculates the net amount.
-33. Each income source has a number of **payments per month** for the plan. The pay frequency sets
-    the default: weekly 4, every two weeks 2, twice a month 2, and monthly 1. I can change it. The
-    app uses the same number in every month. It does not add the
-    third paycheck in a month that has three paychecks. I accept that the plan is then lower than
-    the real income.
+33. The pay frequency of an income source sets its **paychecks per month** in the plan: weekly 4,
+    every two weeks 2, twice a month 2, and monthly 1. The app uses the same number in every month.
+    It does not add the third paycheck in a month that has three paychecks. I accept that the plan
+    is then lower than the real income. A change of frequency changes every month, also a locked
+    year-month.
 34. The income plan obeys the same month rules as a budget target. These are the grace period and
     the lock (Spec 4), the editable year-months (Spec 12), the override, the carry-forward (Spec
     17), and the pins (Specs 18 to 20). A change to a payment in one year-month carries forward to

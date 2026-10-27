@@ -55,7 +55,6 @@ _LOCKED = "2026-03"
 _ADMIN_GROUP = "budget-admin-test"
 
 _PAYMENT: dict[str, Any] = {
-    "paymentsPerMonth": 2,
     "gross": 5_000_000_000,
     "deductions": [
         {"label": "Federal tax", "kind": "TAX", "amount": 600_000_000},
@@ -63,7 +62,6 @@ _PAYMENT: dict[str, Any] = {
     ],
 }
 _PAYMENT_ARGS = Payment(
-    payments_per_month=2,
     gross=5_000_000_000,
     deductions=(
         Deduction(label="Federal tax", kind=DeductionKind.TAX, amount=600_000_000),
@@ -93,7 +91,6 @@ class TestParsePayment:
 
     def test_accepts_integral_decimals_from_dynamodb(self) -> None:
         raw = {
-            "paymentsPerMonth": Decimal("2"),
             "gross": Decimal("5000000000"),
             "deductions": [{"label": "Tax", "kind": "TAX", "amount": Decimal("1000000000")}],
         }
@@ -104,9 +101,7 @@ class TestParsePayment:
     @pytest.mark.parametrize(
         ("change", "message"),
         [
-            ({"paymentsPerMonth": 0}, "paymentsPerMonth must be from 1 to 5"),
-            ({"paymentsPerMonth": 6}, "paymentsPerMonth must be from 1 to 5"),
-            ({"paymentsPerMonth": True}, "paymentsPerMonth must be an integer"),
+            ({"gross": True}, "gross must be an integer"),
             ({"gross": -1}, "gross must not be negative"),
             ({"gross": 1.5}, "gross must be an integer"),
             ({"deductions": "x"}, "deductions must be a list"),
@@ -126,17 +121,28 @@ class TestParsePayment:
 
 
 class TestNetPay:
-    def test_net_and_monthly_net(self) -> None:
+    def test_net(self) -> None:
         assert _PAYMENT_ARGS.net == _NET
-        assert _PAYMENT_ARGS.monthly_net == 2 * _NET
 
     def test_no_deductions(self) -> None:
-        assert Payment(payments_per_month=1, gross=7, deductions=()).net == 7
+        assert Payment(gross=7, deductions=()).net == 7
+
+    @pytest.mark.parametrize(
+        ("frequency", "count"),
+        [
+            (PayFrequency.WEEKLY, 4),
+            (PayFrequency.BIWEEKLY, 2),
+            (PayFrequency.SEMIMONTHLY, 2),
+            (PayFrequency.MONTHLY, 1),
+        ],
+    )
+    def test_the_frequency_sets_the_paychecks_per_month(self, frequency: PayFrequency, count: int) -> None:
+        assert frequency.paychecks_per_month == count
 
 
 class TestSmallRules:
     def test_a_stored_payment_equals_the_same_payment_from_a_request(self) -> None:
-        stored = {**_PAYMENT, "gross": Decimal("5000000000"), "paymentsPerMonth": Decimal("2")}
+        stored = {**_PAYMENT, "gross": Decimal("5000000000")}
         assert parse_payment(stored) == _PAYMENT_ARGS
         assert parse_payment(stored) != parse_payment(_raised(_PAYMENT, 6_000_000_000))
 
@@ -241,12 +247,12 @@ def _one_time_row(year_month: str, line: str, amount: int) -> dict[str, Any]:
     }
 
 
-def _source(source_id: str, active: bool = True, sort_order: int = 0) -> dict[str, Any]:
+def _source(source_id: str, active: bool = True, sort_order: int = 0, frequency: str = "biweekly") -> dict[str, Any]:
     return {
         "incomeSourceId": source_id,
         "owners": ["p1"],
         "label": f"Employer {source_id}",
-        "frequency": "biweekly",
+        "frequency": frequency,
         "active": active,
         "sortOrder": sort_order,
     }
@@ -311,6 +317,7 @@ class TestComputeIncome:
         assert result["state"] == "EDITABLE"
         assert [p["incomeSourceId"] for p in result["payments"]] == ["s1"]
         assert result["payments"][0]["net"] == _NET
+        assert result["payments"][0]["frequency"] == "biweekly"
         assert result["payments"][0]["monthlyNet"] == 2 * _NET
         assert "pinned" not in result["payments"][0]
         assert result["oneTime"] == [{"lineId": "ONE#b", "label": "Bonus", "amount": 1_000_000}]
@@ -325,6 +332,15 @@ class TestComputeIncome:
         assert result["state"] == "LOCKED"
         assert [p["incomeSourceId"] for p in result["payments"]] == ["s2"]
         assert result["plannedNetIncome"] == 2 * _NET
+
+    def test_a_weekly_source_counts_four_paychecks(self) -> None:
+        plan, _ = _plan_table([_payment_row(_CURRENT, "s1")])
+        sources = _source_table([_source("s1", frequency="weekly")])
+
+        result = compute_income(plan, sources, _CURRENT, _NOW)
+
+        assert result["payments"][0]["monthlyNet"] == 4 * _NET
+        assert result["plannedNetIncome"] == 4 * _NET
 
     def test_future_month_uses_pins_and_the_walk_back(self) -> None:
         raised = _raised(_PAYMENT, 6_000_000_000)
@@ -469,7 +485,7 @@ class TestIncomeSourceRoutes:
             "owners": ["p1", "p2", "p1"],
             "label": "Joint interest",
             "frequency": "monthly",
-            "initialPayment": {"paymentsPerMonth": 1, "gross": 50_000_000, "deductions": []},
+            "initialPayment": {"gross": 50_000_000, "deductions": []},
             "explanation": "interest",
         }
         result = handler(_event("POST", "/api/income-sources", body), None)
@@ -479,7 +495,7 @@ class TestIncomeSourceRoutes:
                 ["p1", "p2"],
                 "Joint interest",
                 PayFrequency.MONTHLY,
-                Payment(payments_per_month=1, gross=50_000_000, deductions=()),
+                Payment(gross=50_000_000, deductions=()),
             )
         )
 
