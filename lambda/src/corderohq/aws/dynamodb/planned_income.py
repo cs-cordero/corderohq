@@ -33,12 +33,11 @@ def get_recurring_income(item: dict[str, Any]) -> RecurringIncome | None:
 
 
 class PlannedIncomeTable:
-    """The income that each month expects: recurring incomes and one-time incomes.
+    """An expected income amount for a particular year-month that the household is planning on receiving.
 
-    PK `yearMonth`, SK `plannedIncomeId`. A recurring income has `plannedIncomeId = "REC#{ULID}"`, and the same id in
-    each month. It obeys the dense-past, sparse-future rules of a Budget row (see `RecurringIncomeDensifyAdapter`).
-    An item with `stopped: true` stops it from that month on, and later months copy the stop. A one-time income has
-    `plannedIncomeId = "ONE#{ULID}"`. It belongs to its month only.
+    Planned income comes in two flavors: RECURRING and ONE_TIME. Recurring income follows densification rules and is
+    assumed to carry from one month to the next. One-time income is an expected future inflow that is not recurring,
+    such as a bonus payment, RSU award, some kind of windfall, etc.
     """
 
     def __init__(self, table_name: str) -> None:
