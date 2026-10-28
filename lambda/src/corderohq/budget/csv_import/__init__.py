@@ -1,6 +1,12 @@
-from corderohq.budget.csv_import.directions import ReviewReason, SuggestedBy, Suggestion, suggest_budget_treatments
+from corderohq.budget.csv_import.directions import (
+    ReviewReason,
+    SuggestedBy,
+    Suggestion,
+    TransactionKind,
+    suggest_budget_treatments,
+)
 from corderohq.budget.csv_import.fingerprints import assign_fingerprints, fingerprint, normalize_description
-from corderohq.budget.csv_import.llm import TransactionKind, categorize_transactions, map_columns
+from corderohq.budget.csv_import.llm import categorize_transactions, map_columns
 from corderohq.budget.csv_import.local_checks import (
     BankHint,
     bank_category_hint,

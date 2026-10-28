@@ -1,12 +1,12 @@
 import json
 import logging
-from enum import StrEnum
 from typing import Any
 
 import anthropic
 from anthropic.types import TextBlock, TextBlockParam
 
 from corderohq.aws.ssm import get_ssm_param
+from corderohq.budget.csv_import.directions import TransactionKind
 from corderohq.util import get_env_var
 
 LOGGER = logging.getLogger(__name__)
@@ -34,16 +34,6 @@ Respond with a JSON object that maps each key to the exact header name. Example:
 {"date": "Transaction Date", "description": "Description", "amount": "Amount", "bankCategory": "Category"}
 
 Respond ONLY with the JSON object, no other text."""
-
-
-class TransactionKind(StrEnum):
-    """The kind that the categorization gives each description. The prompt names these values."""
-
-    EXPENSE = "expense"  # a purchase or a bill
-    REFUND = "refund"  # money back from a merchant
-    INCOME = "income"  # a paycheck, a bonus, interest, or a dividend
-    CARD_PAYMENT = "card_payment"  # a payment to or from a credit card
-    OWN_TRANSFER = "own_transfer"  # money moved between the household's own accounts
 
 
 _CATEGORIZATION_PROMPT_TEMPLATE = """\

@@ -9,7 +9,6 @@ from typing import Any
 
 from corderohq.accounts import CashFlowRole
 from corderohq.aws.dynamodb import get_cash_flow_role
-from corderohq.budget.csv_import.llm import TransactionKind
 from corderohq.budget.csv_import.local_checks import BankHint, parse_date
 from corderohq.budget.treatment import BudgetTreatment
 
@@ -17,8 +16,6 @@ from corderohq.budget.treatment import BudgetTreatment
 # other side of a row when the two dates are this close.
 PAIR_WINDOW_DAYS = 4
 _FOUR_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
-_OUTSIDE_KINDS = (TransactionKind.EXPENSE, TransactionKind.REFUND, TransactionKind.INCOME)
-_OWN_ACCOUNT_KINDS = (TransactionKind.CARD_PAYMENT, TransactionKind.OWN_TRANSFER)
 
 
 class SideKind(Enum):
@@ -33,6 +30,21 @@ class SideKind(Enum):
     UNKNOWN = auto()
 
 
+class TransactionKind(StrEnum):
+    """The kind of money in a row. The bank's category column or the LLM's categorization gives it.
+
+    The LLM prompt names these values.
+    """
+
+    EXPENSE = "expense"  # a purchase or a bill
+    REFUND = "refund"  # money back from a merchant
+    INCOME = "income"  # a paycheck, a bonus, interest, or a dividend
+    CARD_PAYMENT = "card_payment"  # a payment to or from a credit card
+    OWN_TRANSFER = "own_transfer"  # money moved between the household's own accounts
+
+
+_OUTSIDE_KINDS = (TransactionKind.EXPENSE, TransactionKind.REFUND, TransactionKind.INCOME)
+_OWN_ACCOUNT_KINDS = (TransactionKind.CARD_PAYMENT, TransactionKind.OWN_TRANSFER)
 _BANK_HINT_SIDES: dict[BankHint, tuple[SideKind, TransactionKind]] = {
     BankHint.INCOME: (SideKind.OUTSIDE, TransactionKind.INCOME),
     BankHint.CARD_PAYMENT: (SideKind.OWN_UNKNOWN, TransactionKind.CARD_PAYMENT),
