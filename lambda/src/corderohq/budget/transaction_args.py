@@ -21,6 +21,7 @@ class CreateTransactionArgs:
     classification: Classification
     account_id: str | None
     note: str | None
+    fingerprint: str | None = None  # set by the CSV import, to find a row that was saved before
 
     def to_item(self) -> dict[str, Any]:
         """Converts an instance of CreateTransactionArgs to how it is stored in DynamoDB.
@@ -41,6 +42,8 @@ class CreateTransactionArgs:
             item["accountId"] = self.account_id
         if self.note is not None:
             item["note"] = self.note
+        if self.fingerprint is not None:
+            item["fingerprint"] = self.fingerprint
         return item
 
 
@@ -83,6 +86,7 @@ def parse_create_transaction_args(
         ),
         account_id=parse_optional_str(payload.get("accountId"), "accountId"),
         note=_parse_note(payload.get("note")),
+        fingerprint=parse_optional_str(payload.get("fingerprint"), "fingerprint"),
     )
 
 

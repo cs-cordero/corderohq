@@ -380,10 +380,14 @@ class TestCashFlowRole:
             validate_cash_flow_role("spending")
 
     def test_update_sets_and_removes_the_budget_fields(self) -> None:
-        args = parse_update_account_args({"cashFlowRole": "SPENDING", "lastFour": ["1234"]}, _stored("other_liability"))
+        args = parse_update_account_args(
+            {"cashFlowRole": "SPENDING", "accountNumberLastFour": ["1234"]}, _stored("other_liability")
+        )
         assert args.cash_flow_role == SetTo(CashFlowRole.SPENDING)
         assert args.account_number_last_four == SetTo(["1234"])
-        args = parse_update_account_args({"cashFlowRole": None, "lastFour": []}, _stored("other_liability"))
+        args = parse_update_account_args(
+            {"cashFlowRole": None, "accountNumberLastFour": []}, _stored("other_liability")
+        )
         assert args.cash_flow_role == Remove()
         assert args.account_number_last_four == Remove()
 
@@ -395,7 +399,7 @@ class TestLastFour:
 
     @pytest.mark.parametrize("bad", ["1234", ["123"], ["12345"], ["12a4"], [1234]])
     def test_rejects_bad_values(self, bad: object) -> None:
-        with pytest.raises(ValueError, match="lastFour"):
+        with pytest.raises(ValueError, match="accountNumberLastFour"):
             validate_account_number_last_four(bad)
 
 
