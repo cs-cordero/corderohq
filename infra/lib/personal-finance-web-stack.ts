@@ -55,6 +55,7 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
  * - CloudWatch alarm (prod stage only): personal-finance-handler-prod-errors → shared alert topic
  * - CloudWatch alarm (prod stage only): budget-scheduled-densify-prod-errors → shared alert topic
  * - API Gateway HTTP API: personal-finance-api-{stage} (Cognito JWT authorizer)
+ * - Lambda permission: one for the whole HTTP API to invoke personal-finance-handler-{stage}
  * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /update), /api/transactions (+ /upload, /commit, /update, /delete), /api/income-sources (+ /reorder, /{incomeSourceId} PUT / deactivate / reactivate), /api/income/{yearMonth} (+ /replace, /update, /one-time), /api/summary, /api/audit-log, /api/profiles (GET / POST, + /{profileId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
  * - S3 bucket: personal-finance-assets-{stage}-{account}-{region} (frontend assets)
  * - CloudFront distribution: S3 origin (frontend) + API Gateway origin (/api/*) + Cognito proxy (/oauth2/*)
@@ -280,7 +281,11 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             userPoolClients: [userPoolClient],
         });
 
-        const integration = new apigatewayv2Integrations.HttpLambdaIntegration("ApiHandlerIntegration", apiHandler);
+        // One Lambda permission for the whole API, not one for each route. The Lambda resource policy has a limit
+        // of 20,480 bytes, and one statement for each route went over it at 47 routes.
+        const integration = new apigatewayv2Integrations.HttpLambdaIntegration("ApiHandlerIntegration", apiHandler, {
+            scopePermissionToRoute: false,
+        });
 
         const httpApi = new apigatewayv2.HttpApi(this, "HttpApi", {
             apiName: `personal-finance-api-${stage}`,
@@ -288,9 +293,9 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             defaultAuthorizer: authorizer,
         });
 
-        // An API Gateway v2 HTTP API needs each path in full. It has no catch-all rule. If a
-        // path is absent here, API Gateway returns 404, and the Lambda never sees the request.
-        // Keep this list the same as the routes in personal_finance_handler.handler.
+        // Each path is listed in full. If a path is absent here, API Gateway returns 404, and the
+        // Lambda never sees the request. Keep this list the same as the routes in
+        // personal_finance_handler.handler.
         const routes: { path: string; methods: apigatewayv2.HttpMethod[] }[] = [
             // Category groups (CP12)
             { path: "/api/category-groups", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST] },
