@@ -750,8 +750,9 @@ previous month while it is in grace, or any locked month through the admin overr
 ```
 
 This endpoint writes one row for each target, and each write replaces the row of its category. It
-deletes no row, so a failure part way never leaves the month without its targets. The handler
-checks the request in this order:
+writes all rows in one DynamoDB transaction, so all writes succeed or none of them do. It deletes
+no row. A month can hold at most 100 targets, the limit of one transaction. The handler checks the
+request in this order:
 
 1. **Editability**, as the **Enforcement** table states. If the app cannot write `{YYYY-MM}`, and no
    override applies, the handler returns `409` with the editability error and stops. It does not
