@@ -240,8 +240,9 @@ Run this one time on each stage, right after the budget income code is deployed 
 it on dev first. Without `--apply`, it only prints what it would change:
 
 ```bash
-uv run python lambda/scripts/migrate_budget_income.py --stage dev
-uv run python lambda/scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
+cd lambda
+uv run python scripts/migrate_budget_income.py --stage dev
+uv run python scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
 ```
 
 It does three things:
