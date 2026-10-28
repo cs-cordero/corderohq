@@ -498,7 +498,7 @@ These endpoints have an **editability gate**: `POST /api/budget/{YYYY-MM}/replac
 `POST /api/transactions/delete`, `POST /api/transactions/commit`, and the income plan writes
 (`/api/income/{YYYY-MM}/replace`, `/update`, and `/one-time`). The income `/update` copies the
 budget `/update`: the override does not unlock a month that is not in the future. In the income
-`/update`, the override only lifts the rules of the end month. Each one accepts an optional
+`/update`, the override only lifts the rules of the end month and of an inactive income source. Each one accepts an optional
 `override: true` flag in the body. The handler obeys that flag only if the JWT shows that the user
 is in the admin group — see **Editability and the Admin Override**. If it does not, the handler
 returns `403`. The flag does nothing on a `GET` endpoint, because any signed-in user may read
@@ -1038,7 +1038,9 @@ month is part of the value, so it carries forward like the other fields. Without
 - A restart is a new recurring income, with a new id.
 
 The admin override permits anything, also a past `endMonth`. The admin accepts the risk to these
-rules.
+rules. A `SET` of the value that the month holds already changes nothing, so these rules skip it.
+`/replace` must send each recurring income of the month, also one that ended last month, so this
+keeps the grace month editable.
 
 **Why a separate table, and not more rows in `Budget-{stage}`?** The SK of the Budget table is a
 `categoryId`. The `/replace` body rule, the summary, the hard delete, and the densify step all read
@@ -1568,7 +1570,9 @@ React and TypeScript, built by Vite.
 
 The pages are `SummaryPage`, `BudgetPage`, `IncomePage`, `TransactionsPage`, `UploadPage`,
 `CategoriesPage`, `AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. `IncomePage` shows the
-recurring and one-time incomes of a month, with the breakdown of each one, and the income sources.
+recurring incomes of a month in groups by income source, the one-time incomes, and the income sources.
+Each change of a recurring income applies "From this month on" (`SET`) or "This month only"
+(`SET_PIN`). In a dense month, the page sends each recurring income again in the `/replace` body.
 The summary page and the budget page show the shared `LeftToAssign` line at the top. The net worth record adds `AccountsPage` and
 `NetWorthEntryPage`. `App.tsx` holds the routes. `components/Layout.tsx` holds the navigation, with
 one list of links for the budget (`BUDGET_LINKS`) and one for the net worth record.

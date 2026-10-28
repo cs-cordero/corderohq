@@ -1260,7 +1260,8 @@ def _check_end_month_rules(
     """Return a 400 response if a change breaks a rule of the end month, else None.
 
     An end month before the current month or before `year_month` cannot be set, and a recurring income whose end
-    month has passed cannot change. The admin override permits both.
+    month has passed cannot change. The admin override permits both. A SET of the value that the month holds already
+    changes nothing, so the rules skip it. `/replace` sends each recurring income of the month, also one that ended.
     """
 
     if override_active:
@@ -1268,6 +1269,12 @@ def _check_end_month_rules(
     current_ym = _year_month_of(now)
     floor = max(current_ym, year_month)
     for index, change in enumerate(changes):
+        if (
+            isinstance(change, SetRecurringIncome)
+            and change.planned_income_id is not None
+            and carried.get((year_month, change.planned_income_id)) == change.income
+        ):
+            continue
         match change:
             case SetRecurringIncome(income=income) | SetPin(income=income):
                 if income.end_month is not None and income.end_month < floor:

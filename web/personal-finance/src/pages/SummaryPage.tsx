@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { fetchAllCategories, fetchCategoryGroups, fetchSummary } from "../api";
 import MonthPicker from "../components/MonthPicker";
+import LeftToAssign from "../components/LeftToAssign";
 import LoadingOverlay from "../components/LoadingOverlay";
 import StatusMessage from "../components/StatusMessage";
 import { currentYearMonth, formatCurrency } from "../format";
@@ -82,6 +83,10 @@ export default function SummaryPage() {
             <StatusMessage message={status.type !== "loading" ? status.message : ""} type={status.type} />
 
             {summary && (
+                <LeftToAssign plannedNetIncome={summary.income.plannedNetIncome} budgeted={summary.totals.budgeted} />
+            )}
+
+            {summary && (
                 <table className="data-table">
                     <thead>
                         <tr>
@@ -124,6 +129,20 @@ export default function SummaryPage() {
                             <td className="num">
                                 <strong>{formatCurrency(summary.totals.delta)}</strong>
                             </td>
+                        </tr>
+                        {/* Off-budget money is not in the Total above, so the Total delta shows no
+                            false overspend. The last row adds it back, to show all money spent. */}
+                        <tr className="summary-off-budget-row">
+                            <td>Off-budget</td>
+                            <td className="num">{formatCurrency(0)}</td>
+                            <td className="num">{formatCurrency(summary.offBudget.actual)}</td>
+                            <td className="num">{"\u2014"}</td>
+                        </tr>
+                        <tr className="summary-off-budget-row">
+                            <td>Total + off-budget</td>
+                            <td className="num">{formatCurrency(summary.totalsWithOffBudget.budgeted)}</td>
+                            <td className="num">{formatCurrency(summary.totalsWithOffBudget.actual)}</td>
+                            <td className="num">{"\u2014"}</td>
                         </tr>
                     </tfoot>
                 </table>

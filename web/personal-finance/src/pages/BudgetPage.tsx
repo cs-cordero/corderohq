@@ -1,20 +1,31 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useAdmin } from "../admin";
-import { fetchAllCategories, fetchBudget, fetchCategoryGroups, pinBudget, replaceBudget } from "../api";
+import {
+    fetchAllCategories,
+    fetchBudget,
+    fetchCategoryGroups,
+    fetchIncomeMonth,
+    replaceBudget,
+    updateBudget,
+} from "../api";
+import LeftToAssign from "../components/LeftToAssign";
+import ScopeChoice from "../components/ScopeChoice";
 import LoadingOverlay from "../components/LoadingOverlay";
 import MonthPicker from "../components/MonthPicker";
 import StatusMessage from "../components/StatusMessage";
 import { editability } from "../editability";
 import { currentYearMonth, formatCurrency, parseCurrencyInput } from "../format";
 import { useStatus } from "../hooks";
-import type { BudgetTarget, Category, CategoryGroup } from "../types";
+import type { BudgetTarget, Category, CategoryGroup, ChangeScope } from "../types";
 
 interface BudgetRow {
     categoryId: string;
     categoryName: string;
-    amount: number;
+    amount: number; // what the month shows: the pinned amount if any, else the carried amount
+    carried: number; // the carried amount, which later months copy
+    hasPinned: boolean; // the month has a pinned amount, which only this month uses
     active: boolean;
-    pinned: boolean;
+    ownCarried: boolean; // a future month holds its own carried amount ("changes here")
     groupId: string;
     orderInGroup: number;
 }
@@ -29,6 +40,8 @@ export default function BudgetPage() {
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editAmount, setEditAmount] = useState("");
     const [editExplanation, setEditExplanation] = useState("");
+    const [editScope, setEditScope] = useState<ChangeScope>("FORWARD");
+    const [plannedNetIncome, setPlannedNetIncome] = useState<number | null>(null);
     const { status, showLoading, showSuccess, showError, clear } = useStatus();
     const { adminModeOn } = useAdmin();
 
@@ -36,21 +49,22 @@ export default function BudgetPage() {
     const isLocked = editState === "LOCKED";
     const isReadOnly = isLocked && !adminModeOn;
     const willOverride = isLocked && adminModeOn;
-    // Future months (anything past the current month, while still EDITABLE) go through
-    // /pin instead of /replace. The architecture forbids /replace there because future
-    // months are sparse — only explicit pins exist as rows.
+    // A future month (any month after the current month) goes through /update, not /replace. A
+    // future month is sparse: it holds a row only where the user set a value.
     const isFutureMonth = month > currentYearMonth();
 
     const load = useCallback(async () => {
         showLoading("Loading...");
         try {
-            const [targets, cats, grps] = await Promise.all([
+            const [targets, cats, grps, income] = await Promise.all([
                 fetchBudget(month),
                 fetchAllCategories(),
                 fetchCategoryGroups(),
+                fetchIncomeMonth(month),
             ]);
             setCategories(cats);
             setGroups(grps);
+            setPlannedNetIncome(income.plannedNetIncome);
 
             const targetMap = new Map<string, BudgetTarget>();
             for (const t of targets) targetMap.set(t.categoryId, t);
@@ -59,12 +73,15 @@ export default function BudgetPage() {
                 .filter((cat) => cat.active || targetMap.has(cat.categoryId))
                 .map((cat) => {
                     const target = targetMap.get(cat.categoryId);
+                    const carried = target?.carriedAmount ?? 0;
                     return {
                         categoryId: cat.categoryId,
                         categoryName: cat.active ? cat.name : `${cat.name} (deactivated)`,
-                        amount: target?.amount ?? 0,
+                        amount: target?.pinnedAmount ?? carried,
+                        carried,
+                        hasPinned: target?.pinnedAmount !== undefined,
                         active: cat.active,
-                        pinned: target?.pinned ?? false,
+                        ownCarried: target?.inherited === false,
                         groupId: cat.groupId,
                         orderInGroup: cat.orderInGroup,
                     };
@@ -95,10 +112,21 @@ export default function BudgetPage() {
         load();
     }, [load]);
 
+    // The live total of the targets, with the row that is open for edit at its typed value. The
+    // left to assign line then moves while the user types. Only active categories count here,
+    // the same as the summary for an editable month.
+    const liveBudgeted = useMemo(() => {
+        const typed = editingId === null ? null : parseCurrencyInput(editAmount);
+        return rows
+            .filter((r) => r.active)
+            .reduce((sum, r) => sum + (r.categoryId === editingId && typed !== null ? typed : r.amount), 0);
+    }, [rows, editingId, editAmount]);
+
     const startEdit = (row: BudgetRow) => {
         setEditingId(row.categoryId);
         setEditAmount(row.amount ? (row.amount / 1_000_000).toFixed(2) : "");
         setEditExplanation("");
+        setEditScope(row.hasPinned ? "THIS_MONTH" : "FORWARD");
     };
 
     const cancelEdit = () => {
@@ -106,6 +134,15 @@ export default function BudgetPage() {
         setEditAmount("");
         setEditExplanation("");
     };
+
+    // A dense month (the current, grace, or a locked month) is written whole through /replace: each
+    // row sends its carried amount, and the edited row also sends its pinned amount.
+    const replaceWith = (changed: BudgetRow, carried: number, pinnedAmount: number | null) =>
+        rows.map((r) =>
+            r.categoryId === changed.categoryId
+                ? { categoryId: r.categoryId, carriedAmount: carried, pinnedAmount }
+                : { categoryId: r.categoryId, carriedAmount: r.carried },
+        );
 
     const handleSaveRow = async (row: BudgetRow) => {
         const newAmount = parseCurrencyInput(editAmount);
@@ -118,51 +155,58 @@ export default function BudgetPage() {
             showError("Explanation is required");
             return;
         }
+        const forward = editScope === "FORWARD";
 
         showLoading("Saving...");
         try {
             if (isFutureMonth) {
-                const result = await pinBudget(month, [{ categoryId: row.categoryId, amount: newAmount }], explanation);
-                setRows((prev) =>
-                    prev.map((r) => (r.categoryId === row.categoryId ? { ...r, amount: newAmount, pinned: true } : r)),
+                // "From this month on" sets the carried amount and clears a pinned amount.
+                // "This month only" sets only the pinned amount.
+                const result = await updateBudget(
+                    month,
+                    [
+                        forward
+                            ? { categoryId: row.categoryId, carriedAmount: newAmount, pinnedAmount: null }
+                            : { categoryId: row.categoryId, pinnedAmount: newAmount },
+                    ],
+                    explanation,
                 );
                 cancelEdit();
+                await load();
 
-                const { downstreamPins, pinMatchesCarriedValue } = result.warnings;
-                const downstreamForThisCat = downstreamPins.filter((p) => p.categoryId === row.categoryId);
-                if (downstreamForThisCat.length > 0) {
-                    const monthsList = downstreamForThisCat.map((p) => p.yearMonth).join(", ");
+                const { laterCarriedChanges, matchesInheritedValue } = result.warnings;
+                const laterForThisCat = forward
+                    ? laterCarriedChanges.filter((p) => p.categoryId === row.categoryId)
+                    : [];
+                if (laterForThisCat.length > 0) {
+                    const monthsList = laterForThisCat.map((p) => p.yearMonth).join(", ");
                     const shouldClear = window.confirm(
-                        `This category has pins in later months that won't see your new value: ${monthsList}. ` +
-                            `Clear those downstream pins so the new value carries forward?`,
+                        `This category has changes in later months that won't see your new value: ${monthsList}. ` +
+                            `Clear those later changes so the new value carries forward?`,
                     );
                     if (shouldClear) {
-                        await pinBudget(
-                            month,
-                            downstreamForThisCat.map((p) => ({ categoryId: p.categoryId, amount: null })),
-                            `Clearing downstream pins after pinning ${row.categoryName} ${monthsList}`,
-                        );
-                        // Reload to show the cleared downstream pins.
+                        for (const later of laterForThisCat) {
+                            await updateBudget(
+                                later.yearMonth,
+                                [{ categoryId: later.categoryId, carriedAmount: null }],
+                                `Clearing later changes after a change of ${row.categoryName} in ${month}`,
+                            );
+                        }
                         await load();
-                        showSuccess("Pin saved; downstream pins cleared");
+                        showSuccess("Saved; later changes cleared");
                     } else {
-                        showSuccess("Pin saved; downstream pins kept");
+                        showSuccess("Saved; later changes kept");
                     }
-                } else if (pinMatchesCarriedValue.includes(row.categoryId)) {
-                    showSuccess(
-                        "Pin saved — note: this matches the value that would have carried forward without a pin.",
-                    );
+                } else if (forward && matchesInheritedValue.includes(row.categoryId)) {
+                    showSuccess("Saved — note: this matches the value that would have carried forward anyway.");
                 } else {
-                    showSuccess("Pin saved");
+                    showSuccess("Saved");
                 }
             } else {
-                const targets = rows.map((r) => ({
-                    categoryId: r.categoryId,
-                    amount: r.categoryId === row.categoryId ? newAmount : r.amount,
-                }));
+                const targets = forward ? replaceWith(row, newAmount, null) : replaceWith(row, row.carried, newAmount);
                 await replaceBudget(month, targets, explanation, willOverride);
-                setRows((prev) => prev.map((r) => (r.categoryId === row.categoryId ? { ...r, amount: newAmount } : r)));
                 cancelEdit();
+                await load();
                 showSuccess(willOverride ? "Saved with override" : "Saved");
             }
             setTimeout(clear, 4000);
@@ -171,32 +215,36 @@ export default function BudgetPage() {
         }
     };
 
-    const handleRemovePin = async (row: BudgetRow) => {
-        if (
-            !window.confirm(`Remove the pin for ${row.categoryName}? The value will carry forward from earlier months.`)
-        ) {
-            return;
-        }
-        showLoading("Removing pin...");
+    // Undo the change of this month: a pinned amount first, else the own carried amount of a future
+    // month. The month then shows the value carried from earlier months again.
+    const handleUndo = async (row: BudgetRow) => {
+        const what = row.hasPinned ? "the this-month-only change" : "the change in this month";
+        if (!window.confirm(`Undo ${what} for ${row.categoryName}?`)) return;
+        const explanation = `Undo ${what} for ${row.categoryName}`;
+        showLoading("Undoing...");
         try {
-            await pinBudget(
-                month,
-                [{ categoryId: row.categoryId, amount: null }],
-                `Removed pin for ${row.categoryName}`,
-            );
+            if (isFutureMonth) {
+                await updateBudget(
+                    month,
+                    [
+                        row.hasPinned
+                            ? { categoryId: row.categoryId, pinnedAmount: null }
+                            : { categoryId: row.categoryId, carriedAmount: null },
+                    ],
+                    explanation,
+                );
+            } else {
+                await replaceBudget(month, replaceWith(row, row.carried, null), explanation, willOverride);
+            }
             await load();
-            showSuccess("Pin removed");
+            showSuccess("Change undone");
             setTimeout(clear, 3000);
         } catch (err) {
             showError(err);
         }
     };
 
-    const saveLabel = (() => {
-        if (isFutureMonth) return "Pin";
-        if (willOverride) return "Save with override";
-        return "Save";
-    })();
+    const saveLabel = willOverride ? "Save with override" : "Save";
 
     return (
         <div className="page">
@@ -205,10 +253,13 @@ export default function BudgetPage() {
             <MonthPicker value={month} onChange={setMonth} />
             <StatusMessage message={status.type !== "loading" ? status.message : ""} type={status.type} />
 
+            {plannedNetIncome !== null && <LeftToAssign plannedNetIncome={plannedNetIncome} budgeted={liveBudgeted} />}
+
             {isReadOnly && <p className="hint">This month is locked. Toggle Admin mode to edit with override.</p>}
             {isFutureMonth && (
                 <p className="hint">
-                    Future month: amounts carry forward from earlier months. Edits create explicit pins.
+                    Future month: amounts carry forward from earlier months. A change applies from this month on, or to
+                    this month only.
                 </p>
             )}
 
@@ -237,7 +288,12 @@ export default function BudgetPage() {
                                         <tr key={row.categoryId} className={row.active ? "" : "faded"}>
                                             <td>
                                                 {row.categoryName}
-                                                {row.pinned && <span className="badge badge-pinned">pinned</span>}
+                                                {row.ownCarried && (
+                                                    <span className="badge badge-pinned">changes here</span>
+                                                )}
+                                                {row.hasPinned && (
+                                                    <span className="badge badge-pinned">this month only</span>
+                                                )}
                                             </td>
                                             <td className="num">
                                                 {isEditing ? (
@@ -259,6 +315,7 @@ export default function BudgetPage() {
                                             <td>
                                                 {isEditing ? (
                                                     <div className="edit-actions">
+                                                        <ScopeChoice value={editScope} onChange={setEditScope} />
                                                         <input
                                                             type="text"
                                                             className="explanation-inline"
@@ -284,14 +341,14 @@ export default function BudgetPage() {
                                                 ) : !isReadOnly && row.active ? (
                                                     <div className="edit-actions">
                                                         <button className="small-btn" onClick={() => startEdit(row)}>
-                                                            {isFutureMonth ? (row.pinned ? "Edit pin" : "Pin") : "Edit"}
+                                                            Edit
                                                         </button>
-                                                        {isFutureMonth && row.pinned && (
+                                                        {(row.hasPinned || (isFutureMonth && row.ownCarried)) && (
                                                             <button
                                                                 className="small-btn"
-                                                                onClick={() => handleRemovePin(row)}
+                                                                onClick={() => handleUndo(row)}
                                                             >
-                                                                Remove pin
+                                                                Undo change
                                                             </button>
                                                         )}
                                                     </div>

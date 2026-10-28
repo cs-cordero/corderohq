@@ -14,10 +14,25 @@ import StatusMessage from "../components/StatusMessage";
 import { editability } from "../editability";
 import { currentYearMonth, formatCurrency, parseCurrencyInput } from "../format";
 import { useStatus } from "../hooks";
-import type { Category, Transaction } from "../types";
+import {
+    BUDGET_TREATMENT_LABELS,
+    BUDGET_TREATMENTS,
+    type BudgetTreatment,
+    type Category,
+    type Transaction,
+} from "../types";
 
 type SortKey = "transactionDate" | "description" | "amount" | "categoryId";
 type SortDir = "asc" | "desc";
+
+const EMPTY_EDIT = {
+    description: "",
+    amount: "",
+    categoryId: "",
+    budgetTreatment: "BUDGET_IMPACTING" as BudgetTreatment,
+    note: "",
+};
+const EMPTY_NEW = { ...EMPTY_EDIT, date: "" };
 
 export default function TransactionsPage() {
     const [month, setMonth] = useState(currentYearMonth);
@@ -33,8 +48,8 @@ export default function TransactionsPage() {
     const willOverride = isLocked && adminModeOn;
     const [showAddForm, setShowAddForm] = useState(false);
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [editValues, setEditValues] = useState({ description: "", amount: "", categoryId: "" });
-    const [newTxn, setNewTxn] = useState({ date: "", description: "", amount: "", categoryId: "" });
+    const [editValues, setEditValues] = useState(EMPTY_EDIT);
+    const [newTxn, setNewTxn] = useState(EMPTY_NEW);
 
     // Multi-select
     const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -47,6 +62,8 @@ export default function TransactionsPage() {
     // Filters
     const [filterDescription, setFilterDescription] = useState("");
     const [filterCategory, setFilterCategory] = useState("");
+    // The ledger hides SKIP rows by default.
+    const [showSkipped, setShowSkipped] = useState(false);
 
     const load = useCallback(async () => {
         showLoading("Loading...");
@@ -71,7 +88,8 @@ export default function TransactionsPage() {
     }, [load]);
 
     const categoryName = useCallback(
-        (id: string) => {
+        (id: string | undefined) => {
+            if (!id) return "";
             const cat = allCategories.find((c) => c.categoryId === id);
             return cat ? cat.name : id;
         },
@@ -79,7 +97,8 @@ export default function TransactionsPage() {
     );
 
     const categoryLabel = useCallback(
-        (id: string) => {
+        (id: string | undefined) => {
+            if (!id) return "\u2014";
             const cat = allCategories.find((c) => c.categoryId === id);
             if (!cat) return id;
             return cat.active ? cat.name : `${cat.name} (deactivated)`;
@@ -89,7 +108,7 @@ export default function TransactionsPage() {
 
     // Filter and sort
     const filteredAndSorted = useMemo(() => {
-        let result = transactions;
+        let result = showSkipped ? transactions : transactions.filter((t) => t.budgetTreatment !== "SKIP");
 
         if (filterDescription) {
             const lower = filterDescription.toLowerCase();
@@ -119,7 +138,7 @@ export default function TransactionsPage() {
         });
 
         return result;
-    }, [transactions, filterDescription, filterCategory, sortKey, sortDir, categoryName]);
+    }, [transactions, showSkipped, filterDescription, filterCategory, sortKey, sortDir, categoryName]);
 
     const handleSort = (key: SortKey) => {
         if (sortKey === key) {
@@ -175,8 +194,13 @@ export default function TransactionsPage() {
 
     const handleAdd = async () => {
         const amount = parseCurrencyInput(newTxn.amount);
-        if (!newTxn.date || !newTxn.description || amount === null || !newTxn.categoryId) {
-            showError("All fields are required");
+        const needsCategory = newTxn.budgetTreatment === "BUDGET_IMPACTING";
+        if (!newTxn.date || !newTxn.description || amount === null || (needsCategory && !newTxn.categoryId)) {
+            showError(
+                needsCategory
+                    ? "Date, description, amount, and category are required"
+                    : "Date, description, and amount are required",
+            );
             return;
         }
         try {
@@ -186,11 +210,15 @@ export default function TransactionsPage() {
                     transactionDate: newTxn.date,
                     description: newTxn.description,
                     amount,
-                    categoryId: newTxn.categoryId,
+                    budgetTreatment: newTxn.budgetTreatment,
+                    ...(newTxn.budgetTreatment !== "SKIP" && newTxn.categoryId
+                        ? { categoryId: newTxn.categoryId }
+                        : {}),
+                    ...(newTxn.note.trim() ? { note: newTxn.note } : {}),
                 },
                 willOverride,
             );
-            setNewTxn({ date: "", description: "", amount: "", categoryId: "" });
+            setNewTxn(EMPTY_NEW);
             setShowAddForm(false);
             load();
         } catch (err) {
@@ -203,13 +231,19 @@ export default function TransactionsPage() {
         setEditValues({
             description: txn.description,
             amount: (txn.amount / 1_000_000).toFixed(2),
-            categoryId: txn.categoryId,
+            categoryId: txn.categoryId ?? "",
+            budgetTreatment: txn.budgetTreatment,
+            note: txn.note ?? "",
         });
     };
 
     const handleSaveEdit = async (txn: Transaction) => {
         const amount = parseCurrencyInput(editValues.amount);
         if (amount === null) return;
+        if (editValues.budgetTreatment === "BUDGET_IMPACTING" && !editValues.categoryId) {
+            showError("A Budget transaction needs a category");
+            return;
+        }
         try {
             await updateTransaction(
                 txn.yearMonth,
@@ -217,7 +251,10 @@ export default function TransactionsPage() {
                 {
                     description: editValues.description,
                     amount,
-                    categoryId: editValues.categoryId,
+                    budgetTreatment: editValues.budgetTreatment,
+                    // An empty string removes the category or the note on the server.
+                    categoryId: editValues.budgetTreatment === "SKIP" ? "" : editValues.categoryId,
+                    note: editValues.note,
                 },
                 willOverride,
             );
@@ -243,7 +280,7 @@ export default function TransactionsPage() {
 
     // Unique categories present in current transactions (for filter dropdown)
     const categoriesInView = useMemo(() => {
-        const ids = new Set(transactions.map((t) => t.categoryId));
+        const ids = new Set(transactions.flatMap((t) => (t.categoryId ? [t.categoryId] : [])));
         return allCategories.filter((c) => ids.has(c.categoryId)).sort((a, b) => a.name.localeCompare(b.name));
     }, [transactions, allCategories]);
 
@@ -296,16 +333,37 @@ export default function TransactionsPage() {
                         onChange={(e) => setNewTxn({ ...newTxn, amount: e.target.value })}
                     />
                     <select
-                        value={newTxn.categoryId}
-                        onChange={(e) => setNewTxn({ ...newTxn, categoryId: e.target.value })}
+                        value={newTxn.budgetTreatment}
+                        onChange={(e) => setNewTxn({ ...newTxn, budgetTreatment: e.target.value as BudgetTreatment })}
                     >
-                        <option value="">Select category...</option>
-                        {activeCategories.map((c) => (
-                            <option key={c.categoryId} value={c.categoryId}>
-                                {c.name}
+                        {BUDGET_TREATMENTS.map((d) => (
+                            <option key={d} value={d}>
+                                {BUDGET_TREATMENT_LABELS[d]}
                             </option>
                         ))}
                     </select>
+                    {newTxn.budgetTreatment !== "SKIP" && (
+                        <select
+                            value={newTxn.categoryId}
+                            onChange={(e) => setNewTxn({ ...newTxn, categoryId: e.target.value })}
+                        >
+                            <option value="">
+                                {newTxn.budgetTreatment === "BUDGET_IMPACTING" ? "Select category..." : "No category"}
+                            </option>
+                            {activeCategories.map((c) => (
+                                <option key={c.categoryId} value={c.categoryId}>
+                                    {c.name}
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                    <input
+                        type="text"
+                        placeholder="Note (optional)"
+                        maxLength={200}
+                        value={newTxn.note}
+                        onChange={(e) => setNewTxn({ ...newTxn, note: e.target.value })}
+                    />
                     <button className="primary-btn" onClick={handleAdd}>
                         {willOverride ? "Add (override)" : "Add"}
                     </button>
@@ -327,6 +385,10 @@ export default function TransactionsPage() {
                         </option>
                     ))}
                 </select>
+                <label>
+                    <input type="checkbox" checked={showSkipped} onChange={(e) => setShowSkipped(e.target.checked)} />{" "}
+                    Show skipped rows
+                </label>
                 {(filterDescription || filterCategory) && (
                     <button
                         className="small-btn"
@@ -362,6 +424,8 @@ export default function TransactionsPage() {
                         <th className="sortable" onClick={() => handleSort("categoryId")}>
                             Category{sortIndicator("categoryId")}
                         </th>
+                        <th>Type</th>
+                        <th>Note</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
@@ -396,21 +460,56 @@ export default function TransactionsPage() {
                                         />
                                     </td>
                                     <td>
+                                        {editValues.budgetTreatment !== "SKIP" && (
+                                            <select
+                                                value={editValues.categoryId}
+                                                onChange={(e) =>
+                                                    setEditValues({ ...editValues, categoryId: e.target.value })
+                                                }
+                                            >
+                                                <option value="">
+                                                    {editValues.budgetTreatment === "BUDGET_IMPACTING"
+                                                        ? "Select category..."
+                                                        : "No category"}
+                                                </option>
+                                                {txn.categoryId &&
+                                                    !activeCategories.some((c) => c.categoryId === txn.categoryId) && (
+                                                        <option value={txn.categoryId}>
+                                                            {categoryLabel(txn.categoryId)}
+                                                        </option>
+                                                    )}
+                                                {activeCategories.map((c) => (
+                                                    <option key={c.categoryId} value={c.categoryId}>
+                                                        {c.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        )}
+                                    </td>
+                                    <td>
                                         <select
-                                            value={editValues.categoryId}
+                                            value={editValues.budgetTreatment}
                                             onChange={(e) =>
-                                                setEditValues({ ...editValues, categoryId: e.target.value })
+                                                setEditValues({
+                                                    ...editValues,
+                                                    budgetTreatment: e.target.value as BudgetTreatment,
+                                                })
                                             }
                                         >
-                                            {!activeCategories.some((c) => c.categoryId === txn.categoryId) && (
-                                                <option value={txn.categoryId}>{categoryLabel(txn.categoryId)}</option>
-                                            )}
-                                            {activeCategories.map((c) => (
-                                                <option key={c.categoryId} value={c.categoryId}>
-                                                    {c.name}
+                                            {BUDGET_TREATMENTS.map((d) => (
+                                                <option key={d} value={d}>
+                                                    {BUDGET_TREATMENT_LABELS[d]}
                                                 </option>
                                             ))}
                                         </select>
+                                    </td>
+                                    <td>
+                                        <input
+                                            type="text"
+                                            maxLength={200}
+                                            value={editValues.note}
+                                            onChange={(e) => setEditValues({ ...editValues, note: e.target.value })}
+                                        />
                                     </td>
                                     <td className="actions">
                                         <button className="small-btn" onClick={() => handleSaveEdit(txn)}>
@@ -429,6 +528,14 @@ export default function TransactionsPage() {
                                         {txn.amount < 0 && <span className="badge badge-refund">refund</span>}
                                     </td>
                                     <td>{categoryLabel(txn.categoryId)}</td>
+                                    <td>
+                                        {txn.budgetTreatment !== "BUDGET_IMPACTING" && (
+                                            <span className={`badge badge-budget-treatment-${txn.budgetTreatment}`}>
+                                                {BUDGET_TREATMENT_LABELS[txn.budgetTreatment]}
+                                            </span>
+                                        )}
+                                    </td>
+                                    <td>{txn.note ?? ""}</td>
                                     <td className="actions">
                                         <button
                                             className="small-btn"
@@ -451,7 +558,7 @@ export default function TransactionsPage() {
                     ))}
                     {filteredAndSorted.length === 0 && (
                         <tr>
-                            <td colSpan={6} className="empty">
+                            <td colSpan={8} className="empty">
                                 {transactions.length === 0
                                     ? "No transactions for this month"
                                     : "No transactions match filters"}
