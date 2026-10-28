@@ -1359,10 +1359,13 @@ class `debt`, and it has no loan terms. `debt` is the fixed class of every liabi
 `excludedFromNetWorth` on a credit card, to keep its balance out of the net worth.
 
 Before the `debt` class, a liability had the fixed class `other`. The one-time script
-`lambda/scripts/migrate_liabilities_to_debt.py` moves the older data. It does a dry run by default,
-writes only with `--apply`, and is safe to run again. It changes `assetClasses` and the snapshot
-values of each mortgage and other liability from `other` to `debt`. With `--to-credit-card
-<accountId>`, it also changes that account to the `credit_card` type, and removes its loan terms.
+`lambda/scripts/migrate_budget_income.py` moves the older data. It does a dry run by default, writes
+only with `--apply`, and is safe to run again. It changes `assetClasses` and the snapshot values of
+each mortgage and other liability from `other` to `debt`. With `--to-credit-card <accountId>`, it
+also changes that account to the `credit_card` type, and removes its loan terms. The same script
+renames the amounts of each Budget row (`amount` → `carriedAmount`, `onlyAmount` → `pinnedAmount`,
+and a `null` amount → `0`). It does not change the audit log: the old entries use the old names, and
+are deleted by hand.
 
 ## LLM-Driven CSV Import (`budget/csv_import/`)
 
