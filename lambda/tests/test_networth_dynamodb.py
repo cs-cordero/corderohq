@@ -250,7 +250,7 @@ class TestAccountTableUpdate:
         accounts.update_account("a1", args)
         kwargs = mock.update_item.call_args.kwargs
         assert kwargs["UpdateExpression"] == (
-            "SET updatedAt = :updatedAt, #cashFlowRole = :cashFlowRole REMOVE #lastFour"
+            "SET updatedAt = :updatedAt, #cashFlowRole = :cashFlowRole REMOVE #accountNumberLastFour"
         )
         assert kwargs["ExpressionAttributeValues"][":cashFlowRole"] == "SPENDING"
 

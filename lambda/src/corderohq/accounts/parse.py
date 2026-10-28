@@ -29,7 +29,7 @@ _EDITABLE_ACCOUNT_KEYS = (
     "notes",
     "sortOrder",
     "cashFlowRole",
-    "lastFour",
+    "accountNumberLastFour",
 )
 _ACCOUNT_TYPE_VALUES = frozenset(t.value for t in AccountType)
 _ASSET_CLASS_VALUES = frozenset(c.value for c in AssetClass)
@@ -163,11 +163,11 @@ def _parse_cash_flow_role_change(payload: Mapping[str, Any]) -> FieldChange[Cash
 
 
 def _parse_account_number_last_four_change(payload: Mapping[str, Any]) -> FieldChange[list[str]]:
-    """Return the change to `lastFour`. An empty list removes it."""
+    """Return the change to `accountNumberLastFour`. An empty list removes it."""
 
-    if "lastFour" not in payload:
+    if "accountNumberLastFour" not in payload:
         return Keep()
-    account_number_last_four = validate_account_number_last_four(payload["lastFour"])
+    account_number_last_four = validate_account_number_last_four(payload["accountNumberLastFour"])
     return SetTo(account_number_last_four) if account_number_last_four else Remove()
 
 
@@ -362,11 +362,11 @@ def validate_account_number_last_four(value: Any) -> list[str]:
     """
 
     if not isinstance(value, list):
-        raise ValueError("lastFour must be a list of 4-digit strings")
+        raise ValueError("accountNumberLastFour must be a list of 4-digit strings")
     result: list[str] = []
     for entry in value:
         if not isinstance(entry, str) or len(entry) != 4 or not entry.isdigit():
-            raise ValueError("each lastFour entry must be a string of exactly 4 digits")
+            raise ValueError("each accountNumberLastFour entry must be a string of exactly 4 digits")
         if entry not in result:
             result.append(entry)
     return result

@@ -129,7 +129,7 @@ class AccountTable:
             "targetYear": args.target_year,
             "loanTerms": loan_terms,
             "cashFlowRole": args.cash_flow_role,
-            "lastFour": args.account_number_last_four,
+            "accountNumberLastFour": args.account_number_last_four,
         }
         response = self._table.update_item(
             Key={"accountId": account_id},

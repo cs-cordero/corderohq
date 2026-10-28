@@ -9,7 +9,7 @@ from enum import StrEnum
 from typing import Any, assert_never
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import parse_create_account_args, parse_update_account_args, validate_asset_class
+from corderohq.accounts import CashFlowRole, parse_create_account_args, parse_update_account_args, validate_asset_class
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -29,13 +29,26 @@ from corderohq.aws.dynamodb import (
     compute_income_plan,
     compute_summary,
     get_budget_treatment,
+    get_cash_flow_role,
     new_recurring_income_id,
 )
 from corderohq.budget.auth import is_budget_admin
-from corderohq.budget.csv_import import categorize_transactions, map_columns
+from corderohq.budget.csv_import import (
+    assign_fingerprints,
+    bank_category_hint,
+    categorize_transactions,
+    detect_column_types,
+    map_columns,
+    parse_amount,
+    parse_date,
+    spending_account_needs_flip,
+    suggest_budget_treatments,
+)
 from corderohq.budget.densify import (
     carry_map,
     densify,
+    next_year_month,
+    prev_year_month,
     resolve_future_targets,
     value_at_or_before,
     walk_back_for,
@@ -510,7 +523,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
         return _response(404, "Category not found")
 
     budget_rows = _BUDGET_TABLE.get_rows_for_category(category_id)
-    txn_rows = _TRANSACTIONS_TABLE.get_rows_for_category(category_id)
+    transaction_rows = _TRANSACTIONS_TABLE.get_rows_for_category(category_id)
 
     # A locked month is a past month with a Budget row for this category, where
     # year_month is at or before current_ym less the grace period. A month in grace is still
@@ -526,7 +539,7 @@ def _get_category(event: dict[str, Any], category_id: str, now: datetime) -> dic
                 "category": item,
                 "deletionPreview": {
                     "budgetRows": len(budget_rows),
-                    "transactions": len(txn_rows),
+                    "transactions": len(transaction_rows),
                     "lockedMonthsAffected": locked_months,
                 },
             },
@@ -560,7 +573,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
         return _response(400, f"confirmName must match the current category name exactly ('{item['name']}')")
 
     budget_rows_deleted = _BUDGET_TABLE.delete_all_for_category(category_id)
-    txn_rows_deleted = _TRANSACTIONS_TABLE.delete_all_transactions_for_category(category_id)
+    transaction_rows_deleted = _TRANSACTIONS_TABLE.delete_all_transactions_for_category(category_id)
     _CATEGORY_TABLE.delete_category(category_id)
 
     # Write the audit entry last. The cascade then either finished in full, or it left
@@ -573,7 +586,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
         user=user,
         changes={
             "budgetRowsDeleted": budget_rows_deleted,
-            "transactionsDeleted": txn_rows_deleted,
+            "transactionsDeleted": transaction_rows_deleted,
             "name": item["name"],
         },
         override=True,
@@ -586,7 +599,7 @@ def _hard_delete_category(event: dict[str, Any], category_id: str, user: dict[st
                 "categoryId": category_id,
                 "name": item["name"],
                 "budgetRowsDeleted": budget_rows_deleted,
-                "transactionsDeleted": txn_rows_deleted,
+                "transactionsDeleted": transaction_rows_deleted,
             }
         ),
     )
@@ -788,13 +801,13 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
 
     existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
-    txns = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
-    txn_cat_ids = {
+    transactions = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
+    transaction_category_ids = {
         t["categoryId"]
-        for t in txns
+        for t in transactions
         if get_budget_treatment(t) == BudgetTreatment.BUDGET_IMPACTING and t.get("amount") != 0
     }
-    required_cat_ids = existing_cat_ids | txn_cat_ids
+    required_cat_ids = existing_cat_ids | transaction_category_ids
 
     missing = sorted(required_cat_ids - set(parsed))
     if missing:
@@ -1766,8 +1779,8 @@ def _get_transactions(event: dict[str, Any]) -> dict[str, Any]:
     if not month or not YEAR_MONTH_PATTERN.match(month):
         return _response(400, "query parameter 'month' is required (YYYY-MM)")
 
-    txns = _TRANSACTIONS_TABLE.list_transactions_for_month(month)
-    return _json_response(200, json.dumps(txns, default=_json_default))
+    transactions = _TRANSACTIONS_TABLE.list_transactions_for_month(month)
+    return _json_response(200, json.dumps(transactions, default=_json_default))
 
 
 def _check_account_exists(account_id: str | None) -> dict[str, Any] | None:
@@ -1844,10 +1857,10 @@ def _validate_commit_rows(
 def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     """Save all rows of a CSV import, or none of them.
 
-    The body is `{rows: [{transactionDate, description, amount, categoryId?, budgetTreatment?, accountId?, note?},
-    ...], override?}`. `categoryId` is necessary only for a BUDGET_IMPACTING row. If any row has an issue, return a
-    409 with the issues of all rows, and save nothing. A second call with the same body saves the rows again, as
-    duplicates.
+    The body is `{rows: [{transactionDate, description, amount, categoryId?, budgetTreatment?, accountId?, note?,
+    fingerprint?}, ...], override?}`. `categoryId` is necessary only for a BUDGET_IMPACTING row. If any row has an
+    issue, return a 409 with the issues of all rows, and save nothing. A row whose fingerprint is saved already is not
+    saved again, and the response lists its index in `skippedDuplicates`.
     """
 
     body = _parse_json_body(event)
@@ -1895,9 +1908,52 @@ def _post_transactions_commit(event: dict[str, Any], now: datetime) -> dict[str,
             ),
         )
 
-    created = _TRANSACTIONS_TABLE.batch_create_transaction(new_rows)
+    # Drop each row that the table holds already, by its fingerprint. A retry after a failure
+    # then writes only the rows that are not there yet.
+    existing_fingerprints = _existing_fingerprints({new.transaction_date[:7] for new in new_rows})
+    skipped_duplicates = [i for i, new in enumerate(new_rows) if new.fingerprint in existing_fingerprints]
+    to_create = [new for new in new_rows if new.fingerprint not in existing_fingerprints]
+    created = _TRANSACTIONS_TABLE.batch_create_transaction(to_create) if to_create else []
 
-    return _json_response(200, json.dumps({"count": len(created), "transactions": created}, default=_json_default))
+    return _json_response(
+        200,
+        json.dumps(
+            {"count": len(created), "transactions": created, "skippedDuplicates": skipped_duplicates},
+            default=_json_default,
+        ),
+    )
+
+
+def _saved_transactions(year_months: set[str]) -> list[dict[str, Any]]:
+    """Return the saved transactions of the given months. A month that is not YYYY-MM is skipped."""
+
+    result: list[dict[str, Any]] = []
+    for year_month in sorted(year_months):
+        if YEAR_MONTH_PATTERN.match(year_month):
+            result.extend(_TRANSACTIONS_TABLE.list_transactions_for_month(year_month))
+    return result
+
+
+def _existing_fingerprints(year_months: set[str]) -> set[str]:
+    """Return the fingerprints of the saved transactions in the given months."""
+
+    return {str(t["fingerprint"]) for t in _saved_transactions(year_months) if isinstance(t.get("fingerprint"), str)}
+
+
+def _months_around(rows: list[dict[str, Any]]) -> set[str]:
+    """Return the month of each row, and the month before and after it.
+
+    A date that the code can read gives its month. Otherwise the first 7 characters are used,
+    the same as the commit does.
+    """
+
+    months: set[str] = set()
+    for row in rows:
+        parsed = parse_date(str(row["transactionDate"]))
+        year_month = parsed.strftime("%Y-%m") if parsed is not None else str(row["transactionDate"])[:7]
+        if YEAR_MONTH_PATTERN.match(year_month):
+            months.update({prev_year_month(year_month), year_month, next_year_month(year_month)})
+    return months
 
 
 def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -1909,6 +1965,17 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     if not csv_data:
         return _response(400, "csvData is required")
 
+    # Each upload belongs to one account, and the account needs a cash flow role. The role and the
+    # direction of the money set the suggested budget treatment of each row.
+    account_id = body.get("accountId")
+    if not isinstance(account_id, str) or not account_id:
+        return _response(400, "accountId is required")
+    account = _ACCOUNT_TABLE.get_account_by_id(account_id)
+    if account is None:
+        return _response(400, f"accountId '{account_id}' does not exist")
+    if get_cash_flow_role(account) not in (CashFlowRole.SPENDING, CashFlowRole.HOLDING):
+        return _response(400, "only a SPENDING or HOLDING account can take an upload; see the Accounts page")
+
     # Parse CSV
     reader = csv.reader(io.StringIO(csv_data))
     rows = list(reader)
@@ -1918,14 +1985,15 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     headers = rows[0]
     data_rows = rows[1:]
 
-    # Step 1: the LLM finds which column is which.
-    sample_rows = data_rows[:5]
-    column_mapping = map_columns(headers, sample_rows)
+    # Step 1: the LLM finds which column is which. It gets the header row and a type for each
+    # column, which the code finds locally. It gets no cell values.
+    column_mapping = map_columns(headers, detect_column_types(headers, data_rows))
 
     date_col = column_mapping.get("date", "")
     desc_col = column_mapping.get("description", "")
     amount_col = column_mapping.get("amount", "")
-    amount_invert = column_mapping.get("amount_invert", False)
+    amount_invert = column_mapping.get("amount_invert", False) is True
+    bank_col = column_mapping.get("bankCategory")
 
     if not date_col or not desc_col or not amount_col:
         return _response(400, "Could not identify required columns (date, description, amount)")
@@ -1940,67 +2008,98 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
     date_idx = col_indices[date_col]
     desc_idx = col_indices[desc_col]
     amount_idx = col_indices[amount_col]
+    # The bank's category column is optional. A name that is not a header is ignored.
+    bank_idx = col_indices.get(bank_col) if isinstance(bank_col, str) else None
 
     parsed_transactions: list[dict[str, Any]] = []
-    descriptions: list[str] = []
     for row in data_rows:
         if len(row) <= max(date_idx, desc_idx, amount_idx):
             continue
-        raw_amount = row[amount_idx].strip().replace(",", "").replace("$", "")
-        if not raw_amount:
+        amount_float = parse_amount(row[amount_idx])
+        if amount_float is None:
             continue
-        try:
-            amount_float = float(raw_amount)
-        except ValueError:
-            continue
-
-        # Our schema is positive=expense, negative=income/return. If the bank CSV
-        # uses the opposite (negative=debit), the LLM column-mapper sets
-        # amount_invert and we flip every row to land on our convention.
-        if amount_invert:
-            amount_float = -amount_float
-
-        amount_millionths = round(amount_float * 1_000_000)
-
+        bank_value = row[bank_idx].strip() if bank_idx is not None and bank_idx < len(row) else None
         parsed_transactions.append(
             {
                 "transactionDate": row[date_idx].strip(),
                 "description": row[desc_idx].strip(),
-                "amount": amount_millionths,
+                "amount": round(amount_float * 1_000_000),
+                "_bankHint": bank_category_hint(bank_value),
             }
         )
-        descriptions.append(row[desc_idx].strip())
 
     if not parsed_transactions:
         return _response(400, "No valid transactions found in CSV")
 
-    # Step 3: the LLM gives a category to each row.
+    # The app stores money out as positive. Three checks set the sign, in order: the LLM's
+    # guess from the header names; a local check for a spending account, where most rows are
+    # money out; and the user's "flip all signs" button on the review screen.
+    amounts_after_llm = [-t["amount"] if amount_invert else t["amount"] for t in parsed_transactions]
+    is_spending_account = get_cash_flow_role(account) == CashFlowRole.SPENDING
+    locally_flipped = is_spending_account and spending_account_needs_flip(amounts_after_llm)
+    user_flipped = body.get("flipSigns") is True
+    if amount_invert ^ locally_flipped ^ user_flipped:
+        for transaction in parsed_transactions:
+            transaction["amount"] = -transaction["amount"]
+
+    # Step 3: the LLM gives a kind and a category to each unique description.
     categories = _CATEGORY_TABLE.get_active_categories()
-    if categories:
-        assignments = categorize_transactions(descriptions, categories)
-        for i, assignment in enumerate(assignments):
-            if i < len(parsed_transactions):
-                parsed_transactions[i]["categoryId"] = assignment.get("categoryId", "")
-                parsed_transactions[i]["categoryName"] = assignment.get("categoryName", "")
-    else:
-        for txn in parsed_transactions:
-            txn["categoryId"] = ""
-            txn["categoryName"] = ""
+    assignments = categorize_transactions([t["description"] for t in parsed_transactions], categories)
+    for transaction, assignment in zip(parsed_transactions, assignments, strict=True):
+        transaction["categoryId"] = assignment.get("categoryId") or ""
+        transaction["categoryName"] = assignment.get("categoryName") or ""
+        transaction["_kind"] = assignment.get("kind")
+
+    # Load the saved transactions of each month of the upload, and of the month before and after
+    # it. A transfer can cross the end of a month. The fingerprints mark each row that the table
+    # holds already, such as from an earlier CSV with dates that overlap; the review screen leaves
+    # those rows unselected. The pair match looks for the other side of a transfer.
+    saved = _saved_transactions(_months_around(parsed_transactions))
+    existing_fingerprints = {str(t["fingerprint"]) for t in saved if isinstance(t.get("fingerprint"), str)}
+
+    # Step 4: suggest a budget treatment for each row, from the direction of the money.
+    suggestions = suggest_budget_treatments(parsed_transactions, account, _ACCOUNT_TABLE.get_all_accounts(), saved)
+    category_names = {str(c["categoryId"]): str(c["name"]) for c in categories}
+    fingerprints = assign_fingerprints(parsed_transactions, account_id)
+    for transaction, row_fingerprint, suggestion in zip(parsed_transactions, fingerprints, suggestions, strict=True):
+        transaction["accountId"] = account_id
+        transaction["fingerprint"] = row_fingerprint
+        transaction["duplicate"] = row_fingerprint in existing_fingerprints
+        transaction["budgetTreatment"] = suggestion.budget_treatment
+        transaction["categoryId"] = suggestion.category_id
+        transaction["categoryName"] = category_names.get(suggestion.category_id, "")
+        transaction["suggestedBy"] = suggestion.suggested_by
+        transaction["pairWith"] = suggestion.pair_with
+        transaction["review"] = suggestion.review
 
     # Per-row pre-validation surfaces missing_category / locked_month issues so the
     # review UI can render specific annotations without round-tripping through
-    # /commit just to learn what's wrong.
+    # /commit just to learn what's wrong. `review` reasons do not block the commit.
     valid_category_ids = {c["categoryId"] for c in _CATEGORY_TABLE.get_all_categories()}
     classified = [
-        (parse_classification(None, row.get("categoryId"), require_category=False), str(row["transactionDate"]))
+        (
+            parse_classification(row.get("budgetTreatment"), row.get("categoryId"), require_category=False),
+            str(row["transactionDate"]),
+        )
         for row in parsed_transactions
     ]
     validations = _validate_commit_rows(classified, valid_category_ids, override_active=False, now=now)
+    for validation, transaction in zip(validations, parsed_transactions, strict=True):
+        validation["review"] = transaction.pop("review", [])
+        # The kind and the bank hint are for the suggestion only. They do not go to the client.
+        transaction.pop("_kind", None)
+        transaction.pop("_bankHint", None)
 
     return _json_response(
         200,
         json.dumps(
             {
+                "accountId": account_id,
+                "signCheck": {
+                    "llmInverted": amount_invert,
+                    "locallyFlipped": locally_flipped,
+                    "userFlipped": user_flipped,
+                },
                 "columnMapping": column_mapping,
                 "transactions": parsed_transactions,
                 "validations": validations,

@@ -254,8 +254,9 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | HOLDING / EXTERNAL /       |
 |                          |                       |            | NON_CASH; absent means the |
 |                          |                       |            | default for the type) and  |
-|                          |                       |            | lastFour (list of 4-digit  |
-|                          |                       |            | strings). Every liability  |
+|                          |                       |            | accountNumberLastFour      |
+|                          |                       |            | (list of 4-digit strings). |
+|                          |                       |            | Every liability            |
 |                          |                       |            | (credit_card, mortgage,    |
 |                          |                       |            | other_liability) has the   |
 |                          |                       |            | fixed asset class `debt`.  |
@@ -1340,8 +1341,8 @@ The CSV import uses two optional fields of an account, which the user sets on th
 
 - `cashFlowRole`: `SPENDING`, `HOLDING`, `EXTERNAL`, or `NON_CASH`. Absent means the default for the
   account type, so every account has a role.
-- `lastFour`: a list of 4-digit strings. The import uses them to find the other side of a
-  transfer.
+- `accountNumberLastFour`: a list of 4-digit strings, the last four digits of the account number.
+  The import uses them to find the other side of a transfer.
 
 | Account type | Default cash flow role |
 |---|---|
@@ -1403,8 +1404,8 @@ check in `suggestedBy`:
    amount, and a date at most 4 days away. With one candidate, the other side is that account. With
    more than one, the row is marked, and the import does not choose. The same upload cannot hold
    the other side, because all its rows belong to one account.
-2. **LAST_FOUR.** A 4-digit group in the description that is in the `lastFour` of exactly one other
-   account.
+2. **ACCOUNT_NUMBER.** A 4-digit group in the description that is in the `accountNumberLastFour` of
+   exactly one other account.
 3. **BANK.** The bank category of the row, from a short list of generic bank words, such as
    "payroll", "transfer", or "card payment".
 4. **LLM.** The kind that the categorization gave the description.
@@ -1417,8 +1418,8 @@ An EXTERNAL or NON_CASH account, such as a mortgage, counts as the outside world
 | Upload role | Money | Other side | Suggested budget treatment | Mark for review? |
 |---|---|---|---|---|
 | SPENDING | out | outside | BUDGET_IMPACTING, LLM category | only if no category |
-| SPENDING | out | SPENDING account (pair, last four) | SKIP | no |
-| SPENDING | out | HOLDING account (pair, last four) | BUDGET_IMPACTING, LLM category | yes, if the LLM gave no category |
+| SPENDING | out | SPENDING account (pair, account number) | SKIP | no |
+| SPENDING | out | HOLDING account (pair, account number) | BUDGET_IMPACTING, LLM category | yes, if the LLM gave no category |
 | SPENDING | out | own account, role unknown, LLM says `card_payment` | SKIP | no |
 | SPENDING | out | own account, role unknown, LLM says `own_transfer` with a category | BUDGET_IMPACTING, that category | **yes** |
 | SPENDING | out | own account, role unknown, no category | SKIP | **yes** |
@@ -1457,7 +1458,7 @@ fingerprint = sha256(accountId | transactionDate | amount | normalizedDescriptio
     {
       "transactionDate", "description", "amount", "categoryId", "categoryName", "accountId",
       "budgetTreatment": "BUDGET_IMPACTING" | "OFF_BUDGET" | "SKIP",
-      "suggestedBy": "PAIR" | "LAST_FOUR" | "BANK" | "LLM" | "DEFAULT",
+      "suggestedBy": "PAIR" | "ACCOUNT_NUMBER" | "BANK" | "LLM" | "DEFAULT",
       "pairWith": { "yearMonth", "sortId" } | null,
       "fingerprint": "…",
       "duplicate": bool
