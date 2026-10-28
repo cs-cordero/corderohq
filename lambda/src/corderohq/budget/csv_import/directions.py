@@ -13,11 +13,16 @@ from corderohq.budget.csv_import.llm import TransactionKind
 from corderohq.budget.csv_import.local_checks import BankHint, parse_date
 from corderohq.budget.treatment import BudgetTreatment
 
+# The most days apart that two rows of one transfer can be. The PAIR step only takes a saved transaction as the
+# other side of a row when the two dates are this close.
 PAIR_WINDOW_DAYS = 4
 
 
 class SideKind(Enum):
-    """The other side of a row. It stays inside the upload, and is never sent or stored."""
+    """The CSV Importer's assessment of either where the money for a particular row either came from or went to.
+
+    Money is either coming into or leaving the household, or moving around accounts within the household.
+    """
 
     OUTSIDE = auto()  # a merchant, an employer, a bank: the outside world
     ACCOUNT = auto()  # one of the user's own accounts, and the app knows which
@@ -26,7 +31,7 @@ class SideKind(Enum):
 
 
 class SuggestedBy(StrEnum):
-    """The step that found the other side of a row. The upload response sends the value."""
+    """The CSV Importer's 'source' for how it assessed the SideKind of a row to be what it is."""
 
     PAIR = "PAIR"
     ACCOUNT_NUMBER = "ACCOUNT_NUMBER"
@@ -44,7 +49,6 @@ class ReviewReason(StrEnum):
     UNKNOWN_DIRECTION = "unknown_direction"
 
 
-# For a bank hint: the other side, and the kind of money.
 _BANK_HINT_SIDES: dict[BankHint, tuple[SideKind, TransactionKind]] = {
     BankHint.INCOME: (SideKind.OUTSIDE, TransactionKind.INCOME),
     BankHint.CARD_PAYMENT: (SideKind.OWN_UNKNOWN, TransactionKind.CARD_PAYMENT),
@@ -58,20 +62,24 @@ _FOUR_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
 
 @dataclass(frozen=True)
 class OtherSide:
-    """What the steps found about the other side of one row."""
+    """The CSV importer's full assessment of a given row."""
 
     kind: SideKind
     role: CashFlowRole | None = None  # the cash flow role of the other account, when kind is ACCOUNT
     suggested_by: SuggestedBy = SuggestedBy.DEFAULT
     pair_with: dict[str, str] | None = None
-    # For OUTSIDE: INCOME or REFUND changes the suggestion for money in.
-    # For OWN_UNKNOWN: CARD_PAYMENT or OWN_TRANSFER.
     detail: TransactionKind | None = None
     review: tuple[ReviewReason, ...] = ()
 
 
 @dataclass(frozen=True)
 class Suggestion:
+    """The CSV Importer's suggestion for how a particular row should be treated in the budget.
+
+    The BudgetTreatment is the primary output that the CSV importer's guesswork is working towards: is this a row that
+    should impact the budget or not? Multiple inputs work to build toward this assessment.
+    """
+
     budget_treatment: BudgetTreatment
     category_id: str
     suggested_by: SuggestedBy
