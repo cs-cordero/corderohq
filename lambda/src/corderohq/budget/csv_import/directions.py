@@ -31,9 +31,10 @@ class SideKind(Enum):
 
 
 class TransactionKind(StrEnum):
-    """The kind of money in a row. The bank's category column or the LLM's categorization gives it.
+    """The CSV Importer's assessment of what kind of transaction a given row in a CSV is.
 
-    The LLM prompt names these values.
+    The importer will try to determine this value for a row using other hints in the CSV. Failing that, the importer
+    prompts an LLM to make its best guess.
     """
 
     EXPENSE = "expense"  # a purchase or a bill

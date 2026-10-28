@@ -4,6 +4,19 @@ from enum import Enum, auto
 _DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y/%m/%d", "%m-%d-%Y", "%d-%b-%Y", "%b %d, %Y")
 _TYPE_SAMPLE_SIZE = 50
 _TYPE_THRESHOLD = 0.8
+# Generic bank labels. These are words that banks use for a category, and not the names of an
+# employer or a merchant. The repository is public, so it must hold no real names.
+_BANK_INCOME_WORDS = ("payroll", "paycheck", "salary", "direct deposit", "income", "interest", "dividend")
+_BANK_CARD_PAYMENT_WORDS = ("credit card payment", "card payment")
+_BANK_TRANSFER_WORDS = ("transfer",)
+
+
+class BankHint(Enum):
+    """What the bank's own category says about a row. It stays inside the upload, and is never stored."""
+
+    INCOME = auto()
+    CARD_PAYMENT = auto()
+    TRANSFER = auto()
 
 
 def parse_date(value: str) -> date | None:
@@ -15,10 +28,6 @@ def parse_date(value: str) -> date | None:
         except ValueError:
             continue
     return None
-
-
-def _looks_like_date(value: str) -> bool:
-    return parse_date(value) is not None
 
 
 def parse_amount(value: str) -> float | None:
@@ -71,21 +80,6 @@ def spending_account_needs_flip(amounts: list[int]) -> bool:
     return negative > positive
 
 
-# Generic bank labels. These are words that banks use for a category, and not the names of an
-# employer or a merchant. The repository is public, so it must hold no real names.
-_BANK_INCOME_WORDS = ("payroll", "paycheck", "salary", "direct deposit", "income", "interest", "dividend")
-_BANK_CARD_PAYMENT_WORDS = ("credit card payment", "card payment")
-_BANK_TRANSFER_WORDS = ("transfer",)
-
-
-class BankHint(Enum):
-    """What the bank's own category says about a row. It stays inside the upload, and is never stored."""
-
-    INCOME = auto()
-    CARD_PAYMENT = auto()
-    TRANSFER = auto()
-
-
 def bank_category_hint(value: str | None) -> BankHint | None:
     """Return the hint in the bank's category of a row, or None."""
 
@@ -99,3 +93,7 @@ def bank_category_hint(value: str | None) -> BankHint | None:
     if any(word in text for word in _BANK_INCOME_WORDS):
         return BankHint.INCOME
     return None
+
+
+def _looks_like_date(value: str) -> bool:
+    return parse_date(value) is not None

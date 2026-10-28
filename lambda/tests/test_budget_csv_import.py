@@ -16,8 +16,8 @@ from corderohq.budget.csv_import import (
 )
 
 
-def _mock_claude_response(text: str) -> MagicMock:
-    """Create a mock Claude API response with the given text."""
+def _mock_llm_response(text: str) -> MagicMock:
+    """Create a mock LLM API response with the given text."""
 
     from anthropic.types import TextBlock
 
@@ -35,7 +35,7 @@ class TestMapColumns:
     def test_returns_column_mapping(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_claude_response(
+        mock_client.messages.create.return_value = _mock_llm_response(
             json.dumps({"date": "Trans Date", "description": "Description", "amount": "Amount"})
         )
 
@@ -50,7 +50,7 @@ class TestMapColumns:
     def test_handles_amount_invert_flag(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_claude_response(
+        mock_client.messages.create.return_value = _mock_llm_response(
             json.dumps(
                 {
                     "date": "Date",
@@ -69,7 +69,7 @@ class TestMapColumns:
     def test_prompt_has_headers_and_types_only(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_claude_response(json.dumps({"date": "Date"}))
+        mock_client.messages.create.return_value = _mock_llm_response(json.dumps({"date": "Date"}))
 
         map_columns(["Date", "Desc", "Amount"], ["date", "text", "number"])
 
@@ -83,7 +83,7 @@ class TestCategorizeTransactions:
     def test_returns_category_assignments(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_claude_response(
+        mock_client.messages.create.return_value = _mock_llm_response(
             json.dumps(
                 [
                     {"index": 0, "kind": "expense", "categoryId": "cat1", "categoryName": "Groceries"},
@@ -110,7 +110,7 @@ class TestCategorizeTransactions:
     ) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_claude_response(
+        mock_client.messages.create.return_value = _mock_llm_response(
             json.dumps(
                 [
                     {"index": 0, "kind": "expense", "categoryId": "cat1", "categoryName": "Groceries"},
@@ -133,7 +133,7 @@ class TestCategorizeTransactions:
     def test_unknown_kind_and_category_are_dropped(self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock) -> None:
         mock_client = MagicMock()
         mock_anthropic_cls.return_value = mock_client
-        mock_client.messages.create.return_value = _mock_claude_response(
+        mock_client.messages.create.return_value = _mock_llm_response(
             json.dumps([{"index": 0, "kind": "salary", "categoryId": "made-up", "categoryName": "X"}])
         )
 

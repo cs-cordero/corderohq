@@ -68,8 +68,8 @@ def _get_api_key() -> str:
     return get_ssm_param(param_name)
 
 
-def _call_claude(api_key: str, system: str, user_text: str) -> str:
-    """Call Claude Haiku and return the text response."""
+def _call_llm(api_key: str, system: str, user_text: str) -> str:
+    """Send one prompt to the AI/LLM, and return its text response."""
 
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -92,11 +92,11 @@ def _call_claude(api_key: str, system: str, user_text: str) -> str:
                 text = "\n".join(lines)
             return text
 
-    raise ValueError("Claude returned no text response")
+    raise ValueError("The LLM returned no text response")
 
 
 def map_columns(headers: list[str], column_types: list[str]) -> dict[str, Any]:
-    """Ask Claude which CSV columns hold the date, the description, the amount, and the bank category.
+    """Ask the LLM which CSV columns hold the date, the description, the amount, and the bank category.
 
     The prompt holds only the header names and the type of each column, and no cell values. Return a
     dict with the keys `date`, `description`, and `amount`, and optionally `bankCategory` and
@@ -107,7 +107,7 @@ def map_columns(headers: list[str], column_types: list[str]) -> dict[str, Any]:
 
     preview = ", ".join(f"{header} ({column_type})" for header, column_type in zip(headers, column_types, strict=True))
     LOGGER.info("Mapping columns for headers: %s", headers)
-    result_text = _call_claude(api_key, _COLUMN_MAPPING_PROMPT, f"Headers and types:\n{preview}")
+    result_text = _call_llm(api_key, _COLUMN_MAPPING_PROMPT, f"Headers and types:\n{preview}")
     mapping: dict[str, Any] = json.loads(result_text)
     LOGGER.info("Column mapping result: %s", mapping)
     return mapping
@@ -117,7 +117,7 @@ def categorize_transactions(
     descriptions: list[str],
     categories: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Ask Claude for a kind and a category for each transaction description.
+    """Ask the LLM for a kind and a category for each transaction description.
 
     The prompt holds each unique description one time only. Return one dict for each description,
     in order, with `index`, `kind`, `categoryId`, and `categoryName`. An unknown kind becomes None,
@@ -144,7 +144,7 @@ def categorize_transactions(
         len(descriptions),
         len(categories),
     )
-    result_text = _call_claude(api_key, "", user_text)
+    result_text = _call_llm(api_key, "", user_text)
     assignments: list[dict[str, Any]] = json.loads(result_text)
 
     names_by_id = {str(c["categoryId"]): str(c["name"]) for c in categories}
