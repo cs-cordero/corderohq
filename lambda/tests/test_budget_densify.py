@@ -201,6 +201,19 @@ class _MemoryStore:
 
 
 class TestGenericStore:
+    def test_a_value_set_in_advance_does_not_stop_its_month_from_densifying(self) -> None:
+        # In June, the user set August for "food" only. When August arrives, "rent" still gets its row.
+        store = _MemoryStore([("2026-06", "food", 500), ("2026-06", "rent", 2000), ("2026-08", "food", 700)])
+        densify(store, ["food", "rent"], "2026-07", cold_start_value=0)
+        densify(store, ["food", "rent"], "2026-08", cold_start_value=0)
+        assert ("2026-08", "rent", 2000) in store.rows
+        assert [row for row in store.rows if row[:2] == ("2026-08", "food")] == [("2026-08", "food", 700)]
+
+    def test_cold_start_keeps_a_value_set_in_advance(self) -> None:
+        store = _MemoryStore([("2026-06", "x", "set")])
+        assert densify(store, ["x", "y"], "2026-06", cold_start_value="start") == 1
+        assert store.rows == [("2026-06", "x", "set"), ("2026-06", "y", "start")]
+
     def test_cold_start_writes_the_given_value(self) -> None:
         store = _MemoryStore([])
         assert densify(store, ["x"], "2026-06", cold_start_value="start") == 1

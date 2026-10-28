@@ -37,15 +37,18 @@ class TestGetTargets:
 
 
 class TestPutTargets:
-    def test_deletes_old_and_writes_new(self) -> None:
+    def test_writes_each_target_and_deletes_nothing(self) -> None:
         table, mock = _make_table()
         batch_mock = MagicMock()
         mock.batch_writer.return_value.__enter__ = MagicMock(return_value=batch_mock)
         mock.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
-        mock.query.return_value = {"Items": [{"yearMonth": "2026-03", "categoryId": "old_cat", "carriedAmount": 100}]}
 
         result = table.set_all_budget_targets("2026-03", {"new_cat": BudgetTargetAmounts(carried_amount=200)})
 
+        batch_mock.delete_item.assert_not_called()
+        batch_mock.put_item.assert_called_once_with(
+            Item={"yearMonth": "2026-03", "categoryId": "new_cat", "carriedAmount": 200}
+        )
         assert len(result) == 1
         assert result[0]["categoryId"] == "new_cat"
         assert result[0]["carriedAmount"] == 200

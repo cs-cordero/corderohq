@@ -68,12 +68,11 @@ class BudgetTable:
     def set_all_budget_targets(
         self, year_month: str, targets: Mapping[str, BudgetTargetAmounts]
     ) -> list[dict[str, Any]]:
-        """Set the budget targets for one month, by categoryId. This writes over every target in that month."""
+        """Write the budget targets of one month, by categoryId. Each write replaces the row of its category.
 
-        existing = self.get_budget_targets(year_month)
-        with self._table.batch_writer() as batch:
-            for item in existing:
-                batch.delete_item(Key={"yearMonth": year_month, "categoryId": item["categoryId"]})
+        It deletes no row, so a failure part way never leaves the month without its targets. A category that is not in
+        `targets` keeps its row.
+        """
 
         items: list[dict[str, Any]] = []
         with self._table.batch_writer() as batch:

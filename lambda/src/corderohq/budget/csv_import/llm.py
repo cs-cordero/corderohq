@@ -45,7 +45,7 @@ For each description, give:
 "income" (a paycheck, a bonus, interest, or a dividend), "card_payment" (a payment to or from a \
 credit card), or "own_transfer" (money moved between the household's own accounts, such as to a \
 savings fund, a brokerage, or a 529).
-- "categoryId" and "categoryName": the best category. For "income" and "card_payment", use null. \
+- "categoryId": the best category. For "income" and "card_payment", use null. \
 For "own_transfer", use a savings category if one fits, else null.
 
 Categories:
@@ -55,12 +55,15 @@ Descriptions (one per line, format "INDEX|DESCRIPTION"):
 {transactions}
 
 Respond with a JSON array of objects, one per description, in the same order:
-[{{"index": 0, "kind": "expense", "categoryId": "...", "categoryName": "..."}}, ...]
+[{{"index": 0, "kind": "expense", "categoryId": "..."}}, ...]
 
 If no category fits well for an expense or a refund, use the closest match. Never invent new \
 categories.
 
 Respond ONLY with the JSON array, no other text."""
+
+
+_CATEGORIZATION_BATCH_SIZE = 50
 
 
 def _get_api_key() -> str:
@@ -81,6 +84,9 @@ def _call_llm(api_key: str, system: str, user_text: str) -> str:
         system=system,
         messages=[{"role": "user", "content": [prompt]}],
     )
+
+    if response.stop_reason == "max_tokens":
+        raise ValueError("The LLM answer was cut off at the token limit")
 
     for block in response.content:
         if isinstance(block, TextBlock):
@@ -119,9 +125,9 @@ def categorize_transactions(
 ) -> list[dict[str, Any]]:
     """Ask the LLM for a kind and a category for each transaction description.
 
-    The prompt holds each unique description one time only. Return one dict for each description,
-    in order, with `index`, `kind`, `categoryId`, and `categoryName`. An unknown kind becomes None,
-    and a category that is not in `categories` becomes "".
+    The prompt holds each unique description one time only, and each call holds at most `_CATEGORIZATION_BATCH_SIZE`
+    of them. Return one dict for each description, in order, with `index`, `kind`, `categoryId`, and `categoryName`.
+    An unknown kind becomes None, and a category that is not in `categories` becomes "".
     """
 
     unique: list[str] = []
@@ -135,32 +141,33 @@ def categorize_transactions(
 
     api_key = _get_api_key()
     category_lines = "\n".join(f"- {c['name']} (categoryId: {c['categoryId']})" for c in categories)
-    transaction_lines = "\n".join(f"{i}|{desc}" for i, desc in enumerate(unique))
-    user_text = _CATEGORIZATION_PROMPT_TEMPLATE.format(categories=category_lines, transactions=transaction_lines)
-
+    names_by_id = {str(c["categoryId"]): str(c["name"]) for c in categories}
     LOGGER.info(
         "Categorizing %d unique descriptions (%d rows) across %d categories",
         len(unique),
         len(descriptions),
         len(categories),
     )
-    result_text = _call_llm(api_key, "", user_text)
-    assignments: list[dict[str, Any]] = json.loads(result_text)
 
-    names_by_id = {str(c["categoryId"]): str(c["name"]) for c in categories}
+    # The answer has a size limit, so each call holds at most one batch of descriptions.
     by_unique_index: dict[int, dict[str, Any]] = {}
-    for assignment in assignments:
-        index = assignment.get("index")
-        if not isinstance(index, int):
-            continue
-        kind = assignment.get("kind")
-        category_id = assignment.get("categoryId")
-        valid_category = isinstance(category_id, str) and category_id in names_by_id
-        by_unique_index[index] = {
-            "kind": TransactionKind(kind) if isinstance(kind, str) and kind in TransactionKind else None,
-            "categoryId": category_id if valid_category else "",
-            "categoryName": names_by_id[category_id] if valid_category else "",
-        }
+    for start in range(0, len(unique), _CATEGORIZATION_BATCH_SIZE):
+        batch = unique[start : start + _CATEGORIZATION_BATCH_SIZE]
+        transaction_lines = "\n".join(f"{i}|{desc}" for i, desc in enumerate(batch))
+        user_text = _CATEGORIZATION_PROMPT_TEMPLATE.format(categories=category_lines, transactions=transaction_lines)
+        assignments: list[dict[str, Any]] = json.loads(_call_llm(api_key, "", user_text))
+        for assignment in assignments:
+            index = assignment.get("index")
+            if not isinstance(index, int) or not 0 <= index < len(batch):
+                continue
+            kind = assignment.get("kind")
+            category_id = assignment.get("categoryId")
+            valid_category = isinstance(category_id, str) and category_id in names_by_id
+            by_unique_index[start + index] = {
+                "kind": TransactionKind(kind) if isinstance(kind, str) and kind in TransactionKind else None,
+                "categoryId": category_id if valid_category else "",
+                "categoryName": names_by_id[category_id] if valid_category else "",
+            }
     LOGGER.info("Categorization complete: %d assignments", len(by_unique_index))
 
     empty = {"kind": None, "categoryId": "", "categoryName": ""}
