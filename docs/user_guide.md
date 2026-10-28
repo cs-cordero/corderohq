@@ -234,19 +234,28 @@ goal is `$0`. The summary page and the Allocations page show it.
 
 ## Scripts
 
-### Move every liability to the debt asset class
+### Migrate the data to the budget income feature
 
-Run this one time on each stage, after the code with the `debt` class and the `credit_card` type is
-deployed to that stage. Without `--apply`, it only prints what it would change:
+Run this one time on each stage, right after the budget income code is deployed to that stage. Run
+it on dev first. Without `--apply`, it only prints what it would change:
 
 ```bash
-uv run python lambda/scripts/migrate_liabilities_to_debt.py --stage dev
-uv run python lambda/scripts/migrate_liabilities_to_debt.py --stage dev --apply --to-credit-card <accountId>
+uv run python lambda/scripts/migrate_budget_income.py --stage dev
+uv run python lambda/scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
 ```
 
-It moves each mortgage and each other liability, and its net worth history, from the `other` class
-to `debt`. `--to-credit-card` changes an `other_liability` account to a credit card. Repeat the
-flag for each card. Get the account IDs from the Accounts page or the DynamoDB console.
+It does three things:
+
+1. It moves each mortgage and each other liability from the `other` class to `debt`.
+   `--to-credit-card` changes an `other_liability` account to a credit card. Repeat the flag for
+   each card. Get the account IDs from the Accounts page or the DynamoDB console.
+2. It moves the net worth history of those accounts from `other` to `debt`.
+3. It renames the amounts of each budget target: `amount` to `carriedAmount`, and `onlyAmount` to
+   `pinnedAmount`. An empty amount becomes `$0`.
+
+The budget pages fail until step 3 runs, so run the script right after the deploy. The script does
+not change the audit log. Delete the old entries of `BudgetAuditLog-{stage}` by hand, because they
+use the old names.
 
 ### Dry run
 
