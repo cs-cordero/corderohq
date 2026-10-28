@@ -91,8 +91,8 @@
     appear at once in the summary for the current year-month, with its first target.
 15. Deactivation is the normal way to retire a category. It must be common and easy. It keeps every
     Budget row and every Transaction in the current, grace, and locked year-months, so the
-    historical record stays whole (Spec 2). The app drops any future pinned amount for the category
-    (Spec 18) when I confirm, as Spec 21 describes.
+    historical record stays whole (Spec 2). The app drops any value in a future year-month for the
+    category (Spec 18) when I confirm, as Spec 21 describes.
 16. A hard delete is a different operation, and it destroys data. It removes the category for ever.
     It also deletes every Budget row and every Transaction that points at the category, in all
     year-months, including the locked ones. It breaks the historical fidelity of Spec 2 for that
@@ -135,35 +135,36 @@
     to a group, therefore holds at all times. The frontend hides the Rename and Delete buttons for
     it, and shows a short note in their place.
 
-## Carry-Forward and Future Pinning
+## Carry-Forward in Future Months
 
 17. When I look at a future year-month, the app derives the budgeted amounts. For each category
     that is active now, it shows the value I set most recently in any earlier year-month. A value
-    that I **pin** for that category in that future year-month takes the place of the derived one.
-18. I want to pin the budgeted amount of a category for any future editable year-month. A pinned
-    amount must:
+    that I **set** for that category in that future year-month takes the place of the derived one,
+    and carries forward from there.
+18. I want to set the budgeted amount of a category for any future editable year-month. That
+    year-month then holds its own value, which must:
     - Stay in place when that year-month becomes the current year-month. The carry-forward must not
       write over it.
-    - Stop an earlier change from moving past the pinned year-month. For example, I pin December at
+    - Stop an earlier change from moving past that year-month. For example, I set December at
       $2000, and I later change October to $1500. November then takes the $1500, but December stays
       at $2000.
     - Look different on the budget summary, such as with a coloured marker. I can then see at once
-      which rows are pinned, and which rows carry forward.
-19. When a change of mine conflicts with a pin further ahead, the app must warn me. It must show me
-    which pins exist, and let me keep them or clear them.
-20. When I pin a future year-month to the same value that the carry-forward would give, the app
-    must warn me. I am then pinning the value that is there already, and that stops it from moving
-    ahead later.
-21. When I try to deactivate a category with future pinned amounts, the app must warn me and list
-    them. If I confirm, the app drops the pins. The category then leaves nothing behind in a
+      which rows hold their own value, and which rows carry forward.
+19. When a change of mine stops at a later year-month with its own value, the app must warn me. It
+    must show me those year-months, and let me keep their values or clear them.
+20. When I set a future year-month to the same value that the carry-forward would give, the app
+    must warn me. That year-month then holds the value as its own, and that stops a later change in
+    an earlier month from moving ahead.
+21. When I try to deactivate a category with values in future year-months, the app must warn me and
+    list them. If I confirm, the app drops them. The category then leaves nothing behind in a
     future year-month.
 
 58. When I change a budget target or a recurring income in an editable month, I choose how the
     change applies:
     - **From this month on** — later months carry the new value forward, until a later change.
-      In a future month, this is a pin (Spec 18).
-    - **This month only** — only this month uses the new value. The next month goes back to the
-      value that it would have had without the change. A this-month-only value never carries
+      In a future month, the month then holds its own value (Spec 18).
+    - **This month only** — a **pin**. Only this month uses the pinned value. The next month goes
+      back to the value that it would have had without the change. A pinned value never carries
       forward, and it does not stop an earlier change from moving forward.
 
     The app shows which kind of change each month has: "changes here" for a change from this
@@ -205,16 +206,18 @@
 36. The app does not model a change in the net amount during the year. Examples are a 401k deduction that
     stops at the annual limit, or a Social Security tax that stops at the wage limit. I change the
     recurring income myself when I want to.
-37. I can stop a recurring income from a year-month on. The year-month of the stop shows the
-    stopped income, so that I can undo the stop. The later year-months do not show it. I can also
-    deactivate an income source. That stops each of its recurring incomes from the next year-month
-    on, so it keeps its history in the current, grace, and locked year-months. It drops their future
-    pins when I confirm.
+37. A recurring income can have an **end month**: the last year-month that counts it. A later
+    year-month does not show it or count it. I cannot set an end month before the current
+    year-month, and an end month that has passed cannot change. Only an admin can change them. If
+    the income starts again, I add a new recurring income. I can also deactivate an income source.
+    That ends each of its recurring incomes in the current year-month, so it keeps its history in
+    the current, grace, and locked year-months. It drops their values in future year-months when I
+    confirm.
 38. I want an **Income** page. It shows each income source, and the recurring and one-time incomes
     of a year-month that I choose, with the breakdown from the gross amount to the net amount. I make
     every change to the income plan on this page.
-39. The audit log records each change to a recurring income (a new value, a pin, an unpin, or a
-    stop), and each change to a one-time income. Each change needs an explanation, the same as a
+39. The audit log records each change to a recurring income (a new value, a cleared future value,
+    a pin, or an unpin), and each change to a one-time income. Each change needs an explanation, the same as a
     change to a budget target.
 
 ## Left to Assign
@@ -324,7 +327,7 @@ These items are out of scope now. The design must not block them.
 ## Cross-cutting
 
 - **Audit scope.** The audit log records every change to a budget target. This includes a pin, an
-  unpin, and a pin that the app drops during a deactivation. It also records a hard delete of a
+  unpin, a cleared future value, and a future value that the app drops during a deactivation. It also records a hard delete of a
   category (Spec 16), and every change to the income plan (Spec 39). It does not record an insert, an update, or a delete of a transaction, and
   this holds even through the override. The trade-off is that an override change to a transaction
   in a locked month leaves no direct trace. This is acceptable, because the budget rows keep the

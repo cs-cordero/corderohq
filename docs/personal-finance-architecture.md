@@ -145,7 +145,7 @@ it.
 |                        |                    |            | via active=False. Names are |
 |                        |                    |            | unique case-insensitive     |
 |                        |                    |            | across active + inactive —  |
-|                        |                    |            | see **Category name        |
+|                        |                    |            | see **Category name         |
 |                        |                    |            | uniqueness** below.         |
 +------------------------+--------------------+------------+-----------------------------+
 | Budget-{stage}         | yearMonth          | categoryId | yearMonth is YYYY-MM.       |
@@ -182,19 +182,21 @@ it.
 +------------------------+--------------------+------------+-----------------------------+
 | PlannedIncome-{stage}  | yearMonth          | planned-   | "REC#{ULID}": a recurring   |
 |                        |                    | IncomeId   | income (kind RECURRING;     |
-|                        |                    |            | incomeSourceId, label,      |
+|                        |                    |            | carriedRecurringIncome      |
+|                        |                    |            | and/or                      |
+|                        |                    |            | pinnedRecurringIncome, each |
+|                        |                    |            | {incomeSourceId, label,     |
 |                        |                    |            | frequency, gross,           |
 |                        |                    |            | deductions[{label, kind,    |
-|                        |                    |            | amount}]), with the same id |
-|                        |                    |            | in each month. Dense/sparse |
-|                        |                    |            | like Budget rows. `stopped: |
-|                        |                    |            | true` stops it from that    |
-|                        |                    |            | month on. "ONE#{ULID}": a   |
-|                        |                    |            | one-time income (kind       |
-|                        |                    |            | ONE_TIME; label,            |
-|                        |                    |            | incomeSourceId (optional),  |
-|                        |                    |            | gross, deductions). Never   |
-|                        |                    |            | carries forward.            |
+|                        |                    |            | amount}], endMonth?}), with |
+|                        |                    |            | the same id in each month.  |
+|                        |                    |            | Dense/sparse like Budget    |
+|                        |                    |            | rows. "ONE#{ULID}": a one-  |
+|                        |                    |            | time income (kind ONE_TIME; |
+|                        |                    |            | label, incomeSourceId       |
+|                        |                    |            | (optional), gross,          |
+|                        |                    |            | deductions). Never carries  |
+|                        |                    |            | forward.                    |
 +------------------------+--------------------+------------+-----------------------------+
 | BudgetAuditLog-{stage} | entityType         | sortId     | Single-partition design so  |
 |                        | (always "AUDIT")   |            | recent-N queries are one    |
@@ -202,31 +204,33 @@ it.
 |                        |                    |            | ScanIndexForward=false. The |
 |                        |                    |            | PK attribute is entityType, |
 |                        |                    |            | and its value is always the |
-|                        |                    |            | string "AUDIT". sortId is   |
-|                        |                    |            | ULID                        |
-|                        |                    |            | (sortable by time). Fields: |
-|                        |                    |            | changedAt (ISO-8601 UTC     |
-|                        |                    |            | timestamp), effectiveYear-  |
-|                        |                    |            | Month (nullable),           |
-|                        |                    |            | categoryId (a budget entry) |
-|                        |                    |            | or plannedIncomeId and      |
+|                        |                    |            | string "AUDIT". sortId is a |
+|                        |                    |            | ULID (sortable by time).    |
+|                        |                    |            | Fields: changedAt (ISO-8601 |
+|                        |                    |            | UTC timestamp),             |
+|                        |                    |            | effectiveYearMonth          |
+|                        |                    |            | (nullable), categoryId (a   |
+|                        |                    |            | budget entry) or            |
+|                        |                    |            | plannedIncomeId and         |
 |                        |                    |            | incomeSourceId (an income   |
-|                        |                    |            | entry), action (CREATE/     |
-|                        |                    |            | UPDATE/PIN/UNPIN/CATEGORY_  |
-|                        |                    |            | HARD_DELETE, and the income |
-|                        |                    |            | actions), explanation,      |
-|                        |                    |            | user ({sub, email,          |
-|                        |                    |            | username}; see **Audit user |
-|                        |                    |            | identity**), override       |
-|                        |                    |            | (bool), changes (shape      |
-|                        |                    |            | varies by action). CREATE/  |
-|                        |                    |            | UPDATE come from /replace   |
-|                        |                    |            | on dense months; PIN/UNPIN  |
-|                        |                    |            | from /pin OR from           |
-|                        |                    |            | deactivation dropping       |
-|                        |                    |            | future pins; CATEGORY_HARD_ |
-|                        |                    |            | DELETE from DELETE          |
-|                        |                    |            | /api/categories/{id} with   |
+|                        |                    |            | entry), action (CREATE,     |
+|                        |                    |            | UPDATE, CLEAR, PIN, UNPIN,  |
+|                        |                    |            | CATEGORY_HARD_DELETE, and   |
+|                        |                    |            | the income actions),        |
+|                        |                    |            | explanation, user ({sub,    |
+|                        |                    |            | email, username}; see       |
+|                        |                    |            | **Audit user identity**),   |
+|                        |                    |            | override (bool), changes    |
+|                        |                    |            | (shape varies by action).   |
+|                        |                    |            | CREATE and UPDATE change a  |
+|                        |                    |            | carried amount, CLEAR       |
+|                        |                    |            | removes the own carried     |
+|                        |                    |            | amount of a future month,   |
+|                        |                    |            | and PIN and UNPIN set and   |
+|                        |                    |            | remove a pinned amount.     |
+|                        |                    |            | CATEGORY_HARD_DELETE comes  |
+|                        |                    |            | from DELETE                 |
+|                        |                    |            | /api/categories/{id}, with  |
 |                        |                    |            | effectiveYearMonth null.    |
 +------------------------+--------------------+------------+-----------------------------+
 ```
@@ -341,19 +345,21 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/categories/{id}/deactivate          | Soft-delete. Returns {category,    |
 |        |                                          | affectedMonths} where              |
-|        |                                          | affectedMonths lists future months |
-|        |                                          | with an explicit pin for this      |
-|        |                                          | category. Body {confirm: bool}.    |
-|        |                                          | If confirm=true, the deactivation  |
-|        |                                          | batch-deletes those future pins    |
-|        |                                          | and writes one UNPIN audit entry   |
-|        |                                          | per dropped pin. If confirm is     |
-|        |                                          | absent or false and                |
-|        |                                          | affectedMonths is non-empty,       |
-|        |                                          | returns 409 so the UI can prompt.  |
+|        |                                          | affectedMonths lists the future    |
+|        |                                          | months with their own values for   |
+|        |                                          | this category. Body {confirm:      |
+|        |                                          | bool}. If confirm=true, the        |
+|        |                                          | deactivation deletes those future  |
+|        |                                          | rows, and writes one CLEAR audit   |
+|        |                                          | entry for each carried amount and  |
+|        |                                          | one UNPIN entry for each pinned    |
+|        |                                          | amount. If confirm is absent or    |
+|        |                                          | false and affectedMonths is non-   |
+|        |                                          | empty, it returns 409 so the UI    |
+|        |                                          | can prompt.                        |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/categories/{id}/reactivate          | Reactivate a deactivated category. |
-|        |                                          | Future pins dropped at             |
+|        |                                          | The future values dropped at       |
 |        |                                          | deactivation are NOT restored.     |
 +--------+------------------------------------------+------------------------------------+
 | DELETE | /api/categories/{id}                     | Hard delete. Admin-only            |
@@ -367,7 +373,7 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | Writes a CATEGORY_HARD_DELETE      |
 |        |                                          | audit entry. Body requires         |
 |        |                                          | confirm=true, confirmName matching |
-|        |                                          | the current category name, and    |
+|        |                                          | the current category name, and     |
 |        |                                          | explanation. Hidden from the       |
 |        |                                          | normal categories page. See        |
 |        |                                          | **Hard delete semantics**.         |
@@ -377,10 +383,10 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | returns the stored rows directly.  |
 |        |                                          | For future months, returns         |
 |        |                                          | resolved effective values per      |
-|        |                                          | category with a `pinned: bool`     |
-|        |                                          | flag indicating whether the value  |
-|        |                                          | came from an explicit pin at this  |
-|        |                                          | month or from walking back. Lazy   |
+|        |                                          | category with an `inherited: bool` |
+|        |                                          | flag: true when the carried amount |
+|        |                                          | comes from the walk back, false    |
+|        |                                          | when the month holds its own. Lazy |
 |        |                                          | hydration runs here if the current |
 |        |                                          | month is not yet dense — see       |
 |        |                                          | **Carry-Forward**.                 |
@@ -394,19 +400,20 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | per-category audit entries for     |
 |        |                                          | every diff.                        |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/budget/{YYYY-MM}/pin                | Future-month write. Body lists     |
-|        |                                          | only the categories the user is    |
-|        |                                          | pinning or unpinning. Upsert       |
-|        |                                          | semantics; categories omitted      |
-|        |                                          | from the body are untouched.       |
-|        |                                          | `carriedAmount: null` clears a     |
-|        |                                          | pin.                               |
-|        |                                          | Returns downstreamPins and         |
-|        |                                          | pinMatchesCarriedValue warnings    |
-|        |                                          | per category — see **Pin write    |
-|        |                                          | semantics**. Writes per-category  |
-|        |                                          | audit entries with action=PIN or   |
-|        |                                          | action=UNPIN.                      |
+| POST   | /api/budget/{YYYY-MM}/update             | Future-month write. Body lists     |
+|        |                                          | only the categories the user       |
+|        |                                          | changes. Upsert semantics;         |
+|        |                                          | categories omitted from the body   |
+|        |                                          | are untouched. `carriedAmount:     |
+|        |                                          | null` removes the month's own      |
+|        |                                          | carried amount. Returns            |
+|        |                                          | laterCarriedChanges and            |
+|        |                                          | matchesInheritedValue warnings per |
+|        |                                          | category — see **Update write      |
+|        |                                          | semantics**. Writes per-category   |
+|        |                                          | audit entries: UPDATE or CLEAR for |
+|        |                                          | a carried amount, PIN or UNPIN for |
+|        |                                          | a pinned amount.                   |
 +--------+------------------------------------------+------------------------------------+
 | GET    | /api/transactions?month=YYYY-MM          | List transactions for a month.     |
 +--------+------------------------------------------+------------------------------------+
@@ -458,13 +465,13 @@ Assign** for the bodies and the responses.
 | POST   | /api/income-sources/reorder                | Write the full order.                  |
 | PUT    | /api/income-sources/{id}                   | Change the label or the owners. No     |
 |        |                                            | editability check. No audit entry.     |
-| POST   | /api/income-sources/{id}/deactivate        | Stop each of its recurring incomes     |
-|        |                                            | from the next month on.                |
+| POST   | /api/income-sources/{id}/deactivate        | End each of its recurring incomes in   |
+|        |                                            | the current month.                     |
 | POST   | /api/income-sources/{id}/reactivate        | The same as a category.                |
 | GET    | /api/income/{YYYY-MM}                      | The income plan of one month.          |
 | POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the recurring     |
 |        |                                            | incomes.                               |
-| POST   | /api/income/{YYYY-MM}/pin                  | Future-month write of the recurring    |
+| POST   | /api/income/{YYYY-MM}/update               | Future-month write of the recurring    |
 |        |                                            | incomes.                               |
 | POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time income (no           |
 |        |                                            | `plannedIncomeId`), change it (an id), |
@@ -486,10 +493,11 @@ Every response carries strict security headers: `HSTS`, `X-Content-Type-Options`
 `X-Frame-Options`, and `Cache-Control: no-store`.
 
 These endpoints have an **editability gate**: `POST /api/budget/{YYYY-MM}/replace`,
-`POST /api/budget/{YYYY-MM}/pin`, `POST /api/transactions`, `POST /api/transactions/update`,
+`POST /api/budget/{YYYY-MM}/update`, `POST /api/transactions`, `POST /api/transactions/update`,
 `POST /api/transactions/delete`, `POST /api/transactions/commit`, and the income plan writes
-(`/api/income/{YYYY-MM}/replace`, `/pin`, and `/one-time`). The income `/pin` copies the budget
-`/pin`: the override does not unlock a month that is not in the future. Each one accepts an optional
+(`/api/income/{YYYY-MM}/replace`, `/update`, and `/one-time`). The income `/update` copies the
+budget `/update`: the override does not unlock a month that is not in the future. In the income
+`/update`, the override only lifts the rules of the end month. Each one accepts an optional
 `override: true` flag in the body. The handler obeys that flag only if the JWT shows that the user
 is in the admin group — see **Editability and the Admin Override**. If it does not, the handler
 returns `403`. The flag does nothing on a `GET` endpoint, because any signed-in user may read
@@ -498,9 +506,9 @@ without limit. The other endpoints that change data — `POST /api/categories`, 
 and they do not accept `override`. `DELETE /api/categories/{id}` is admin-only through a different
 route, with no `override` flag. See **Hard delete semantics**.
 
-A write to a budget target makes an audit log entry. This applies to `/replace`, to `/pin`, and to
-`/deactivate`. `/deactivate` makes an entry only when it drops a future pin, and it then writes one
-`UNPIN` entry for each pin it drops. `DELETE /api/categories/{id}` also writes one
+A write to a budget target makes an audit log entry. This applies to `/replace`, to `/update`, and
+to `/deactivate`. `/deactivate` makes an entry only when it drops a future value, and it then writes
+one `CLEAR` or `UNPIN` entry for each amount it drops. `DELETE /api/categories/{id}` also writes one
 `CATEGORY_HARD_DELETE` entry. The app does not audit a change to a transaction, whether an insert,
 an update, a delete, or a commit. It also does not audit `POST /api/categories`, the
 `PUT /api/categories/{id}` rename, or `/reactivate`. See **Audit Scope** below.
@@ -536,8 +544,8 @@ BUDGET_TZ = "America/New_York"
 For a change check, `GRACE` and `EDITABLE` mean the same thing. The two names exist so that the
 frontend can show a banner that says "grace ends in X days".
 
-`EDITABLE` covers the current year-month and the next 12. The `/pin` endpoint adds a stricter rule
-on top: the month must be `EDITABLE` **and** later than `current_ym`. So `/pin` rejects the current
+`EDITABLE` covers the current year-month and the next 12. The `/update` endpoint adds a stricter rule
+on top: the month must be `EDITABLE` **and** later than `current_ym`. So `/update` rejects the current
 month and the grace month, although both are editable, and the user goes to `/replace` instead.
 
 The month changes at **midnight ET on day 1** of the new month, whatever the daylight saving
@@ -548,13 +556,13 @@ offset. The grace period ends at **midnight ET on day 8** of the new month.
 | Endpoint | Editability check |
 |----------|------------------|
 | `POST /api/budget/{YYYY-MM}/replace` | `{YYYY-MM}` must be the current month, GRACE, or — via override — LOCKED |
-| `POST /api/budget/{YYYY-MM}/pin` | `{YYYY-MM}` must be strictly in the future — i.e., EDITABLE and `yearMonth > current_ym` (one of the next 12 months). Pinning the current month, the grace month, or any locked month is rejected with `409`; those months are dense and `/replace` is the right endpoint. Override does not unlock `/pin` for non-future months — it has no use here |
+| `POST /api/budget/{YYYY-MM}/update` | `{YYYY-MM}` must be strictly in the future — i.e., EDITABLE and `yearMonth > current_ym` (one of the next 12 months). A write to the current month, the grace month, or any locked month is rejected with `409`; those months are dense and `/replace` is the right endpoint. Override does not unlock `/update` for non-future months — it has no use here |
 | `POST /api/transactions` | `transactionDate`'s year-month must be EDITABLE or GRACE |
 | `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. An update cannot change `transactionDate` |
 | `POST /api/transactions/delete` | Each item's `yearMonth` must be EDITABLE or GRACE |
 | `POST /api/transactions/commit` | Every row's `transactionDate` year-month must be EDITABLE or GRACE; see **CSV commit semantics** |
 | `POST /api/income/{YYYY-MM}/replace` | The same as the budget `/replace` |
-| `POST /api/income/{YYYY-MM}/pin` | The same as the budget `/pin` |
+| `POST /api/income/{YYYY-MM}/update` | The same as the budget `/update` |
 | `POST /api/income/{YYYY-MM}/one-time` | `{YYYY-MM}` must be EDITABLE (a future month too) or GRACE, or LOCKED via override |
 
 On a failure the response is `409 Conflict`. The body lists every year-month and every row at
@@ -576,7 +584,7 @@ Lambda event. The handler then does these steps:
 2. If `override` is true, it looks for `budget-admin-{STAGE}` in `cognito:groups`. If that group is
    absent, it returns `403`.
 3. If the group is present, it skips the editability check, for this one request only.
-4. For a write to a budget target, through `/replace` or `/pin`, it sets `override: true` on every
+4. For a write to a budget target, through `/replace` or `/update`, it sets `override: true` on every
    audit entry that the request makes.
 
 The hard delete, `DELETE /api/categories/{id}`, uses the same group claim. It does not use the
@@ -589,17 +597,19 @@ admin, the toggle in the frontend, what each action does, and the admin tools pa
 
 Recorded in `BudgetAuditLog-{stage}`:
 
-- `POST /api/budget/{YYYY-MM}/replace` → one `CREATE` or `UPDATE` entry for each category.
-  `/replace` cannot remove a row by any correct use, because the body must hold every row that
-  exists. It therefore never makes a `DELETE` entry. Three other paths delete a budget row, and
-  each writes a different entry: `/pin` with `carriedAmount: null` writes one `UNPIN` entry for each pin
-  it clears; a deactivation that drops a future pin writes one `UNPIN` entry for each drop; and a
-  hard delete removes every row for the category and writes one `CATEGORY_HARD_DELETE` entry.
-- `POST /api/budget/{YYYY-MM}/pin` → one `PIN` or `UNPIN` entry for each category.
+- `POST /api/budget/{YYYY-MM}/replace` → one `CREATE` or `UPDATE` entry for each changed carried
+  amount, and one `PIN` or `UNPIN` entry for each changed pinned amount. `/replace` cannot remove a
+  row by any correct use, because the body must hold every row that exists. It therefore never
+  makes a `DELETE` entry. Three other paths delete a budget row, and each writes a different entry:
+  `/update` with `carriedAmount: null` writes one `CLEAR` entry; a deactivation that drops a future
+  row writes one `CLEAR` or `UNPIN` entry for each amount it drops; and a hard delete removes every
+  row for the category and writes one `CATEGORY_HARD_DELETE` entry.
+- `POST /api/budget/{YYYY-MM}/update` → one `UPDATE` or `CLEAR` entry for each changed carried
+  amount, and one `PIN` or `UNPIN` entry for each changed pinned amount.
 - `POST /api/categories/{id}/deactivate`, when `confirm` is `true` and `affectedMonths` holds at
-  least one month → one `UNPIN` entry for each pin it drops. The budget-target audit log therefore
-  stays complete, even when the app drops a pin as a side effect. The deactivation itself makes no
-  entry.
+  least one month → one `CLEAR` or `UNPIN` entry for each amount it drops. The budget-target audit
+  log therefore stays complete, even when the app drops a value as a side effect. The deactivation
+  itself makes no entry.
 - `DELETE /api/categories/{id}` → one `CATEGORY_HARD_DELETE` entry. This breaks the rule that the
   app does not audit the life cycle of a category. It breaks it because no one can undo a hard
   delete, and the delete destroys historical data. The entry is then the only trace left of the
@@ -611,15 +621,13 @@ The shape of the `changes` field on a `BudgetAuditLog-{stage}` row depends on th
 
 - `CREATE` — `/replace` wrote a new Budget row.
   `{carriedAmount: {before: null, after: number}}`.
-- `UPDATE` — `/replace` changed the carried amount on a Budget row that existed.
-  `{carriedAmount: {before: number, after: number}}`.
-- `PIN` — `/pin` wrote a future pin. The pin is new, or it takes the place of one that existed.
-  `{carriedAmount: {before: number | null, after: number}}`. `before` is `null` if no pin was there
-  for this `(yearMonth, categoryId)`.
-- `UNPIN` — a future pin is gone. Either `/pin` with `carriedAmount: null` cleared it, or a
-  deactivation dropped it. `{carriedAmount: {before: number, after: null}}`.
-- A change of the pinned amount names `pinnedAmount` in place of `carriedAmount`, with the same
-  actions.
+- `UPDATE` — `/replace` changed a carried amount, or `/update` set the own carried amount of a future
+  month. `{carriedAmount: {before: number | null, after: number}}`. `before` is `null` if the future
+  month had no own value.
+- `CLEAR` — the own carried amount of a future month is gone. Either `/update` with
+  `carriedAmount: null` removed it, or a deactivation dropped it.
+  `{carriedAmount: {before: number, after: null}}`.
+- `PIN` and `UNPIN` — a pinned amount is set or removed. `{pinnedAmount: {before, after}}`.
 - `CATEGORY_HARD_DELETE` — `{budgetRowsDeleted: number, transactionsDeleted: number, name: string}`.
   This holds counts and a snapshot, and not a before-and-after pair, because the category and its
   data are gone.
@@ -632,14 +640,13 @@ The income plan writes these actions to the same log. An income entry has no `ca
 | Action | Made by | `changes` |
 |---|---|---|
 | `RECURRING_INCOME_CREATE` | a `SET` with no `plannedIncomeId` | `{recurringIncome: {before: null, after: R}}` |
-| `RECURRING_INCOME_UPDATE` | a `SET` in `/replace` | `{recurringIncome: {before: R \| null, after: R}}` |
-| `RECURRING_INCOME_PIN` | a `SET` in `/pin` | `{recurringIncome: {before: R \| null, after: R}}` |
-| `RECURRING_INCOME_STOP` | a `STOP`; the deactivation of a source | `{recurringIncome: {before: R \| null, after: null}}` |
-| `RECURRING_INCOME_UNPIN` | an `UNPIN` in `/pin`; a deactivation that drops a pin | `{recurringIncome: {before: R \| null, after: null}}` |
+| `RECURRING_INCOME_UPDATE` | a `SET` with a `plannedIncomeId`; the deactivation of a source, which sets `endMonth` | `{recurringIncome: {before: R \| null, after: R}}` |
+| `RECURRING_INCOME_CLEAR` | a `CLEAR` in `/update`; a deactivation that drops a future value | `{recurringIncome: {before: R, after: null}}` |
+| `RECURRING_INCOME_PIN` / `_UNPIN` | a `SET_PIN` or a `CLEAR_PIN`; a deactivation that drops a future pinned value | `{pinnedRecurringIncome: {before: R \| null, after: R \| null}}` |
 | `ONE_TIME_INCOME_CREATE` / `_UPDATE` / `_DELETE` | the `/one-time` route | `{oneTimeIncome: {before: O \| null, after: O \| null}}` |
 
-`R` is a recurring income, `{incomeSourceId, label, frequency, gross, deductions}`, and `null` is a
-stop or no value. `O` is a one-time income, `{label, incomeSourceId?, gross, deductions}`. The
+`R` is a recurring income, `{incomeSourceId, label, frequency, gross, deductions, endMonth?}`, and
+`null` is no value. `O` is a one-time income, `{label, incomeSourceId?, gross, deductions}`. The
 entry holds the whole value, because a one-time income can be deleted later. The create, the
 rename, the reorder, and the reactivation of an income source make no entry, the same as for a
 category.
@@ -685,7 +692,7 @@ The app does not record these:
 - The creation, the rename, and the reactivation of a category. A person can undo each of these, or
   work each one out from the current Category row, so an entry would add little.
 - The deactivation itself. There is no "the app deactivated this category" entry. A deactivation
-  does write one `UNPIN` entry for each pin it drops, as above. Those entries cover the changes to
+  does write one `CLEAR` or `UNPIN` entry for each amount it drops, as above. Those entries cover the changes to
   the *budget targets* that follow from it. The deactivation itself stays unrecorded.
 
 ### Historical fidelity
@@ -763,9 +770,10 @@ Each difference makes one `CREATE` or `UPDATE` entry in the audit log, for one c
 `/replace` never makes a `DELETE` entry. The body rule stops a client from removing a row by
 leaving it out.
 
-### Pin write semantics
+### Update write semantics
 
-`POST /api/budget/{YYYY-MM}/pin` writes one or more explicit pins on a future editable year-month. Body:
+`POST /api/budget/{YYYY-MM}/update` writes the own values of one or more categories in a future
+editable year-month. Body:
 
 ```
 {
@@ -777,30 +785,29 @@ leaving it out.
 This endpoint writes a row, or changes the row that is there. It does not touch a category that the
 body leaves out, or a key that a target leaves out. Each target needs at least one of the two keys.
 
-`carriedAmount: number` → the app writes a pin at that amount. `carriedAmount: null` → the app
-removes the pin. The same holds for `pinnedAmount`. A row with neither amount left is **deleted**.
-No carried amount means no pin, and the display then walks back to find a value.
+`carriedAmount: number` → the month holds that carried amount as its own. `carriedAmount: null` →
+the app removes it, and the month inherits again. `pinnedAmount` works the same way for the pinned
+amount. A row with neither amount left is **deleted**. No carried amount means that the display
+walks back to find a value.
 
 The response holds the month and the warnings:
 
 ```
 {
-  "targets": [{ "yearMonth", "categoryId", "carriedAmount", "pinned", "pinnedAmount"? }, ...],
+  "targets": [{ "yearMonth", "categoryId", "carriedAmount", "inherited", "pinnedAmount"? }, ...],
   "warnings": {
-    "downstreamPins": [{ "categoryId", "yearMonth" }, ...],
-    "pinMatchesCarriedValue": ["categoryId", ...]
+    "laterCarriedChanges": [{ "categoryId", "yearMonth" }, ...],
+    "matchesInheritedValue": ["categoryId", ...]
   }
 }
 ```
 
-- **downstreamPins** — for each category in the request, this lists the other pins for that same
-  category in months later than the month the user changed, inside the editable range. The
-  frontend shows them, so that the user can clear them in a second call. (Spec 19.)
-- **pinMatchesCarriedValue** — this appears for each category where the new pin amount equals the
-  value that the walk-back would give without the pin. The frontend then warns the user. The user
-  is pinning the value that is there already, and that stops it from moving ahead later. (Spec 20.)
-
-Each pin and each unpin makes a `PIN` or an `UNPIN` entry in the audit log.
+- **laterCarriedChanges** — for each category in the request, this lists the later months, inside
+  the editable range, that hold their own carried amount. The change stops at them. The frontend
+  shows them, so that the user can clear them in a second call. (Spec 19.)
+- **matchesInheritedValue** — this appears for each category where the new carried amount equals
+  the value that the month inherits already. The frontend then warns the user: the month now holds
+  that value as its own, so a later change in an earlier month stops there. (Spec 20.)
 
 ## Carry-Forward
 
@@ -811,8 +818,8 @@ The Budget table holds two kinds of row only: a row the user wrote, and a row th
 - **A locked month, a grace month, and the current month are always *dense*.** Each holds exactly
   one row for each category that existed when the app made the month dense, and any row the user
   wrote after that. For density, only the row itself counts.
-- **A future month is *sparse*.** It holds only the rows the user pinned, through
-  `POST /api/budget/{YYYY-MM}/pin`. A category without a pin has no row at all.
+- **A future month is *sparse*.** It holds only the rows the user wrote, through
+  `POST /api/budget/{YYYY-MM}/update`. A category with no own value there has no row at all.
 
 This split has three results, and each is worth a clear statement:
 
@@ -821,10 +828,10 @@ This split has three results, and each is worth a clear statement:
    later when it catches up. A change to an earlier locked month, through the admin override,
    cannot change what a later locked month shows.
 2. **A change to a future month touches one row.** To set `December 2026 ABC = $2000` writes one
-   row. `DEF` gets no row in December until the user pins it, or until December arrives and the app
+   row. `DEF` gets no row in December until the user sets it, or until December arrives and the app
    makes the month dense.
 3. **The app resolves a future month one category at a time.** For each category that is active
-   now: if a pin exists at `(future_ym, category)`, use it. If not, walk back one month at a time,
+   now: if a carried amount exists at `(future_ym, category)`, use it. If not, walk back one month at a time,
    with no fixed limit, until a row appears or the history ends. Then use the carried amount on the
    row it found. If it finds no row at all, the category has no target.
 
@@ -840,7 +847,7 @@ job is idempotent, so a second run does nothing.
 failed, or the user may return after a long time away. The app then densifies during the next
 request about the budget. Four requests start it: any `GET /api/budget/{yearMonth}`, whichever
 month the caller asks for; any `GET /api/summary?month={yearMonth}`; and any budget write, through
-`/replace`, `/pin`, or `POST /api/categories`. The handler always brings the table up to
+`/replace`, `/update`, or `POST /api/categories`. The handler always brings the table up to
 `current_ym` before it answers. This holds even when the caller asks for a past or a future month.
 The current month must be dense first, or the walk-back and the walk-forward give wrong results.
 When this runs during a request, the request waits for it to finish.
@@ -852,11 +859,11 @@ month that is dense already. `current_ym` is the month that holds now, in ET. It
 month `M` in that range, oldest first:
 
 1. For each category that is active now:
-   - If a row exists at `(M, categoryId)`, from a pin the user wrote earlier, leave it.
+   - If a row exists at `(M, categoryId)`, from a value the user wrote earlier, leave it.
    - If not, walk back from `M - 1` to `M_last`, and find the most recent row for that
      `categoryId`. Copy its `carriedAmount`.
    - If no earlier row exists anywhere, write a row with `carriedAmount=0`.
-2. The app adds no inactive category. It leaves in place a pin on an inactive category that exists
+2. The app adds no inactive category. It leaves in place an own value on an inactive category that exists
    already at `M`. The user may make the category active again, or may want the history.
 
 **The cold start, when no dense month exists.** `M_last` has no value when the Budget table is
@@ -888,16 +895,16 @@ both of these:
   at `(current_ym, newCategoryId, initialTarget)`, so that the new category appears at once in a
   summary of the kind Spec 1 describes. That row then takes part in a later walk-back for a future
   month. A new category with `initialTarget=$50` therefore shows `$50` in every future editable
-  month, until the user pins a different amount.
+  month, until the user sets a different amount.
 - **Deactivate** (`POST /api/categories/{id}/deactivate`) — this returns
-  `affectedMonths: [yearMonth, ...]`. It lists every **future** month with a pin for this
-  category. With `confirm: true`, the transaction deletes those future pins, and it writes one
-  `UNPIN` audit entry for each pin it drops. The budget-target audit trail therefore stays
+  `affectedMonths: [yearMonth, ...]`. It lists every **future** month with its own value for this
+  category. With `confirm: true`, the transaction deletes those future rows, and it writes one
+  `CLEAR` or `UNPIN` audit entry for each amount it drops. The budget-target audit trail therefore stays
   complete — see **Audit scope**. The app leaves the past dense rows as they are, in the current
   month, the grace month, and every locked month. The history therefore stays true, as Spec 2
   requires.
 - **Reactivate** (`POST /api/categories/{id}/reactivate`) — this changes the flag back. It does not
-  restore a future pin that the deactivation dropped. The category joins the active set again. The
+  restore a future value that the deactivation dropped. The category joins the active set again. The
   next densify step, or any write to the current month, then treats it like a new category for
   that month.
 
@@ -917,23 +924,21 @@ A Budget row and a recurring income can each hold **two values**:
   give the pinned values through `scan_pinned_values()`. When the densify step fills the
   carried value of a month, `put_stored_value()` keeps a pinned value that the row already
   has.
-- **A future month can hold a row with only a pinned value,** and no carried value. Such a
-  row is not a pin: `pinned` is false, and `downstreamPins` leaves it out.
+- **A future month can hold a row with only a pinned value,** and no carried value. The month then
+  inherits its carried value, and `laterCarriedChanges` leaves the row out.
 - **The writes of a budget target:**
   - `/replace` (a dense month): each target sends its carried value, as before. A `pinnedAmount` key
     sets the pinned value (a value) or clears it (`null`). Without the key, the stored one
     stays.
-  - `/pin` (a future month): each of the two keys is optional. A value sets it, `null` removes it,
+  - `/update` (a future month): each of the two keys is optional. A value sets it, `null` removes it,
     and a missing key does not change it. A row with neither value is deleted.
-- **The writes of a recurring income:** two more actions, in `/replace` and in `/pin`, each with a
-  `plannedIncomeId`. `SET_PIN` sets the pinned value, and
-  `CLEAR_PIN` removes it. `SET`, `STOP`, and `UNPIN` change only the carried value, and
-  keep the pinned value. An entry with neither value is deleted.
+- **The writes of a recurring income:** two more actions, in `/replace` and in `/update`, each with
+  a `plannedIncomeId`. `SET_PIN` sets the pinned value, and `CLEAR_PIN` removes it. `SET` and `CLEAR`
+  change only the carried value, and keep the pinned value. An entry with neither value is deleted.
 - **The frontend** sends "From this month on" as the carried value plus a cleared pinned
   value, and "This month only" as the pinned value alone.
-- **The audit log** uses the same actions (CREATE, UPDATE, PIN, UNPIN, and the RECURRING_INCOME_
-  forms). The `changes` payload names `pinnedAmount` or `pinnedRecurringIncome` for a pinned change.
-- **The responses:** a future budget target has `carriedAmount`, `pinned`, and `pinnedAmount` when
+- **The audit log** writes `PIN` and `UNPIN` (and the `RECURRING_INCOME_` forms) for a pinned change. The `changes` payload names `pinnedAmount` or `pinnedRecurringIncome` for a pinned change.
+- **The responses:** a future budget target has `carriedAmount`, `inherited`, and `pinnedAmount` when
   present. A recurring income entry has the fields that the month shows, plus
   `carriedRecurringIncome` and `hasPinnedRecurringIncome`.
 
@@ -942,16 +947,16 @@ A Budget row and a recurring income can each hold **two values**:
 - **A new category, with no history.** The densify step finds no row to walk back to, so it writes
   `carriedAmount=0`. The category then appears in the current month with a `$0` target. No amount
   is ever `null`.
-- **A pin equal to the value that carries forward.** The app permits this, and it warns the user.
-  See **Pin write semantics** and `pinMatchesCarriedValue`. The server writes the pin as asked.
-- **A pin stays through the month change.** When a pinned future month becomes the current month,
-  the densify step finds the pin already in place, and leaves it. The pin is then a normal dense
-  row.
-- **A pin on a category that the user deactivates before the future month arrives.** The
-  deactivation deletes the pin, as above. The pin can survive if the user got past the confirm
+- **An own value equal to the inherited value.** The app permits this, and it warns the user. See
+  **Update write semantics** and `matchesInheritedValue`. The server writes the value as asked.
+- **An own value stays through the month change.** When a future month with its own value becomes
+  the current month, the densify step finds the row already in place, and leaves it. It is then a
+  normal dense row.
+- **An own value on a category that the user deactivates before the future month arrives.** The
+  deactivation deletes it, as above. The row can survive if the user got past the confirm
   step, for example by a direct call to the API. The densify step then ignores it when that month
   arrives, because the app does not densify an inactive category. While the month stays editable,
-  no summary shows the lost pin. The Spec 5 rule for an editable month shows only the active
+  no summary shows the lost row. The Spec 5 rule for an editable month shows only the active
   categories, and the categories with transactions. When that month locks, the Spec 5 rule for a
   locked month applies, and the lost budget row appears in the summary with `$0` of actuals. To
   remove it for ever, make the category active again and deactivate it in the normal way, or hard
@@ -968,9 +973,9 @@ active keys:
 - `BudgetDensifyAdapter(budget_table)`: the key is a `categoryId`, and the value is the carried amount.
   The cold-start value is `0`.
 - `RecurringIncomeDensifyAdapter(planned_income_table)`: the key is a `plannedIncomeId`, and the
-  value is the recurring income, or `None` for a stop. It reads only the `REC#` items, so a one-time
-  income never carries forward. The keys are every recurring income in the table. The store writes
-  nothing for `None`, so a stop stays in effect for the walk back.
+  value is the carried recurring income. It reads only the `REC#` items, so a one-time income never
+  carries forward. The keys are every recurring income in the table. The store writes nothing for a
+  month after the `endMonth` of the value.
 
 `_ensure_hydrated()` and the scheduled Lambda densify both tables. `compute_summary()` and
 `compute_income_plan()` use the shared walk-back functions (`walk_back_for()`,
@@ -992,7 +997,7 @@ kinds, and both have a label, a gross amount, and deductions:
 - A **recurring income** (`REC#{ULID}`) repeats each month, such as a salary or the rent of one
   property. It has an income source, and one source can have many recurring incomes. It has the
   same id in each month, and obeys the month rules of a Budget row: dense past and current months,
-  sparse future pins, carry-forward, the grace period, the lock, the admin override, and an audit
+  sparse future values, carry-forward, the grace period, the lock, the admin override, and an audit
   entry with an explanation for each change. A rename starts in the month where it is made, the same
   as a change of amount.
 - A **one-time income** (`ONE#{ULID}`) is money in one month only, such as a bonus, an RSU vest, a
@@ -1017,10 +1022,16 @@ times in some months, and an income that pays every two weeks pays 3 times in tw
 year. Put an extra paycheck in the plan as a one-time income. The frequency is part of the value
 that carries forward, so a change of frequency starts in the month where it is made.
 
-**A stop.** To stop a recurring income, store a stop (`stopped: true`) in the month where it ends.
-The stop carries forward, the same as a value. The month view shows the stop only in its own month,
-with the value from before it, so that the user can undo it. To undo a stop, write that value again
-with `SET`. A later `SET` starts the same recurring income again.
+**The end month.** A recurring income can hold `endMonth` (YYYY-MM), the last month that counts it.
+A later month does not show it or count it, and the densify step does not copy it there. The end
+month is part of the value, so it carries forward like the other fields. Without the admin override:
+
+- An `endMonth` before the current month cannot be set.
+- An end is locked once its month has passed, so the value of an ended income cannot change.
+- A restart is a new recurring income, with a new id.
+
+The admin override permits anything, also a past `endMonth`. The admin accepts the risk to these
+rules.
 
 **Why a separate table, and not more rows in `Budget-{stage}`?** The SK of the Budget table is a
 `categoryId`. The `/replace` body rule, the summary, the hard delete, and the densify step all read
@@ -1040,12 +1051,10 @@ each row of a month as a category row. A separate table keeps each of them as it
       "sourceLabel", "owners", "sourceSortOrder",
       "net",                     // one payment
       "monthlyNet",              // net × the times per month of the frequency
-      "stopped": false,
       "carriedRecurringIncome",  // the value that carries forward, or null
       "hasPinnedRecurringIncome",        // true if the month shows a pinned value
-      "pinned"                   // future months only
+      "inherited"                // future months only: the carried value comes from the walk back
     },
-    { "plannedIncomeId", "stopped": true, "before": R | null, ... },  // a stop, in its own month only
     ...
   ],
   "oneTime": [{ "plannedIncomeId", "label", "incomeSourceId"?, "gross", "deductions", "net" }, ...],
@@ -1053,31 +1062,32 @@ each row of a month as a category row. A separate table keeps each of them as it
 }
 ```
 
-`plannedNetIncome = sum(monthlyNet of each recurring income that is not stopped) + sum(net of each
+`plannedNetIncome = sum(monthlyNet of each recurring income that counts in the month) + sum(net of each
 one-time income)`. A current or past month shows each recurring income that it holds. A future month
-shows each recurring income with a pin there, or a value from the walk back. A locked month uses its
+shows each recurring income with its own value there, or a value from the walk back. A locked month uses its
 own dense rows only, so its value never changes after the lock.
 
 ### Writes
 
-`/replace` and `/pin` copy the budget endpoints. The body key is `recurring`, a list of
+`/replace` and `/update` copy the budget endpoints. The body key is `recurring`, a list of
 `{action, plannedIncomeId?, recurringIncome?}`, in place of `targets`. Each body has an
 `explanation`, and `/replace` takes an optional `override`.
 
 - `SET` writes `recurringIncome`. With no `plannedIncomeId`, it creates a new recurring income from
   this month on.
-- `STOP` stops a recurring income from this month on.
-- `UNPIN` removes the pin or the stop of a future month. It is for `/pin` only.
+- `CLEAR` removes the own carried value of a future month, so that it inherits again. It is for
+  `/update` only.
+- The rules of the end month apply to each change. `/update` takes an optional `override` for them.
 - `SET_PIN` and `CLEAR_PIN` set or remove the value that only this month
   uses. See **Pinned values**.
 - Each `plannedIncomeId` and each income source must exist.
 - `/replace` needs every recurring income with a value in that month. The response is the month.
-- `/pin` returns `{incomePlan: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`,
-  the same two warnings as the budget `/pin`.
+- `/update` returns `{incomePlan: <the month>, warnings: {laterCarriedChanges, matchesInheritedValue}}`,
+  the same two warnings as the budget `/update`.
 - The `/one-time` route needs an `explanation`. A `plannedIncomeId` must start with `ONE#`.
-- The deactivation of a source stops each of its recurring incomes in the next month, so the
-  current month keeps its plan. It drops their pins after the next month after a confirmation, the
-  same as for a category. There is no hard delete for an income source.
+- The deactivation of a source sets `endMonth` to the current month on each of its recurring incomes,
+  so the current month keeps its plan. It drops their own values after the current month after a
+  confirmation, the same as for a category. There is no hard delete for an income source.
 
 ### Left to assign
 
@@ -1209,7 +1219,7 @@ A hard delete breaks Spec 2 for that category, and it does so on purpose:
   those months fall by the amounts of the deleted transactions. This is the design. The admin has
   said that the category should never have existed.
 - **An audit log entry** that names the deleted `categoryId` stays. This includes a past `CREATE`,
-  `UPDATE`, or `PIN` entry for that category. The app can no longer find the name, so the UI shows
+  `UPDATE`, `CLEAR`, `PIN`, or `UNPIN` entry for that category. The app can no longer find the name, so the UI shows
   `<deleted category {id}>`. A hover shows the original `Category.name`, which the app reads from
   the `changes.name` field of the `CATEGORY_HARD_DELETE` entry.
 - **A transaction in a locked month** is deleted. This is the hardest part of the cascade. It is
@@ -1285,7 +1295,7 @@ whether the app asks for an explanation.
 | Action | Off (locked context) | On (admin mode) | Explanation collected |
 |--------|---------------------|-----------------|----------------------|
 | `POST /api/budget/{YYYY-MM}/replace` on a locked month | Form is read-only; no Save button. | Form is editable. Save button reads "Save with override". | Yes — same `explanation` field the form requires for every `/replace`, written to the audit log with `override=true`. |
-| `POST /api/budget/{YYYY-MM}/pin` on a locked month | Pin controls hidden. | Pin controls visible. Save button reads "Save with override". | Yes — same `explanation` field, written to the audit log with `override=true`. |
+| `POST /api/budget/{YYYY-MM}/update` on a locked month | Future-month controls hidden. | Future-month controls visible. Save button reads "Save with override". | Yes — same `explanation` field, written to the audit log with `override=true`. |
 | `POST /api/transactions` with date in locked month | "Save" disabled with tooltip explaining lock. | "Save" enabled, label reads "Save (override)". | No — transactions are not audited; no explanation field is shown. |
 | `POST /api/transactions/update` moving a row into/out of a locked month | "Save" disabled. | "Save" enabled, label reads "Save (override)". | No. |
 | `POST /api/transactions/delete` on a row in a locked month | "Delete" disabled. | "Delete" enabled, label reads "Delete (override)". | No. |
@@ -1562,18 +1572,17 @@ The CDK stack sends the build output to S3 with a `BucketDeployment`. That step 
 therefore works in every stage. The stage value is what lets the frontend build the
 `budget-admin-{stage}` group name it expects.
 
-### Pinned-row indicator
+### Own-value indicator
 
-For any year-month later than the current one, the server adds a `pinned: bool` flag to each
-summary row and each budget row. The frontend draws a pinned row differently, with a coloured dot
-or a chip that reads "pinned". The user can then see at once which targets hold, and which ones
-carry forward (Spec 17). When a pinned year-month becomes the current, grace, or locked month, the
-server stops sending the flag. The row is then a normal dense row, and the app shows nothing about
-the pin that made it.
+For any year-month later than the current one, the server adds an `inherited: bool` flag to each
+summary row and each budget row. The frontend draws a row with its own value (`inherited: false`)
+differently, with a coloured dot or a chip. The user can then see at once which targets hold, and
+which ones carry forward (Spec 17). When such a year-month becomes the current, grace, or locked
+month, the server stops sending the flag. The row is then a normal dense row.
 
-When the user saves a pin, the response holds `warnings.downstreamPins` and
-`warnings.pinMatchesCarriedValue`. The UI shows a box with these warnings, and two buttons: "Keep
-pins" and "Clear downstream pins". It reports success only after the user chooses.
+When the user saves a future value, the response holds `warnings.laterCarriedChanges` and
+`warnings.matchesInheritedValue`. The UI shows a box with these warnings, and two buttons: "Keep
+them" and "Clear the later values". It reports success only after the user chooses.
 
 ### Audit log page
 
@@ -1638,13 +1647,13 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
 - **An amount is an integer in millionths** — Full precision, and no floating-point drift.
 - **A ULID for each identifier** — It sorts by the time of creation, it hides nothing in a URL, and
   two writers need no agreement to make one.
-- **A sparse future, and a dense present and past** — A pin is the only Budget row that exists for
-  a future month. The densify step writes the dense rows at the month change, from the cron job or
+- **A sparse future, and a dense present and past** — A value that the user wrote is the only
+  Budget row that exists for a future month. The densify step writes the dense rows at the month change, from the cron job or
   from the fallback. The future therefore stays live, and it follows a change in an earlier month.
   A locked month stays a complete record on its own, and it needs no walk-back when the app shows
   it.
 - **`POST` for every change, except the hard delete** — `POST` for a budget write, through
-  `/replace` or `/pin`, and for a transaction write. The body then survives CloudFront, and every
+  `/replace` or `/update`, and for a transaction write. The body then survives CloudFront, and every
   request has one shape. The hard delete keeps the `DELETE` verb on purpose. It destroys data and
   only an admin can do it, so it deserves the verb that shows danger, although that breaks the rule
   used everywhere else.
@@ -1658,7 +1667,7 @@ The CDK tests are in `infra/test/`. Run `npm test` from `infra/`.
   a person can read.
 - **Deactivation keeps the history, and a hard delete destroys it** — These are two different
   operations, and not two forms of one. Deactivation is the normal path for "I no longer want to
-  budget this". It keeps every Budget row and every Transaction, it drops the future pins when the
+  budget this". It keeps every Budget row and every Transaction, it drops the future values when the
   user confirms, and the user can undo it. The hard delete is the admin operation for "this
   category should never have existed". It deletes every Budget row and every Transaction in all
   year-months, including the locked ones. It writes a `CATEGORY_HARD_DELETE` audit entry, and it

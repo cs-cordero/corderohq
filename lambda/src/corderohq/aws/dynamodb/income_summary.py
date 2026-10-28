@@ -6,7 +6,7 @@ from typing import Any
 from corderohq.aws.dynamodb.income_source import IncomeSourceTable
 from corderohq.aws.dynamodb.planned_income import PlannedIncomeTable, RecurringIncomeDensifyAdapter
 from corderohq.aws.dynamodb.util import BUDGET_TZ
-from corderohq.budget.densify import carry_map, value_at_or_before, walk_back_for
+from corderohq.budget.densify import carry_map, value_at_or_before
 from corderohq.budget.editability import editability
 from corderohq.budget.income import (
     ONE_TIME_INCOME_PREFIX,
@@ -25,9 +25,9 @@ def compute_income_plan(
     """Return the income plan of one month: each recurring income, each one-time income, and the planned net income.
 
     A current or past month shows each recurring income that it holds. A future month shows each recurring income
-    with a pin there or a value from the walk back. A month shows its pinned value if it has one, else its
-    carried value. A stop shows only in the month that holds it, with the value from before the stop, so that the stop
-    can be undone. A stopped recurring income does not count. Nothing here reads a transaction.
+    with its own value there, or a value from the walk back. A month shows its pinned value if it has one, else its
+    carried value. A month after the end month of a value does not show or count it. Nothing here reads a
+    transaction.
     """
 
     sources_by_id = {s["incomeSourceId"]: s for s in income_sources.get_all_income_sources()}
@@ -50,34 +50,26 @@ def compute_income_plan(
     recurring: list[dict[str, Any]] = []
     for key in keys:
         carried: RecurringIncome | None = value_at_or_before(by_key, year_month, key)
+        if carried is not None and not carried.counts_in(year_month):
+            carried = None
         pinned_value: RecurringIncome | None = pinned_by_key.get((year_month, key))
+        if pinned_value is not None and not pinned_value.counts_in(year_month):
+            pinned_value = None
         income = pinned_value if pinned_value is not None else carried
-        held_here = (year_month, key) in by_key
-        entry: dict[str, Any]
-        if income is not None:
-            entry = {
-                "plannedIncomeId": key,
-                **income.to_item(),
-                **_source_fields(sources_by_id, income.income_source_id),
-                "net": income.net,
-                "monthlyNet": income.monthly_net,
-                "stopped": False,
-                # The value that later months copy. It differs from the fields above when `hasPinnedRecurringIncome`.
-                "carriedRecurringIncome": carried.to_item() if carried is not None else None,
-                "hasPinnedRecurringIncome": pinned_value is not None,
-            }
-        elif held_here:
-            before: RecurringIncome | None = walk_back_for(by_key, year_month, key)
-            entry = {
-                "plannedIncomeId": key,
-                "stopped": True,
-                "before": before.to_item() if before is not None else None,
-                **(_source_fields(sources_by_id, before.income_source_id) if before is not None else {}),
-            }
-        else:
+        if income is None:
             continue
+        entry: dict[str, Any] = {
+            "plannedIncomeId": key,
+            **income.to_item(),
+            **_source_fields(sources_by_id, income.income_source_id),
+            "net": income.net,
+            "monthlyNet": income.monthly_net,
+            # The value that later months copy. It differs from the fields above when `hasPinnedRecurringIncome`.
+            "carriedRecurringIncome": carried.to_item() if carried is not None else None,
+            "hasPinnedRecurringIncome": pinned_value is not None,
+        }
         if is_future:
-            entry["pinned"] = held_here
+            entry["inherited"] = (year_month, key) not in by_key
         recurring.append(entry)
     recurring.sort(
         key=lambda entry: (entry.get("sourceSortOrder", 0), entry.get("sourceLabel", ""), entry["plannedIncomeId"])
@@ -101,9 +93,7 @@ def compute_income_plan(
             }
         )
 
-    planned = sum(entry["monthlyNet"] for entry in recurring if not entry["stopped"]) + sum(
-        entry["net"] for entry in one_time
-    )
+    planned = sum(entry["monthlyNet"] for entry in recurring) + sum(entry["net"] for entry in one_time)
     return {
         "yearMonth": year_month,
         "state": editability(year_month, now),
