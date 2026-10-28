@@ -2421,15 +2421,13 @@ class TestTransactionBudgetTreatments:
         assert result["statusCode"] == 200
 
 
-class TestThisMonthOnlyBudgetTargets:
-    """A target can change for one month only. It never carries forward."""
+class TestPinnedBudgetAmounts:
+    """A pinned amount changes one month only. It never carries forward."""
 
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_pin_sets_a_this_month_only_target(
-        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock
-    ) -> None:
+    def test_pin_sets_a_pinned_amount(self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock) -> None:
         mock_bt.scan.return_value = [{"yearMonth": "2026-06", "categoryId": "cat1", "carriedAmount": 500}]
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
         body = {"targets": [{"categoryId": "cat1", "pinnedAmount": 800}], "explanation": "December gifts"}
@@ -2447,7 +2445,7 @@ class TestThisMonthOnlyBudgetTargets:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_pin_removes_only_the_this_month_only_target(
+    def test_pin_removes_only_the_pinned_amount(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock
     ) -> None:
         mock_bt.scan.return_value = [
@@ -2466,7 +2464,7 @@ class TestThisMonthOnlyBudgetTargets:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_a_later_this_month_only_target_is_not_a_downstream_pin(
+    def test_a_later_pinned_amount_is_not_a_downstream_pin(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock
     ) -> None:
         mock_bt.scan.return_value = [
@@ -2483,7 +2481,7 @@ class TestThisMonthOnlyBudgetTargets:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_replace_sets_and_keeps_this_month_only_targets(
+    def test_replace_sets_and_keeps_pinned_amounts(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
     ) -> None:
         mock_bt.get_budget_targets.return_value = [

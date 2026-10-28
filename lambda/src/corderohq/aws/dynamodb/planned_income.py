@@ -27,7 +27,7 @@ def new_recurring_income_id() -> str:
 def has_carried_value(item: dict[str, Any]) -> bool:
     """Return True if a stored recurring income holds a carried value or a stop.
 
-    A future month can hold an item with only a this-month-only value (`onlyThisMonth`), and no carried value.
+    A future month can hold an item with only a pinned value (`pinnedRecurringIncome`), and no carried value.
     """
 
     return item.get("stopped") is True or "gross" in item
@@ -41,12 +41,12 @@ def get_recurring_income(item: dict[str, Any]) -> RecurringIncome | None:
     return parse_recurring_income(item)
 
 
-def get_only_this_month(item: dict[str, Any]) -> RecurringIncome | None:
-    """Return the this-month-only value of a stored recurring income, or None if it has none."""
+def get_pinned_recurring_income(item: dict[str, Any]) -> RecurringIncome | None:
+    """Return the pinned value of a stored recurring income, or None if it has none."""
 
-    if "onlyThisMonth" not in item:
+    if "pinnedRecurringIncome" not in item:
         return None
-    return parse_recurring_income(item["onlyThisMonth"])
+    return parse_recurring_income(item["pinnedRecurringIncome"])
 
 
 class PlannedIncomeTable:
@@ -88,9 +88,9 @@ class PlannedIncomeTable:
         year_month: str,
         planned_income_id: str,
         income: RecurringIncome | None,
-        only_this_month: RecurringIncome | None = None,
+        pinned: RecurringIncome | None = None,
     ) -> dict[str, Any]:
-        """Write the carried value of a recurring income in one month, and its this-month-only value if it has one.
+        """Write the carried value of a recurring income in one month, and its pinned value if it has one.
 
         An income of None writes a stop. It replaces the item.
         """
@@ -104,20 +104,20 @@ class PlannedIncomeTable:
             item["stopped"] = True
         else:
             item.update(income.to_item())
-        if only_this_month is not None:
-            item["onlyThisMonth"] = only_this_month.to_item()
+        if pinned is not None:
+            item["pinnedRecurringIncome"] = pinned.to_item()
         self._table.put_item(Item=item)
         return item
 
-    def put_only_this_month(self, year_month: str, planned_income_id: str, only_this_month: RecurringIncome) -> None:
-        """Write a recurring income in one month with only a this-month-only value, and no carried value."""
+    def put_pinned_recurring_income(self, year_month: str, planned_income_id: str, pinned: RecurringIncome) -> None:
+        """Write a recurring income in one month with only a pinned value, and no carried value."""
 
         self._table.put_item(
             Item={
                 "yearMonth": year_month,
                 "plannedIncomeId": planned_income_id,
                 "kind": PlannedIncomeKind.RECURRING,
-                "onlyThisMonth": only_this_month.to_item(),
+                "pinnedRecurringIncome": pinned.to_item(),
             }
         )
 
@@ -169,9 +169,9 @@ class PlannedIncomeTable:
 class RecurringIncomeDensifyAdapter(DenseSparseStore):
     """Implements the DenseSparseStore protocol for the recurring incomes of the PlannedIncomeTable class.
 
-    The key is the `plannedIncomeId`. The carried value is the RecurringIncome, or None for a stop, and the
-    this-month-only value is `onlyThisMonth`. The one-time incomes are not part of it, so they never carry forward. A
-    None value writes nothing, because the stop that it comes from stays in effect for the walk back.
+    The key is the `plannedIncomeId`. The carried value is the RecurringIncome, or None for a stop, and the pinned
+    value is `pinnedRecurringIncome`. The one-time incomes are not part of it, so they never carry forward. A None
+    value writes nothing, because the stop that it comes from stays in effect for the walk back.
     """
 
     def __init__(self, planned_income_table: PlannedIncomeTable) -> None:
@@ -187,30 +187,30 @@ class RecurringIncomeDensifyAdapter(DenseSparseStore):
             if has_carried_value(item)
         ]
 
-    def scan_only_values(self) -> list[StoredValue]:
-        """Return each this-month-only value as `(yearMonth, plannedIncomeId, RecurringIncome)`."""
+    def scan_pinned_values(self) -> list[StoredValue]:
+        """Return each pinned value as `(yearMonth, plannedIncomeId, RecurringIncome)`."""
 
         values: list[StoredValue] = []
         for item in self._scan():
-            only = get_only_this_month(item)
-            if only is not None:
-                values.append((str(item["yearMonth"]), str(item["plannedIncomeId"]), only))
+            pinned = get_pinned_recurring_income(item)
+            if pinned is not None:
+                values.append((str(item["yearMonth"]), str(item["plannedIncomeId"]), pinned))
         return values
 
     def put_stored_value(self, year_month: str, key: str, value: Any) -> None:
-        """Write the carried value of a recurring income, and keep its this-month-only value. None writes nothing."""
+        """Write the carried value of a recurring income, and keep its pinned value. None writes nothing."""
 
         if value is None:
             return
-        only = next(
+        pinned = next(
             (
-                get_only_this_month(item)
+                get_pinned_recurring_income(item)
                 for item in self._scan()
                 if item["yearMonth"] == year_month and item["plannedIncomeId"] == key
             ),
             None,
         )
-        self._planned_income_table.put_recurring_income(year_month, key, value, only_this_month=only)
+        self._planned_income_table.put_recurring_income(year_month, key, value, pinned=pinned)
 
     def recurring_income_ids(self) -> list[str]:
         """Return the id of each recurring income in the table, also of a stopped one."""
@@ -218,7 +218,7 @@ class RecurringIncomeDensifyAdapter(DenseSparseStore):
         return sorted({key for _, key, _ in self.scan_stored_values()})
 
     def _scan(self) -> list[dict[str, Any]]:
-        # One scan serves both lists, and put_stored_value reads it to keep a this-month-only value.
+        # One scan serves both lists, and put_stored_value reads it to keep a pinned value.
         if self._items is None:
             self._items = self._planned_income_table.scan_recurring_incomes()
         return self._items

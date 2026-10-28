@@ -901,41 +901,41 @@ both of these:
   next densify step, or any write to the current month, then treats it like a new category for
   that month.
 
-### This-month-only values (Spec 58)
+### Pinned values (Spec 58)
 
 A Budget row and a recurring income can each hold **two values**:
 
 | | Budget row | Recurring income (PlannedIncome) | Later months |
 |---|---|---|---|
 | Carried value | `carriedAmount` | the recurring income itself | copy it |
-| This-month-only value | `pinnedAmount` | `onlyThisMonth` (a whole recurring income) | never see it |
+| Pinned value | `pinnedAmount` | `pinnedRecurringIncome` (a whole recurring income) | never see it |
 
-- **What a month shows:** its this-month-only value if it has one, else its carried value, else
+- **What a month shows:** its pinned value if it has one, else its carried value, else
   the carried value from the walk back (`effective_value()` in `budget/densify.py`).
 - **The densify step and the walk back read carried values only.** The densify adapters
   (`BudgetDensifyAdapter`, `RecurringIncomeDensifyAdapter`) give them through `scan_stored_values()`, and
-  give the this-month-only values through `scan_only_values()`. When the densify step fills the
-  carried value of a month, `put_stored_value()` keeps a this-month-only value that the row already
+  give the pinned values through `scan_pinned_values()`. When the densify step fills the
+  carried value of a month, `put_stored_value()` keeps a pinned value that the row already
   has.
-- **A future month can hold a row with only a this-month-only value,** and no carried value. Such a
+- **A future month can hold a row with only a pinned value,** and no carried value. Such a
   row is not a pin: `pinned` is false, and `downstreamPins` leaves it out.
 - **The writes of a budget target:**
   - `/replace` (a dense month): each target sends its carried value, as before. A `pinnedAmount` key
-    sets the this-month-only value (a value) or clears it (`null`). Without the key, the stored one
+    sets the pinned value (a value) or clears it (`null`). Without the key, the stored one
     stays.
   - `/pin` (a future month): each of the two keys is optional. A value sets it, `null` removes it,
     and a missing key does not change it. A row with neither value is deleted.
 - **The writes of a recurring income:** two more actions, in `/replace` and in `/pin`, each with a
-  `plannedIncomeId`. `SET_ONLY_THIS_MONTH` sets the this-month-only value, and
-  `CLEAR_ONLY_THIS_MONTH` removes it. `SET`, `STOP`, and `UNPIN` change only the carried value, and
-  keep the this-month-only value. An entry with neither value is deleted.
-- **The frontend** sends "From this month on" as the carried value plus a cleared this-month-only
-  value, and "This month only" as the this-month-only value alone.
+  `plannedIncomeId`. `SET_PIN` sets the pinned value, and
+  `CLEAR_PIN` removes it. `SET`, `STOP`, and `UNPIN` change only the carried value, and
+  keep the pinned value. An entry with neither value is deleted.
+- **The frontend** sends "From this month on" as the carried value plus a cleared pinned
+  value, and "This month only" as the pinned value alone.
 - **The audit log** uses the same actions (CREATE, UPDATE, PIN, UNPIN, and the RECURRING_INCOME_
-  forms). The `changes` payload names `pinnedAmount` or `onlyThisMonth` for a this-month-only change.
+  forms). The `changes` payload names `pinnedAmount` or `pinnedRecurringIncome` for a pinned change.
 - **The responses:** a future budget target has `carriedAmount`, `pinned`, and `pinnedAmount` when
   present. A recurring income entry has the fields that the month shows, plus
-  `carriedRecurringIncome` and `hasOnlyThisMonth`.
+  `carriedRecurringIncome` and `hasPinnedRecurringIncome`.
 
 ### Edge cases
 
@@ -1042,7 +1042,7 @@ each row of a month as a category row. A separate table keeps each of them as it
       "monthlyNet",              // net × the times per month of the frequency
       "stopped": false,
       "carriedRecurringIncome",  // the value that carries forward, or null
-      "hasOnlyThisMonth",        // true if the month shows a this-month-only value
+      "hasPinnedRecurringIncome",        // true if the month shows a pinned value
       "pinned"                   // future months only
     },
     { "plannedIncomeId", "stopped": true, "before": R | null, ... },  // a stop, in its own month only
@@ -1068,8 +1068,8 @@ own dense rows only, so its value never changes after the lock.
   this month on.
 - `STOP` stops a recurring income from this month on.
 - `UNPIN` removes the pin or the stop of a future month. It is for `/pin` only.
-- `SET_ONLY_THIS_MONTH` and `CLEAR_ONLY_THIS_MONTH` set or remove the value that only this month
-  uses. See **This-month-only values**.
+- `SET_PIN` and `CLEAR_PIN` set or remove the value that only this month
+  uses. See **Pinned values**.
 - Each `plannedIncomeId` and each income source must exist.
 - `/replace` needs every recurring income with a value in that month. The response is the month.
 - `/pin` returns `{incomePlan: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`,

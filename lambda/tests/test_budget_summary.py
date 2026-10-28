@@ -372,8 +372,8 @@ class TestBudgetTreatments:
         assert [c["categoryId"] for c in result["categories"]] == ["cat2"]
 
 
-class TestThisMonthOnlyTargets:
-    def test_dense_month_uses_the_this_month_only_target(self) -> None:
+class TestPinnedAmounts:
+    def test_dense_month_uses_the_pinned_amount(self) -> None:
         budget, transactions, category_table, budget_mock, txn_mock, cat_mock = _make_tables()
         budget_mock.query.return_value = {"Items": [{"categoryId": "cat1", "carriedAmount": 500, "pinnedAmount": 800}]}
         txn_mock.query.return_value = {"Items": []}

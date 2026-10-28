@@ -73,8 +73,8 @@ class RecurringIncomeAction(StrEnum):
     SET = "SET"
     STOP = "STOP"  # stop the recurring income from this month on
     UNPIN = "UNPIN"  # remove the entry of a future month, which is a pin or a stop
-    SET_ONLY_THIS_MONTH = "SET_ONLY_THIS_MONTH"  # set a value that only this month uses
-    CLEAR_ONLY_THIS_MONTH = "CLEAR_ONLY_THIS_MONTH"  # remove the value that only this month uses
+    SET_PIN = "SET_PIN"  # set a value that only this month uses
+    CLEAR_PIN = "CLEAR_PIN"  # remove the value that only this month uses
 
 
 @dataclass(frozen=True)
@@ -195,23 +195,21 @@ class UnpinRecurringIncome:
 
 
 @dataclass(frozen=True)
-class SetOnlyThisMonth:
-    """Set the this-month-only value of a recurring income. Only this month uses it, and later months never see it."""
+class SetPin:
+    """Set the pinned value of a recurring income. Only this month uses it, and later months never see it."""
 
     planned_income_id: str
     income: RecurringIncome
 
 
 @dataclass(frozen=True)
-class ClearOnlyThisMonth:
-    """Remove the this-month-only value of a recurring income."""
+class ClearPin:
+    """Remove the pinned value of a recurring income."""
 
     planned_income_id: str
 
 
-type RecurringIncomeChange = (
-    SetRecurringIncome | StopRecurringIncome | UnpinRecurringIncome | SetOnlyThisMonth | ClearOnlyThisMonth
-)
+type RecurringIncomeChange = SetRecurringIncome | StopRecurringIncome | UnpinRecurringIncome | SetPin | ClearPin
 
 
 @dataclass(frozen=True)
@@ -329,8 +327,8 @@ def parse_recurring_income_changes(payload: Mapping[str, Any]) -> list[Recurring
     """Convert `recurring`, a list of `{action, plannedIncomeId?, recurringIncome?}`, into checked changes.
 
     Raise ValueError for bad input. SET needs `recurringIncome`, and creates a new recurring income when it has no
-    `plannedIncomeId`. SET_ONLY_THIS_MONTH needs `plannedIncomeId` and `recurringIncome`. STOP, UNPIN, and
-    CLEAR_ONLY_THIS_MONTH need `plannedIncomeId`. It does not check that an id or an income source exists.
+    `plannedIncomeId`. SET_PIN needs `plannedIncomeId` and `recurringIncome`. STOP, UNPIN, and
+    CLEAR_PIN need `plannedIncomeId`. It does not check that an id or an income source exists.
     """
 
     raw_rows = payload.get("recurring")
@@ -389,16 +387,16 @@ def _parse_recurring_income_change(raw: Any) -> RecurringIncomeChange:
             if planned_income_id is None:
                 raise ValueError("UNPIN needs plannedIncomeId")
             return UnpinRecurringIncome(planned_income_id=planned_income_id)
-        case RecurringIncomeAction.SET_ONLY_THIS_MONTH:
+        case RecurringIncomeAction.SET_PIN:
             if planned_income_id is None:
-                raise ValueError("SET_ONLY_THIS_MONTH needs plannedIncomeId")
-            return SetOnlyThisMonth(
+                raise ValueError("SET_PIN needs plannedIncomeId")
+            return SetPin(
                 planned_income_id=planned_income_id, income=parse_recurring_income(raw.get("recurringIncome"))
             )
-        case RecurringIncomeAction.CLEAR_ONLY_THIS_MONTH:
+        case RecurringIncomeAction.CLEAR_PIN:
             if planned_income_id is None:
-                raise ValueError("CLEAR_ONLY_THIS_MONTH needs plannedIncomeId")
-            return ClearOnlyThisMonth(planned_income_id=planned_income_id)
+                raise ValueError("CLEAR_PIN needs plannedIncomeId")
+            return ClearPin(planned_income_id=planned_income_id)
         case _:
             assert_never(action)
 

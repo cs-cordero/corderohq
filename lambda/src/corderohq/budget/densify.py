@@ -20,7 +20,7 @@ class DenseSparseStore(Protocol):
     comes from a walk back to an earlier month. A table that must become dense implements this
     Protocol. The densify step uses it to read the stored values and to write each missing value.
 
-    A key in a month can hold a carried value, which later months copy, and a this-month-only
+    A key in a month can hold a carried value, which later months copy, and a pinned
     value, which only its own month uses.
     """
 
@@ -29,13 +29,13 @@ class DenseSparseStore(Protocol):
 
         ...
 
-    def scan_only_values(self) -> list[StoredValue]:
-        """Return each this-month-only value as `(yearMonth, key, value)`."""
+    def scan_pinned_values(self) -> list[StoredValue]:
+        """Return each pinned value as `(yearMonth, key, value)`."""
 
         ...
 
     def put_stored_value(self, year_month: str, key: str, value: Any) -> None:
-        """Store the carried value of one key in one month, and keep its this-month-only value.
+        """Store the carried value of one key in one month, and keep its pinned value.
 
         The densify step calls this to fill a missing value.
         """
@@ -47,20 +47,22 @@ class DenseSparseStore(Protocol):
 class ResolvedValue:
     """One key in a future month.
 
-    `value` is the carried value: the pin at this month, or the value from the walk back. It is
-    `None` if neither exists. `pinned` says that this month holds its own carried value. `only` is
-    the this-month-only value, if `has_only`. The month shows `only` when `has_only`, else `value`.
+    `value` is the carried value: the pin at this month, or the value from the walk back. It is `None` if neither
+    exists. `pinned` says that this month holds its own carried value. `pinned_value` is the value of this month only,
+    if `has_pinned_value`.
     """
 
     key: str
     value: Any
     pinned: bool
-    only: Any = None
-    has_only: bool = False
+    pinned_value: Any = None
+    has_pinned_value: bool = False
 
     @property
     def effective(self) -> Any:
-        return self.only if self.has_only else self.value
+        """The value that the month shows: `pinned_value` if `has_pinned_value`, else `value`."""
+
+        return self.pinned_value if self.has_pinned_value else self.value
 
 
 def prev_year_month(year_month: str) -> str:
@@ -129,26 +131,30 @@ def densify(
 
 
 def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: str) -> list[ResolvedValue]:
-    """Return each active key of a future month, with its carried and its this-month-only value.
+    """Return each active key of a future month, with its carried and its pinned value.
 
     A pin at `year_month` wins, with `pinned=True`. Else the carried value comes from the nearest
-    row before it, with `pinned=False`. The walk back reads carried values only, so a this-month-only
-    value never reaches a later month. The this-month-only value is the one at `year_month`, if it
-    exists. A key with no carried value (or None) and no this-month-only value is left out.
+    row before it, with `pinned=False`. The walk back reads carried values only, so a pinned
+    value never reaches a later month. The pinned value is the one at `year_month`, if it
+    exists. A key with no carried value (or None) and no pinned value is left out.
     `year_month` must be after the current month.
     """
 
     by_key = carry_map(store.scan_stored_values())
-    only_by_key = carry_map(store.scan_only_values())
+    pinned_by_key = carry_map(store.scan_pinned_values())
     result: list[ResolvedValue] = []
     for key in active_keys:
         pinned = (year_month, key) in by_key
         value = by_key[(year_month, key)] if pinned else walk_back_for(by_key, year_month, key)
-        has_only = (year_month, key) in only_by_key
-        if value is None and not has_only:
+        has_pinned_value = (year_month, key) in pinned_by_key
+        if value is None and not has_pinned_value:
             continue
-        only = only_by_key.get((year_month, key))
-        result.append(ResolvedValue(key=key, value=value, pinned=pinned, only=only, has_only=has_only))
+        pinned_value = pinned_by_key.get((year_month, key))
+        result.append(
+            ResolvedValue(
+                key=key, value=value, pinned=pinned, pinned_value=pinned_value, has_pinned_value=has_pinned_value
+            )
+        )
     return result
 
 
@@ -171,8 +177,8 @@ def resolve_future_targets(
             "carriedAmount": resolved.value,
             "pinned": resolved.pinned,
         }
-        if resolved.has_only:
-            target["pinnedAmount"] = resolved.only
+        if resolved.has_pinned_value:
+            target["pinnedAmount"] = resolved.pinned_value
         targets.append(target)
     return targets
 
@@ -200,12 +206,12 @@ def value_at_or_before(by_key: dict[tuple[str, str], Any], year_month: str, key:
 
 
 def effective_value(
-    by_key: dict[tuple[str, str], Any], only_by_key: dict[tuple[str, str], Any], year_month: str, key: str
+    by_key: dict[tuple[str, str], Any], pinned_by_key: dict[tuple[str, str], Any], year_month: str, key: str
 ) -> Any:
-    """Return what a month shows: its this-month-only value if it has one, else its carried value."""
+    """Return what a month shows: its pinned value if it has one, else its carried value."""
 
-    if (year_month, key) in only_by_key:
-        return only_by_key[(year_month, key)]
+    if (year_month, key) in pinned_by_key:
+        return pinned_by_key[(year_month, key)]
     return value_at_or_before(by_key, year_month, key)
 
 

@@ -81,13 +81,13 @@ def compute_summary(
     # of the nearest earlier row. An inactive category with no target is left out.
     budget_by_category: dict[str, Decimal] = {}
     if is_future:
-        # A month shows its this-month-only target if it has one, else its carried target.
+        # A month shows its pinned amount if it has one, else its carried target.
         store = BudgetDensifyAdapter(budget)
         by_key = carry_map(store.scan_stored_values())
-        only_by_key = carry_map(store.scan_only_values())
+        pinned_by_key = carry_map(store.scan_pinned_values())
         for cat in categories_all:
             cat_id = cat["categoryId"]
-            raw = effective_value(by_key, only_by_key, year_month, cat_id)
+            raw = effective_value(by_key, pinned_by_key, year_month, cat_id)
             if raw is None and not cat.get("active", False):
                 continue
             budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))

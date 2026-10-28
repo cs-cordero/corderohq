@@ -184,15 +184,17 @@ class TestResolveFutureTargets:
 class _MemoryStore:
     """A `DenseSparseStore` in memory. The densify code must not depend on the Budget table."""
 
-    def __init__(self, rows: list[tuple[str, str, object]], only: list[tuple[str, str, object]] | None = None) -> None:
+    def __init__(
+        self, rows: list[tuple[str, str, object]], pinned: list[tuple[str, str, object]] | None = None
+    ) -> None:
         self.rows = list(rows)
-        self.only = list(only or [])
+        self.pinned = list(pinned or [])
 
     def scan_stored_values(self) -> list[tuple[str, str, object]]:
         return list(self.rows)
 
-    def scan_only_values(self) -> list[tuple[str, str, object]]:
-        return list(self.only)
+    def scan_pinned_values(self) -> list[tuple[str, str, object]]:
+        return list(self.pinned)
 
     def put_stored_value(self, year_month: str, key: str, value: object) -> None:
         self.rows.append((year_month, key, value))
@@ -232,39 +234,39 @@ class TestValueAtOrBefore:
         assert value_at_or_before({}, "2026-09", "x") is None
 
 
-class TestThisMonthOnly:
-    """A this-month-only value applies to its own month, and never carries forward."""
+class TestPinnedValues:
+    """A pinned value applies to its own month, and never carries forward."""
 
-    def test_resolve_future_reports_the_only_value_and_keeps_the_carried_one(self) -> None:
-        store = _MemoryStore([("2026-06", "x", 100)], only=[("2026-09", "x", 50)])
+    def test_resolve_future_reports_the_pinned_value_and_keeps_the_carried_one(self) -> None:
+        store = _MemoryStore([("2026-06", "x", 100)], pinned=[("2026-09", "x", 50)])
         [resolved] = resolve_future(store, ["x"], "2026-09")
-        assert resolved == ResolvedValue(key="x", value=100, pinned=False, only=50, has_only=True)
+        assert resolved == ResolvedValue(key="x", value=100, pinned=False, pinned_value=50, has_pinned_value=True)
         assert resolved.effective == 50
 
     def test_the_next_month_goes_back_to_the_carried_value(self) -> None:
-        store = _MemoryStore([("2026-06", "x", 100)], only=[("2026-09", "x", 50)])
+        store = _MemoryStore([("2026-06", "x", 100)], pinned=[("2026-09", "x", 50)])
         [resolved] = resolve_future(store, ["x"], "2026-10")
-        assert (resolved.effective, resolved.has_only) == (100, False)
+        assert (resolved.effective, resolved.has_pinned_value) == (100, False)
 
-    def test_a_key_with_only_a_this_month_value_is_kept(self) -> None:
-        store = _MemoryStore([], only=[("2026-09", "x", 50)])
+    def test_a_key_with_only_a_pinned_value_is_kept(self) -> None:
+        store = _MemoryStore([], pinned=[("2026-09", "x", 50)])
         [resolved] = resolve_future(store, ["x"], "2026-09")
         assert (resolved.value, resolved.effective) == (None, 50)
 
-    def test_densify_ignores_this_month_only_values(self) -> None:
-        store = _MemoryStore([("2026-04", "x", 100)], only=[("2026-05", "x", 50)])
+    def test_densify_ignores_pinned_values(self) -> None:
+        store = _MemoryStore([("2026-04", "x", 100)], pinned=[("2026-05", "x", 50)])
         densify(store, ["x"], "2026-06", cold_start_value=None)
         assert store.rows[1:] == [("2026-05", "x", 100), ("2026-06", "x", 100)]
 
     def test_effective_value(self) -> None:
         carried = {("2026-06", "x"): 100}
-        only = {("2026-09", "x"): 50}
-        assert effective_value(carried, only, "2026-09", "x") == 50
-        assert effective_value(carried, only, "2026-10", "x") == 100
+        pinned = {("2026-09", "x"): 50}
+        assert effective_value(carried, pinned, "2026-09", "x") == 50
+        assert effective_value(carried, pinned, "2026-10", "x") == 100
 
-    def test_budget_store_keeps_the_only_target_when_densify_fills_the_month(self) -> None:
-        # 2026-06 has only a this-month-only target. Densify writes its carried target, and the
-        # row must keep the this-month-only target.
+    def test_budget_store_keeps_the_pinned_amount_when_densify_fills_the_month(self) -> None:
+        # 2026-06 has only a pinned amount. Densify writes its carried target, and the
+        # row must keep the pinned amount.
         budget, mock_b = _make_budget_table(
             [_row("2026-05", "a", 500), {"yearMonth": "2026-06", "categoryId": "a", "pinnedAmount": 80}]
         )

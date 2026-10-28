@@ -140,7 +140,7 @@ class BudgetDensifyAdapter(DenseSparseStore):
             (r["yearMonth"], r["categoryId"], _as_int(r["carriedAmount"])) for r in self._scan() if "carriedAmount" in r
         ]
 
-    def scan_only_values(self) -> list[StoredValue]:
+    def scan_pinned_values(self) -> list[StoredValue]:
         """Return each Budget row with a pinned amount, as `(yearMonth, categoryId, pinnedAmount)`."""
 
         return [
