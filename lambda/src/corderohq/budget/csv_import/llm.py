@@ -36,8 +36,6 @@ Respond with a JSON object that maps each key to the exact header name. Example:
 Respond ONLY with the JSON object, no other text."""
 
 
-# The kinds that the categorization returns for each description. The import uses the kind to
-# suggest a budget treatment.
 class TransactionKind(StrEnum):
     """The kind that the categorization gives each description. The prompt names these values."""
 
