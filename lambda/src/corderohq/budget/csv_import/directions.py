@@ -41,11 +41,19 @@ class SuggestedBy(StrEnum):
 
 
 class ReviewReason(StrEnum):
-    """A reason to look at a row first. It never blocks the commit. The upload response sends it."""
+    """Sometimes the CSV Importer has low confidence in its assessment of a row.
 
+    These are the possible reasons for why there is low confidence.
+    """
+
+    # The money left a spending account to one of the household's own accounts, but the app cannot tell which one.
     NO_PAIR_FOUND = "no_pair_found"
+    # The money left a spending account to one of the household's own accounts, and the app cannot tell which one. The
+    # LLM gave a category, so the suggestion uses it.
     LLM_GUESS = "llm_guess"
+    # More than one saved transaction could be the other half of this transfer.
     MANY_PAIRS = "many_pairs"
+    # No step found the other side of the row.
     UNKNOWN_DIRECTION = "unknown_direction"
 
 
@@ -121,13 +129,13 @@ def _account_side(
     pair_with: dict[str, str] | None = None,
     review: tuple[ReviewReason, ...] = (),
 ) -> OtherSide:
-    """Return the other side for a known account. An account with no cash flow role is outside the budget.
+    """Return the other side for a known account.
 
-    For example, a loan or a mortgage account has no role, so a payment to it is an expense.
+    Only a SPENDING or HOLDING account keeps the money in the household. An EXTERNAL or NON_CASH account counts as the
+    outside world, so a payment to a mortgage is an expense.
     """
 
     role = get_cash_flow_role(dict(account)) if account is not None else None
-    # Only a SPENDING or HOLDING account keeps money in the household. EXTERNAL and NON_CASH count as the outside.
     kind = SideKind.ACCOUNT if role in (CashFlowRole.SPENDING, CashFlowRole.HOLDING) else SideKind.OUTSIDE
     return OtherSide(kind=kind, role=role, suggested_by=suggested_by, pair_with=pair_with, review=review)
 
@@ -189,7 +197,7 @@ def find_other_side(
 
 
 def suggest(row: Mapping[str, Any], upload_role: CashFlowRole, side: OtherSide) -> Suggestion:
-    """Apply the direction table to one row. See docs/budget-income-design.md "Step 7"."""
+    """Apply the direction table to one row. See "The direction table" in docs/personal-finance-architecture.md."""
 
     category_id = str(row.get("categoryId") or "")
     money_out = int(row["amount"]) >= 0
