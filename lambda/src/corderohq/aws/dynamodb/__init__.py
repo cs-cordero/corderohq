@@ -9,6 +9,7 @@ from corderohq.aws.dynamodb.net_worth_snapshot import NetWorthSnapshotTable
 from corderohq.aws.dynamodb.planned_income import (
     PlannedIncomeTable,
     RecurringIncomeDensifyAdapter,
+    RecurringIncomeValues,
     get_recurring_income,
     new_recurring_income_id,
 )
@@ -31,6 +32,7 @@ __all__ = [
     "PlannedIncomeTable",
     "ProfileTable",
     "RecurringIncomeDensifyAdapter",
+    "RecurringIncomeValues",
     "TransactionsTable",
     "compute_income_plan",
     "compute_summary",

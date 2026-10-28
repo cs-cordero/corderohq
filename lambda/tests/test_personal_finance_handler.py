@@ -421,9 +421,10 @@ class TestDeactivateCategory:
         )
 
         assert result["statusCode"] == 200
-        # One UNPIN audit entry per dropped pin row.
+        # One CLEAR audit entry for each dropped row, which holds only a carried amount.
         assert mock_audit.write_entry.call_count == 2
-        # Pin rows are deleted from the Budget table.
+        assert {c.kwargs["action"] for c in mock_audit.write_entry.call_args_list} == {"CLEAR"}
+        # The future rows are deleted from the Budget table.
         assert mock_bt.delete_single_budget_target.call_count == 2
         # Category is then deactivated last.
         mock_ct.deactivate.assert_called_once_with("cat1")
@@ -630,7 +631,7 @@ class TestGetBudget:
     def test_future_month_returns_walkback_resolved_with_pinned_flag(
         self, mock_bt: MagicMock, mock_ct: MagicMock
     ) -> None:
-        # Current = 2026-06, asking for 2026-09 (future). No pin at 09 → walk back to 06.
+        # Current = 2026-06, asking for 2026-09 (future). No own value at 09 → walk back to 06.
         mock_bt.scan.return_value = [{"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "carriedAmount": 500}]
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
@@ -638,7 +639,7 @@ class TestGetBudget:
 
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
-        assert body == [{"yearMonth": "2026-09", "categoryId": "cat1", "carriedAmount": 500, "pinned": False}]
+        assert body == [{"yearMonth": "2026-09", "categoryId": "cat1", "carriedAmount": 500, "inherited": True}]
 
     def test_returns_400_for_invalid_month(self) -> None:
         result = handler(_make_event("GET", "/api/budget/invalid"), None)
@@ -814,7 +815,7 @@ class TestPostBudgetReplace:
         assert result["statusCode"] == 200
 
     def test_returns_409_for_future_month(self) -> None:
-        # /replace is for dense months only; future months go to /pin.
+        # /replace is for dense months only; future months go to /update.
         result = handler(
             _make_event(
                 "POST",
@@ -829,7 +830,7 @@ class TestPostBudgetReplace:
         assert result["statusCode"] == 409
         body = json.loads(result["body"])
         assert body["yearMonth"] == _FUTURE_MONTH
-        assert "use /pin" in body["error"]
+        assert "use /update" in body["error"]
 
     def test_returns_400_when_explanation_missing(self) -> None:
         result = handler(
@@ -1186,26 +1187,26 @@ class TestGetAuditLog:
         mock_audit.read_recent_entries.assert_called_once_with(10)
 
 
-class TestPostBudgetPin:
+class TestPostBudgetUpdate:
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_pins_new_future_row(
+    def test_sets_an_own_value_in_a_future_month(
         self,
         mock_bt: MagicMock,
         mock_ct: MagicMock,
         mock_audit: MagicMock,
         mock_tt: MagicMock,
     ) -> None:
-        # No existing pin; current=2026-06, pin 2026-09 cat1=500.
+        # No own value yet; current=2026-06, set 2026-09 cat1=500.
         mock_bt.scan.return_value = []
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
             _make_event(
                 "POST",
-                f"/api/budget/{_FUTURE_MONTH}/pin",
+                f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
                     "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
                     "explanation": "Holiday spending bump",
@@ -1219,14 +1220,14 @@ class TestPostBudgetPin:
         )
 
         audit_kwargs = mock_audit.write_entry.call_args.kwargs
-        assert audit_kwargs["action"] == "PIN"
+        assert audit_kwargs["action"] == "UPDATE"
         assert audit_kwargs["changes"] == {"carriedAmount": {"before": None, "after": 500}}
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_unpin_with_null_amount_emits_unpin_entry(
+    def test_null_carried_amount_writes_a_clear_entry(
         self,
         mock_bt: MagicMock,
         mock_ct: MagicMock,
@@ -1241,10 +1242,10 @@ class TestPostBudgetPin:
         handler(
             _make_event(
                 "POST",
-                f"/api/budget/{_FUTURE_MONTH}/pin",
+                f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
                     "targets": [{"categoryId": "cat1", "carriedAmount": None}],
-                    "explanation": "Remove holiday pin",
+                    "explanation": "Remove the holiday value",
                 },
             ),
             None,
@@ -1252,21 +1253,21 @@ class TestPostBudgetPin:
 
         mock_bt.delete_single_budget_target.assert_called_once_with(_FUTURE_MONTH, "cat1")
         kwargs = mock_audit.write_entry.call_args.kwargs
-        assert kwargs["action"] == "UNPIN"
+        assert kwargs["action"] == "CLEAR"
         assert kwargs["changes"] == {"carriedAmount": {"before": 800, "after": None}}
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_same_value_pin_is_noop(
+    def test_same_value_is_a_no_op(
         self,
         mock_bt: MagicMock,
         mock_ct: MagicMock,
         mock_audit: MagicMock,
         mock_tt: MagicMock,
     ) -> None:
-        # Re-submitting the same pin value should not write or audit.
+        # Re-submitting the same value should not write or audit.
         mock_bt.scan.return_value = [
             {"yearMonth": _FUTURE_MONTH, "categoryId": "cat1", "carriedAmount": 500},
         ]
@@ -1275,10 +1276,10 @@ class TestPostBudgetPin:
         handler(
             _make_event(
                 "POST",
-                f"/api/budget/{_FUTURE_MONTH}/pin",
+                f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
                     "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Resubmit identical pin",
+                    "explanation": "Resubmit the same value",
                 },
             ),
             None,
@@ -1291,7 +1292,7 @@ class TestPostBudgetPin:
         result = handler(
             _make_event(
                 "POST",
-                f"/api/budget/{_EDITABLE_MONTH}/pin",
+                f"/api/budget/{_EDITABLE_MONTH}/update",
                 body={
                     "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
                     "explanation": "Wrong endpoint for current month",
@@ -1307,14 +1308,14 @@ class TestPostBudgetPin:
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_pin_matches_carried_value_warning(
+    def test_matches_inherited_value_warning(
         self,
         mock_bt: MagicMock,
         mock_ct: MagicMock,
         mock_audit: MagicMock,
         mock_tt: MagicMock,
     ) -> None:
-        # Current=06 with cat1=500. Pinning 2026-09=500 → walk-back without the new pin yields 500.
+        # Current=06 with cat1=500. Setting 2026-09=500 → 2026-09 inherits 500 already.
         mock_bt.scan.return_value = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "carriedAmount": 500},
         ]
@@ -1323,7 +1324,7 @@ class TestPostBudgetPin:
         result = handler(
             _make_event(
                 "POST",
-                f"/api/budget/{_FUTURE_MONTH}/pin",
+                f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
                     "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
                     "explanation": "Pin to the value that would have carried forward anyway",
@@ -1332,42 +1333,42 @@ class TestPostBudgetPin:
             None,
         )
         body = json.loads(result["body"])
-        assert "cat1" in body["warnings"]["pinMatchesCarriedValue"]
+        assert "cat1" in body["warnings"]["matchesInheritedValue"]
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_downstream_pins_warning(
+    def test_later_carried_changes_warning(
         self,
         mock_bt: MagicMock,
         mock_ct: MagicMock,
         mock_audit: MagicMock,
         mock_tt: MagicMock,
     ) -> None:
-        # Existing pin at 2026-12 (downstream of 2026-09 target). Should appear in warnings.
+        # 2026-12 holds its own value (after the 2026-09 change). Should appear in warnings.
         # scan_all called twice: before writes (no 2026-12 cat1) and after (still has the
-        # untouched 2026-12 cat1 pin).
-        downstream_state = [
+        # untouched 2026-12 cat1 value).
+        later_state = [
             {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "carriedAmount": 500},
             {"yearMonth": "2026-12", "categoryId": "cat1", "carriedAmount": 999},
         ]
-        mock_bt.scan.return_value = downstream_state
+        mock_bt.scan.return_value = later_state
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Groceries", "active": True}]
 
         result = handler(
             _make_event(
                 "POST",
-                f"/api/budget/{_FUTURE_MONTH}/pin",
+                f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
                     "targets": [{"categoryId": "cat1", "carriedAmount": 700}],
-                    "explanation": "Pin upstream of an existing future pin",
+                    "explanation": "Change a month before a month with its own value",
                 },
             ),
             None,
         )
         body = json.loads(result["body"])
-        assert body["warnings"]["downstreamPins"] == [{"categoryId": "cat1", "yearMonth": "2026-12"}]
+        assert body["warnings"]["laterCarriedChanges"] == [{"categoryId": "cat1", "yearMonth": "2026-12"}]
 
 
 _ADMIN_GROUP = "budget-admin-test"
@@ -2427,12 +2428,12 @@ class TestPinnedBudgetAmounts:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_pin_sets_a_pinned_amount(self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock) -> None:
+    def test_update_sets_a_pinned_amount(self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock) -> None:
         mock_bt.scan.return_value = [{"yearMonth": "2026-06", "categoryId": "cat1", "carriedAmount": 500}]
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
         body = {"targets": [{"categoryId": "cat1", "pinnedAmount": 800}], "explanation": "December gifts"}
 
-        result = handler(_make_event("POST", "/api/budget/2026-09/pin", body=body), None)
+        result = handler(_make_event("POST", "/api/budget/2026-09/update", body=body), None)
 
         assert result["statusCode"] == 200
         mock_bt.set_single_budget_target.assert_called_once_with(
@@ -2445,7 +2446,7 @@ class TestPinnedBudgetAmounts:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_pin_removes_only_the_pinned_amount(
+    def test_update_removes_only_the_pinned_amount(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock
     ) -> None:
         mock_bt.scan.return_value = [
@@ -2454,7 +2455,7 @@ class TestPinnedBudgetAmounts:
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
         body = {"targets": [{"categoryId": "cat1", "pinnedAmount": None}], "explanation": "undo"}
 
-        handler(_make_event("POST", "/api/budget/2026-09/pin", body=body), None)
+        handler(_make_event("POST", "/api/budget/2026-09/update", body=body), None)
 
         mock_bt.set_single_budget_target.assert_called_once_with(
             "2026-09", "cat1", BudgetTargetAmounts(carried_amount=600)
@@ -2464,7 +2465,7 @@ class TestPinnedBudgetAmounts:
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
-    def test_a_later_pinned_amount_is_not_a_downstream_pin(
+    def test_a_later_pinned_amount_is_not_a_later_carried_change(
         self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock
     ) -> None:
         mock_bt.scan.return_value = [
@@ -2474,9 +2475,9 @@ class TestPinnedBudgetAmounts:
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
         body = {"targets": [{"categoryId": "cat1", "carriedAmount": 700}], "explanation": "raise"}
 
-        result = handler(_make_event("POST", "/api/budget/2026-09/pin", body=body), None)
+        result = handler(_make_event("POST", "/api/budget/2026-09/update", body=body), None)
 
-        assert json.loads(result["body"])["warnings"]["downstreamPins"] == []
+        assert json.loads(result["body"])["warnings"]["laterCarriedChanges"] == []
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
@@ -2507,5 +2508,5 @@ class TestPinnedBudgetAmounts:
         assert written["cat1"].pinned_amount == 900
         assert written["cat2"].pinned_amount == 150  # no key in the body: the stored one stays
         audit = mock_audit.write_entry.call_args.kwargs
-        assert audit["action"] == "UPDATE"
+        assert audit["action"] == "PIN"
         assert audit["changes"] == {"pinnedAmount": {"before": None, "after": 900}}

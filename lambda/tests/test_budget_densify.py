@@ -102,9 +102,9 @@ class TestDensifyWalkForward:
         written_amounts = [call.kwargs["Item"]["carriedAmount"] for call in mock_b.put_item.call_args_list]
         assert written_amounts == [500, 500]
 
-    def test_walk_forward_starts_after_m_last_and_respects_pin(self) -> None:
-        # 2026-05 is already dense for cat a (an explicit pin). With current_ym = 2026-06,
-        # M_last = 2026-05 and walk-forward only fills 2026-06. The pin at 2026-05 must
+    def test_walk_forward_starts_after_m_last_and_keeps_an_own_value(self) -> None:
+        # 2026-05 is already dense for cat a (its own value). With current_ym = 2026-06,
+        # M_last = 2026-05 and walk-forward only fills 2026-06. The value at 2026-05 must
         # not be overwritten and 2026-04 stays untouched (it was a historical hole that
         # densification can't retroactively backfill — locked months are frozen).
         rows = [_row("2026-03", "a", 500), _row("2026-05", "a", 999)]
@@ -133,7 +133,7 @@ class TestDensifyWalkForward:
 
 
 class TestResolveFutureTargets:
-    def test_returns_pinned_true_when_explicit_row_exists(self) -> None:
+    def test_returns_inherited_false_when_the_month_has_its_own_row(self) -> None:
         budget, _ = _make_budget_table([_row("2026-06", "a", 500), _row("2026-09", "a", 1234)])
         cats, _ = _make_category_table([_cat("a")])
 
@@ -141,19 +141,19 @@ class TestResolveFutureTargets:
 
         assert len(result) == 1
         assert result[0]["carriedAmount"] == 1234
-        assert result[0]["pinned"] is True
+        assert result[0]["inherited"] is False
 
-    def test_walk_back_returns_pinned_false(self) -> None:
+    def test_walk_back_returns_inherited_true(self) -> None:
         budget, _ = _make_budget_table([_row("2026-06", "a", 500)])
         cats, _ = _make_category_table([_cat("a")])
 
         result = _resolve(budget, cats, "2026-09")
 
         assert result[0]["carriedAmount"] == 500
-        assert result[0]["pinned"] is False
+        assert result[0]["inherited"] is True
 
-    def test_walk_back_stops_at_first_intermediate_pin(self) -> None:
-        # 2026-06=500, pin at 2026-07=777. Lookup 2026-09 should find 777, not 500.
+    def test_walk_back_stops_at_the_first_month_with_its_own_value(self) -> None:
+        # 2026-06=500, and 2026-07 holds its own 777. Lookup 2026-09 should find 777, not 500.
         rows = [_row("2026-06", "a", 500), _row("2026-07", "a", 777)]
         budget, _ = _make_budget_table(rows)
         cats, _ = _make_category_table([_cat("a")])
@@ -161,7 +161,7 @@ class TestResolveFutureTargets:
         result = _resolve(budget, cats, "2026-09")
 
         assert result[0]["carriedAmount"] == 777
-        assert result[0]["pinned"] is False
+        assert result[0]["inherited"] is True
 
     def test_omits_categories_with_no_history(self) -> None:
         budget, _ = _make_budget_table([])
@@ -212,12 +212,12 @@ class TestGenericStore:
         densify(store, ["x"], "2026-06", cold_start_value=None)
         assert store.rows[1:] == [("2026-05", "x", payment), ("2026-06", "x", payment)]
 
-    def test_resolve_future_gives_pinned_and_carried_values(self) -> None:
+    def test_resolve_future_gives_own_and_inherited_values(self) -> None:
         store = _MemoryStore([("2026-06", "x", 1), ("2026-06", "y", 2), ("2026-09", "y", 3)])
         result = resolve_future(store, ["x", "y"], "2026-09")
         assert result == [
-            ResolvedValue(key="x", value=1, pinned=False),
-            ResolvedValue(key="y", value=3, pinned=True),
+            ResolvedValue(key="x", value=1, inherited=True),
+            ResolvedValue(key="y", value=3, inherited=False),
         ]
 
 
@@ -240,7 +240,7 @@ class TestPinnedValues:
     def test_resolve_future_reports_the_pinned_value_and_keeps_the_carried_one(self) -> None:
         store = _MemoryStore([("2026-06", "x", 100)], pinned=[("2026-09", "x", 50)])
         [resolved] = resolve_future(store, ["x"], "2026-09")
-        assert resolved == ResolvedValue(key="x", value=100, pinned=False, pinned_value=50, has_pinned_value=True)
+        assert resolved == ResolvedValue(key="x", value=100, inherited=True, pinned_value=50, has_pinned_value=True)
         assert resolved.effective == 50
 
     def test_the_next_month_goes_back_to_the_carried_value(self) -> None:

@@ -18,16 +18,18 @@ _AUDIT_PARTITION = "AUDIT"
 class AuditAction(StrEnum):
     """The action of an audit log entry."""
 
-    # Budget targets
+    # Budget targets. CREATE and UPDATE change a carried amount, and CLEAR removes the own carried amount of a future
+    # month. PIN and UNPIN set and remove a pinned amount.
     CREATE = "CREATE"
     UPDATE = "UPDATE"
+    CLEAR = "CLEAR"
     PIN = "PIN"
     UNPIN = "UNPIN"
     CATEGORY_HARD_DELETE = "CATEGORY_HARD_DELETE"
-    # Recurring incomes
+    # Recurring incomes, with the same meanings as for budget targets
     RECURRING_INCOME_CREATE = "RECURRING_INCOME_CREATE"
     RECURRING_INCOME_UPDATE = "RECURRING_INCOME_UPDATE"
-    RECURRING_INCOME_STOP = "RECURRING_INCOME_STOP"
+    RECURRING_INCOME_CLEAR = "RECURRING_INCOME_CLEAR"
     RECURRING_INCOME_PIN = "RECURRING_INCOME_PIN"
     RECURRING_INCOME_UNPIN = "RECURRING_INCOME_UNPIN"
     # One-time incomes

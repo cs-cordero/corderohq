@@ -8,6 +8,7 @@ from typing import Any, assert_never
 
 from corderohq.accounts import validate_owners
 from corderohq.common import Keep, SetTo, parse_optional_str
+from corderohq.util import YEAR_MONTH_PATTERN
 
 # The prefixes of the sort key of the PlannedIncome table.
 RECURRING_INCOME_PREFIX = "REC#"
@@ -70,9 +71,8 @@ class DeductionKind(StrEnum):
 class RecurringIncomeAction(StrEnum):
     """Identifies the type of update a user can make to a RecurringIncome."""
 
-    SET = "SET"
-    STOP = "STOP"  # stop the recurring income from this month on
-    UNPIN = "UNPIN"  # remove the entry of a future month, which is a pin or a stop
+    SET = "SET"  # set the carried value; with no plannedIncomeId, create a new recurring income
+    CLEAR = "CLEAR"  # remove the own carried value of a future month, so that it inherits again
     SET_PIN = "SET_PIN"  # set a value that only this month uses
     CLEAR_PIN = "CLEAR_PIN"  # remove the value that only this month uses
 
@@ -96,6 +96,7 @@ class RecurringIncome:
     """An income that repeats each month, such as a salary or the rent of a property.
 
     `gross` and each deduction are for one payment. The frequency sets the number of payments in the month.
+    `end_month` (YYYY-MM) is the last month that counts the income. A later month does not show or count it.
     """
 
     income_source_id: str
@@ -103,6 +104,12 @@ class RecurringIncome:
     frequency: PayFrequency
     gross: int  # millionths of a dollar
     deductions: tuple[Deduction, ...]
+    end_month: str | None = None
+
+    def counts_in(self, year_month: str) -> bool:
+        """Return True if `year_month` is not after the end month."""
+
+        return self.end_month is None or year_month <= self.end_month
 
     @property
     def net(self) -> int:
@@ -119,13 +126,16 @@ class RecurringIncome:
     def to_item(self) -> dict[str, Any]:
         """Converts an instance of RecurringIncome to how it is stored in DynamoDB."""
 
-        return {
+        item: dict[str, Any] = {
             "incomeSourceId": self.income_source_id,
             "label": self.label,
             "frequency": self.frequency,
             "gross": self.gross,
             "deductions": [deduction.to_item() for deduction in self.deductions],
         }
+        if self.end_month is not None:
+            item["endMonth"] = self.end_month
+        return item
 
 
 @dataclass(frozen=True)
@@ -181,15 +191,8 @@ class SetRecurringIncome:
 
 
 @dataclass(frozen=True)
-class StopRecurringIncome:
-    """Stop a recurring income from one month on."""
-
-    planned_income_id: str
-
-
-@dataclass(frozen=True)
-class UnpinRecurringIncome:
-    """Remove the entry of a recurring income in a future month, which is a pin or a stop."""
+class ClearRecurringIncome:
+    """Remove the own carried value of a recurring income in a future month, so that the month inherits again."""
 
     planned_income_id: str
 
@@ -209,7 +212,7 @@ class ClearPin:
     planned_income_id: str
 
 
-type RecurringIncomeChange = SetRecurringIncome | StopRecurringIncome | UnpinRecurringIncome | SetPin | ClearPin
+type RecurringIncomeChange = SetRecurringIncome | ClearRecurringIncome | SetPin | ClearPin
 
 
 @dataclass(frozen=True)
@@ -260,9 +263,9 @@ def validate_frequency(value: Any) -> PayFrequency:
 def parse_recurring_income(raw: Any) -> RecurringIncome:
     """Convert a recurring income from a request body or a stored item. Raise ValueError if a rule fails.
 
-    The shape is `{incomeSourceId, label, frequency, gross, deductions: [{label, kind, amount}]}`. A value read back
-    from DynamoDB is a `Decimal`, so an integral `Decimal` is accepted. The net amount must not be negative. It does
-    not check that the income source exists.
+    The shape is `{incomeSourceId, label, frequency, gross, deductions: [{label, kind, amount}], endMonth?}`. A value
+    read back from DynamoDB is a `Decimal`, so an integral `Decimal` is accepted. The net amount must not be negative.
+    It does not check that the income source exists, or the rules of the end month.
     """
 
     if not isinstance(raw, Mapping):
@@ -277,6 +280,7 @@ def parse_recurring_income(raw: Any) -> RecurringIncome:
         frequency=validate_frequency(raw.get("frequency")),
         gross=gross,
         deductions=deductions,
+        end_month=_parse_end_month(raw.get("endMonth")),
     )
 
 
@@ -327,8 +331,8 @@ def parse_recurring_income_changes(payload: Mapping[str, Any]) -> list[Recurring
     """Convert `recurring`, a list of `{action, plannedIncomeId?, recurringIncome?}`, into checked changes.
 
     Raise ValueError for bad input. SET needs `recurringIncome`, and creates a new recurring income when it has no
-    `plannedIncomeId`. SET_PIN needs `plannedIncomeId` and `recurringIncome`. STOP, UNPIN, and
-    CLEAR_PIN need `plannedIncomeId`. It does not check that an id or an income source exists.
+    `plannedIncomeId`. SET_PIN needs `plannedIncomeId` and `recurringIncome`. CLEAR and CLEAR_PIN need
+    `plannedIncomeId`. It does not check that an id or an income source exists.
     """
 
     raw_rows = payload.get("recurring")
@@ -379,14 +383,10 @@ def _parse_recurring_income_change(raw: Any) -> RecurringIncomeChange:
             return SetRecurringIncome(
                 planned_income_id=planned_income_id, income=parse_recurring_income(raw.get("recurringIncome"))
             )
-        case RecurringIncomeAction.STOP:
+        case RecurringIncomeAction.CLEAR:
             if planned_income_id is None:
-                raise ValueError("STOP needs plannedIncomeId")
-            return StopRecurringIncome(planned_income_id=planned_income_id)
-        case RecurringIncomeAction.UNPIN:
-            if planned_income_id is None:
-                raise ValueError("UNPIN needs plannedIncomeId")
-            return UnpinRecurringIncome(planned_income_id=planned_income_id)
+                raise ValueError("CLEAR needs plannedIncomeId")
+            return ClearRecurringIncome(planned_income_id=planned_income_id)
         case RecurringIncomeAction.SET_PIN:
             if planned_income_id is None:
                 raise ValueError("SET_PIN needs plannedIncomeId")
@@ -399,6 +399,16 @@ def _parse_recurring_income_change(raw: Any) -> RecurringIncomeChange:
             return ClearPin(planned_income_id=planned_income_id)
         case _:
             assert_never(action)
+
+
+def _parse_end_month(value: Any) -> str | None:
+    """Return the end month (YYYY-MM), or None if there is none. Raise ValueError for bad input."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str) or not YEAR_MONTH_PATTERN.match(value):
+        raise ValueError("endMonth must be YYYY-MM")
+    return value
 
 
 def _parse_money(raw: Mapping[str, Any]) -> tuple[int, tuple[Deduction, ...]]:

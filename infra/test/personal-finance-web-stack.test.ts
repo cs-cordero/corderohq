@@ -151,7 +151,7 @@ describe("PersonalFinanceWebStack", () => {
                 "POST /api/income-sources/{incomeSourceId}/reactivate",
                 "GET /api/income/{yearMonth}",
                 "POST /api/income/{yearMonth}/replace",
-                "POST /api/income/{yearMonth}/pin",
+                "POST /api/income/{yearMonth}/update",
                 "POST /api/income/{yearMonth}/one-time",
             ]) {
                 template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: routeKey });

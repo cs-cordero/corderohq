@@ -47,14 +47,14 @@ class DenseSparseStore(Protocol):
 class ResolvedValue:
     """One key in a future month.
 
-    `value` is the carried value: the pin at this month, or the value from the walk back. It is `None` if neither
-    exists. `pinned` says that this month holds its own carried value. `pinned_value` is the value of this month only,
-    if `has_pinned_value`.
+    `value` is the carried value: the month's own carried value, or the value from the walk back. It is `None` if
+    neither exists. `inherited` says that the value comes from the walk back. `pinned_value` is the value of this month
+    only, if `has_pinned_value`.
     """
 
     key: str
     value: Any
-    pinned: bool
+    inherited: bool
     pinned_value: Any = None
     has_pinned_value: bool = False
 
@@ -133,8 +133,8 @@ def densify(
 def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: str) -> list[ResolvedValue]:
     """Return each active key of a future month, with its carried and its pinned value.
 
-    A pin at `year_month` wins, with `pinned=True`. Else the carried value comes from the nearest
-    row before it, with `pinned=False`. The walk back reads carried values only, so a pinned
+    A carried value at `year_month` wins, with `inherited=False`. Else the carried value comes from the nearest
+    row before it, with `inherited=True`. The walk back reads carried values only, so a pinned
     value never reaches a later month. The pinned value is the one at `year_month`, if it
     exists. A key with no carried value (or None) and no pinned value is left out.
     `year_month` must be after the current month.
@@ -144,15 +144,15 @@ def resolve_future(store: DenseSparseStore, active_keys: list[str], year_month: 
     pinned_by_key = carry_map(store.scan_pinned_values())
     result: list[ResolvedValue] = []
     for key in active_keys:
-        pinned = (year_month, key) in by_key
-        value = by_key[(year_month, key)] if pinned else walk_back_for(by_key, year_month, key)
+        inherited = (year_month, key) not in by_key
+        value = walk_back_for(by_key, year_month, key) if inherited else by_key[(year_month, key)]
         has_pinned_value = (year_month, key) in pinned_by_key
         if value is None and not has_pinned_value:
             continue
         pinned_value = pinned_by_key.get((year_month, key))
         result.append(
             ResolvedValue(
-                key=key, value=value, pinned=pinned, pinned_value=pinned_value, has_pinned_value=has_pinned_value
+                key=key, value=value, inherited=inherited, pinned_value=pinned_value, has_pinned_value=has_pinned_value
             )
         )
     return result
@@ -165,7 +165,7 @@ def resolve_future_targets(
 ) -> list[dict[str, Any]]:
     """Return the budget targets of a future month, in the shape that the API sends.
 
-    Each target is `{yearMonth, categoryId, carriedAmount, pinned}`, plus `pinnedAmount` when the month has a pinned
+    Each target is `{yearMonth, categoryId, carriedAmount, inherited}`, plus `pinnedAmount` when the month has a pinned
     amount. The month shows `pinnedAmount` if it is present, else `carriedAmount`.
     """
 
@@ -175,7 +175,7 @@ def resolve_future_targets(
             "yearMonth": year_month,
             "categoryId": resolved.key,
             "carriedAmount": resolved.value,
-            "pinned": resolved.pinned,
+            "inherited": resolved.inherited,
         }
         if resolved.has_pinned_value:
             target["pinnedAmount"] = resolved.pinned_value
