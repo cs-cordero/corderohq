@@ -25,9 +25,9 @@ def compute_income_plan(
     """Return the income plan of one month: each recurring income, each one-time income, and the planned net income.
 
     A current or past month shows each recurring income that it holds. A future month shows each recurring income
-    with a pin there or a value from the walk back. A stop shows only in the month that holds it, with the value from
-    before the stop, so that the stop can be undone. A stopped recurring income does not count. Nothing here reads a
-    transaction.
+    with a pin there or a value from the walk back. A month shows its pinned value if it has one, else its
+    carried value. A stop shows only in the month that holds it, with the value from before the stop, so that the stop
+    can be undone. A stopped recurring income does not count. Nothing here reads a transaction.
     """
 
     sources_by_id = {s["incomeSourceId"]: s for s in income_sources.get_all_income_sources()}
@@ -35,9 +35,11 @@ def compute_income_plan(
     is_future = year_month > f"{now_et.year:04d}-{now_et.month:02d}"
 
     month_items = planned_income.get_planned_income_for_month(year_month)
-    by_key = carry_map(RecurringIncomeDensifyAdapter(planned_income).scan_stored_values())
+    store = RecurringIncomeDensifyAdapter(planned_income)
+    by_key = carry_map(store.scan_stored_values())
+    pinned_by_key = carry_map(store.scan_pinned_values())
     if is_future:
-        keys = sorted({key for _, key in by_key})
+        keys = sorted({key for _, key in by_key} | {key for ym, key in pinned_by_key if ym == year_month})
     else:
         keys = sorted(
             str(item["plannedIncomeId"])
@@ -47,7 +49,9 @@ def compute_income_plan(
 
     recurring: list[dict[str, Any]] = []
     for key in keys:
-        income: RecurringIncome | None = value_at_or_before(by_key, year_month, key)
+        carried: RecurringIncome | None = value_at_or_before(by_key, year_month, key)
+        pinned_value: RecurringIncome | None = pinned_by_key.get((year_month, key))
+        income = pinned_value if pinned_value is not None else carried
         held_here = (year_month, key) in by_key
         entry: dict[str, Any]
         if income is not None:
@@ -58,6 +62,9 @@ def compute_income_plan(
                 "net": income.net,
                 "monthlyNet": income.monthly_net,
                 "stopped": False,
+                # The value that later months copy. It differs from the fields above when `hasPinnedRecurringIncome`.
+                "carriedRecurringIncome": carried.to_item() if carried is not None else None,
+                "hasPinnedRecurringIncome": pinned_value is not None,
             }
         elif held_here:
             before: RecurringIncome | None = walk_back_for(by_key, year_month, key)

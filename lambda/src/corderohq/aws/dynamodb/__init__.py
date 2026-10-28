@@ -1,5 +1,5 @@
 from corderohq.aws.dynamodb.account import AccountTable, get_cash_flow_role
-from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
+from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable, BudgetTargetAmounts
 from corderohq.aws.dynamodb.budget_audit_log import AuditAction, BudgetAuditLogTable
 from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.category_group import CategoryGroupTable
@@ -23,6 +23,7 @@ __all__ = [
     "BudgetAuditLogTable",
     "BudgetDensifyAdapter",
     "BudgetTable",
+    "BudgetTargetAmounts",
     "CategoryGroupTable",
     "CategoryTable",
     "IncomeSourceTable",

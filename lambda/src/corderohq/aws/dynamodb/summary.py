@@ -5,11 +5,11 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable
+from corderohq.aws.dynamodb.budget import BudgetDensifyAdapter, BudgetTable, BudgetTargetAmounts
 from corderohq.aws.dynamodb.category import CategoryTable
 from corderohq.aws.dynamodb.transactions import TransactionsTable, get_budget_treatment
 from corderohq.aws.dynamodb.util import BUDGET_TZ
-from corderohq.budget.densify import carry_map, value_at_or_before
+from corderohq.budget.densify import carry_map, effective_value
 from corderohq.budget.editability import EditabilityState, editability
 from corderohq.budget.treatment import BudgetTreatment
 
@@ -66,7 +66,9 @@ def compute_summary(
     categories_all = category_table.get_all_categories()
     category_by_id = {c["categoryId"]: c for c in categories_all}
 
-    current_ym = f"{now.year:04d}-{now.month:02d}"
+    # The budget month changes at midnight ET, so read the current month in ET, not in UTC.
+    now_et = now.astimezone(BUDGET_TZ)
+    current_ym = f"{now_et.year:04d}-{now_et.month:02d}"
     is_future = year_month > current_ym
 
     # Find the budget target of each category in this month. A target of None means "no
@@ -79,17 +81,20 @@ def compute_summary(
     # of the nearest earlier row. An inactive category with no target is left out.
     budget_by_category: dict[str, Decimal] = {}
     if is_future:
-        by_key = carry_map(BudgetDensifyAdapter(budget).scan_stored_values())
+        # A month shows its pinned amount if it has one, else its carried target.
+        store = BudgetDensifyAdapter(budget)
+        by_key = carry_map(store.scan_stored_values())
+        pinned_by_key = carry_map(store.scan_pinned_values())
         for cat in categories_all:
             cat_id = cat["categoryId"]
-            raw = value_at_or_before(by_key, year_month, cat_id)
+            raw = effective_value(by_key, pinned_by_key, year_month, cat_id)
             if raw is None and not cat.get("active", False):
                 continue
             budget_by_category[cat_id] = Decimal("0") if raw is None else Decimal(str(raw))
     else:
         for target in budget.get_budget_targets(year_month):
-            raw = target.get("amount")
-            budget_by_category[target["categoryId"]] = Decimal("0") if raw is None else Decimal(str(raw))
+            amounts = BudgetTargetAmounts.from_item(target)
+            budget_by_category[target["categoryId"]] = Decimal(amounts.effective_amount)
 
     actual_by_category: dict[str, Decimal] = {}
     nonzero_transaction_cat_ids: set[str] = set()

@@ -149,8 +149,10 @@ it.
 |                        |                    |            | uniqueness** below.         |
 +------------------------+--------------------+------------+-----------------------------+
 | Budget-{stage}         | yearMonth          | categoryId | yearMonth is YYYY-MM.       |
-|                        |                    |            | amount (millionths). One    |
-|                        |                    |            | row per category per month. |
+|                        |                    |            | carriedAmount and/or        |
+|                        |                    |            | pinnedAmount (millionths).  |
+|                        |                    |            | One row per category per    |
+|                        |                    |            | month.                      |
 +------------------------+--------------------+------------+-----------------------------+
 | Transactions-{stage}   | yearMonth          | sortId     | sortId = {transactionDate}# |
 |                        |                    |            | {ULID}. Fields:             |
@@ -397,7 +399,8 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | pinning or unpinning. Upsert       |
 |        |                                          | semantics; categories omitted      |
 |        |                                          | from the body are untouched.       |
-|        |                                          | `amount: null` clears a pin.       |
+|        |                                          | `carriedAmount: null` clears a     |
+|        |                                          | pin.                               |
 |        |                                          | Returns downstreamPins and         |
 |        |                                          | pinMatchesCarriedValue warnings    |
 |        |                                          | per category — see **Pin write    |
@@ -589,7 +592,7 @@ Recorded in `BudgetAuditLog-{stage}`:
 - `POST /api/budget/{YYYY-MM}/replace` → one `CREATE` or `UPDATE` entry for each category.
   `/replace` cannot remove a row by any correct use, because the body must hold every row that
   exists. It therefore never makes a `DELETE` entry. Three other paths delete a budget row, and
-  each writes a different entry: `/pin` with `amount: null` writes one `UNPIN` entry for each pin
+  each writes a different entry: `/pin` with `carriedAmount: null` writes one `UNPIN` entry for each pin
   it clears; a deactivation that drops a future pin writes one `UNPIN` entry for each drop; and a
   hard delete removes every row for the category and writes one `CATEGORY_HARD_DELETE` entry.
 - `POST /api/budget/{YYYY-MM}/pin` → one `PIN` or `UNPIN` entry for each category.
@@ -607,14 +610,16 @@ Recorded in `BudgetAuditLog-{stage}`:
 The shape of the `changes` field on a `BudgetAuditLog-{stage}` row depends on the action:
 
 - `CREATE` — `/replace` wrote a new Budget row.
-  `{amount: {before: null, after: number | null}}`.
-- `UPDATE` — `/replace` changed the amount on a Budget row that existed.
-  `{amount: {before: number | null, after: number | null}}`.
+  `{carriedAmount: {before: null, after: number}}`.
+- `UPDATE` — `/replace` changed the carried amount on a Budget row that existed.
+  `{carriedAmount: {before: number, after: number}}`.
 - `PIN` — `/pin` wrote a future pin. The pin is new, or it takes the place of one that existed.
-  `{amount: {before: number | null, after: number}}`. `before` is `null` if no pin was there for
-  this `(yearMonth, categoryId)`.
-- `UNPIN` — a future pin is gone. Either `/pin` with `amount: null` cleared it, or a deactivation
-  dropped it. `{amount: {before: number, after: null}}`.
+  `{carriedAmount: {before: number | null, after: number}}`. `before` is `null` if no pin was there
+  for this `(yearMonth, categoryId)`.
+- `UNPIN` — a future pin is gone. Either `/pin` with `carriedAmount: null` cleared it, or a
+  deactivation dropped it. `{carriedAmount: {before: number, after: null}}`.
+- A change of the pinned amount names `pinnedAmount` in place of `carriedAmount`, with the same
+  actions.
 - `CATEGORY_HARD_DELETE` — `{budgetRowsDeleted: number, transactionsDeleted: number, name: string}`.
   This holds counts and a snapshot, and not a before-and-after pair, because the category and its
   data are gone.
@@ -730,7 +735,7 @@ previous month while it is in grace, or any locked month through the admin overr
 
 ```
 {
-  "targets": [{ "categoryId", "amount": number | null }, ...],
+  "targets": [{ "categoryId", "carriedAmount": number, "pinnedAmount"?: number | null }, ...],
   "explanation": "...",
   "override": false
 }
@@ -750,14 +755,13 @@ If the body fails either rule, and editability passed, the response is `409 Conf
 lists each `categoryId` that is absent, and the app **writes no rows**. The client must send the
 request again with those entries added. Usually it copies the values that exist.
 
-`amount: number` → the app writes the row with that amount. `0` is valid, and it is a real target.
-`amount: null` → the app writes the row with `amount=null`. That means "no target". The row stays
-in the table, so the month stays dense.
+`carriedAmount` must be a number. `0` is valid, and it is a real target. A carried amount is never
+`null`. A `pinnedAmount` key sets the pinned amount (a number) or clears it (`null`). Without the
+key, the stored pinned amount stays.
 
 Each difference makes one `CREATE` or `UPDATE` entry in the audit log, for one category.
 `/replace` never makes a `DELETE` entry. The body rule stops a client from removing a row by
-leaving it out, and a row whose amount becomes `null` is still a row. Such a row gives an `UPDATE`,
-and not a `DELETE`.
+leaving it out.
 
 ### Pin write semantics
 
@@ -765,31 +769,26 @@ and not a `DELETE`.
 
 ```
 {
-  "targets": [{ "categoryId", "amount": number | null }, ...],
-  "explanation": "...",
-  "override": false
+  "targets": [{ "categoryId", "carriedAmount"?: number | null, "pinnedAmount"?: number | null }, ...],
+  "explanation": "..."
 }
 ```
 
 This endpoint writes a row, or changes the row that is there. It does not touch a category that the
-body leaves out.
+body leaves out, or a key that a target leaves out. Each target needs at least one of the two keys.
 
-`amount: number` → the app writes a pin row at that amount, or changes the row that is there.
-`amount: null` → the app **deletes** the pin row, if one exists. No row means no pin, and the
-display then walks back to find a value.
+`carriedAmount: number` → the app writes a pin at that amount. `carriedAmount: null` → the app
+removes the pin. The same holds for `pinnedAmount`. A row with neither amount left is **deleted**.
+No carried amount means no pin, and the display then walks back to find a value.
 
-For each category, the response holds a warning:
+The response holds the month and the warnings:
 
 ```
 {
-  "rows": [{ "categoryId", "amount", "stored": "PINNED" | "UNPINNED" }, ...],
+  "targets": [{ "yearMonth", "categoryId", "carriedAmount", "pinned", "pinnedAmount"? }, ...],
   "warnings": {
-    "downstreamPins": [
-      { "categoryId", "yearMonth", "amount" }
-    ],
-    "pinMatchesCarriedValue": [
-      { "categoryId", "amount" }
-    ]
+    "downstreamPins": [{ "categoryId", "yearMonth" }, ...],
+    "pinMatchesCarriedValue": ["categoryId", ...]
   }
 }
 ```
@@ -811,8 +810,7 @@ The Budget table holds two kinds of row only: a row the user wrote, and a row th
 
 - **A locked month, a grace month, and the current month are always *dense*.** Each holds exactly
   one row for each category that existed when the app made the month dense, and any row the user
-  wrote after that. A row may hold `amount=null`, which means "no target". For density, only the
-  row itself counts.
+  wrote after that. For density, only the row itself counts.
 - **A future month is *sparse*.** It holds only the rows the user pinned, through
   `POST /api/budget/{YYYY-MM}/pin`. A category without a pin has no row at all.
 
@@ -827,8 +825,8 @@ This split has three results, and each is worth a clear statement:
    makes the month dense.
 3. **The app resolves a future month one category at a time.** For each category that is active
    now: if a pin exists at `(future_ym, category)`, use it. If not, walk back one month at a time,
-   with no fixed limit, until a row appears or the history ends. Then use the amount on the row it
-   found. If it finds no row at all, the category has no target.
+   with no fixed limit, until a row appears or the history ends. Then use the carried amount on the
+   row it found. If it finds no row at all, the category has no target.
 
 ### Densification
 
@@ -856,14 +854,14 @@ month `M` in that range, oldest first:
 1. For each category that is active now:
    - If a row exists at `(M, categoryId)`, from a pin the user wrote earlier, leave it.
    - If not, walk back from `M - 1` to `M_last`, and find the most recent row for that
-     `categoryId`. Copy its `amount`, which may be `null`.
-   - If no earlier row exists anywhere, write a row with `amount=null`.
+     `categoryId`. Copy its `carriedAmount`.
+   - If no earlier row exists anywhere, write a row with `carriedAmount=0`.
 2. The app adds no inactive category. It leaves in place a pin on an inactive category that exists
    already at `M`. The user may make the category active again, or may want the history.
 
 **The cold start, when no dense month exists.** `M_last` has no value when the Budget table is
 empty, so there is nothing to walk back to. The app then densifies `current_ym` only: it writes a
-row with `amount=0` for each category that is active. This is almost impossible in normal use. It
+row with `carriedAmount=0` for each category that is active. This is almost impossible in normal use. It
 needs a new deploy, with categories made already, and before anyone opens a budget page. If it does
 happen, `$0` is a safe start, and the user can change it in the usual way.
 
@@ -876,7 +874,7 @@ display of a future month walk back through Budget rows, one category and one mo
 simple way to write this makes `O(categories × months)` calls. Instead, the handler must first load
 the whole `[M_last, current_ym + N_FUTURE_MONTHS]` range in one `BatchGetItem`, or in a few
 `Query` calls on the `yearMonth` partitions. It puts the result in a Python
-`dict[(yearMonth, categoryId), amount]`, and then does every walk-back in memory. This applies to
+`dict[(yearMonth, categoryId), carriedAmount]`, and then does every walk-back in memory. This applies to
 both of these:
 
 - The densify step at the month change, which walks back from each `M` to find an earlier row.
@@ -892,7 +890,7 @@ both of these:
   month. A new category with `initialTarget=$50` therefore shows `$50` in every future editable
   month, until the user pins a different amount.
 - **Deactivate** (`POST /api/categories/{id}/deactivate`) — this returns
-  `affectedMonths: [{yearMonth, amount}]`. It lists every **future** month with a pin for this
+  `affectedMonths: [yearMonth, ...]`. It lists every **future** month with a pin for this
   category. With `confirm: true`, the transaction deletes those future pins, and it writes one
   `UNPIN` audit entry for each pin it drops. The budget-target audit trail therefore stays
   complete — see **Audit scope**. The app leaves the past dense rows as they are, in the current
@@ -903,43 +901,47 @@ both of these:
   next densify step, or any write to the current month, then treats it like a new category for
   that month.
 
-### This-month-only values (Spec 58)
+### Pinned values (Spec 58)
 
 A Budget row and a recurring income can each hold **two values**:
 
 | | Budget row | Recurring income (PlannedIncome) | Later months |
 |---|---|---|---|
-| Carried value | `amount` (`null` means no target) | the recurring income itself | copy it |
-| This-month-only value | `onlyAmount` | `onlyThisMonth` (a whole recurring income) | never see it |
+| Carried value | `carriedAmount` | the recurring income itself | copy it |
+| Pinned value | `pinnedAmount` | `pinnedRecurringIncome` (a whole recurring income) | never see it |
 
-- **What a month shows:** its this-month-only value if it has one, else its carried value, else
+- **What a month shows:** its pinned value if it has one, else its carried value, else
   the carried value from the walk back (`effective_value()` in `budget/densify.py`).
 - **The densify step and the walk back read carried values only.** The densify adapters
   (`BudgetDensifyAdapter`, `RecurringIncomeDensifyAdapter`) give them through `scan_stored_values()`, and
-  give the this-month-only values through `scan_only_values()`. When the densify step fills the
-  carried value of a month, `put_stored_value()` keeps a this-month-only value that the row already
+  give the pinned values through `scan_pinned_values()`. When the densify step fills the
+  carried value of a month, `put_stored_value()` keeps a pinned value that the row already
   has.
-- **A future month can hold a row with only a this-month-only value,** and no carried value. Such a
+- **A future month can hold a row with only a pinned value,** and no carried value. Such a
   row is not a pin: `pinned` is false, and `downstreamPins` leaves it out.
-- **The writes:**
-  - `/replace` (a dense month): each target or recurring income sends its carried value, as before.
-    An `onlyAmount` or `onlyThisMonth` key sets the this-month-only value (a value) or clears it
-    (`null`). Without the key, the stored one stays.
+- **The writes of a budget target:**
+  - `/replace` (a dense month): each target sends its carried value, as before. A `pinnedAmount` key
+    sets the pinned value (a value) or clears it (`null`). Without the key, the stored one
+    stays.
   - `/pin` (a future month): each of the two keys is optional. A value sets it, `null` removes it,
     and a missing key does not change it. A row with neither value is deleted.
-  - The frontend sends "From this month on" as the carried value plus a cleared this-month-only
-    value, and "This month only" as the this-month-only value alone.
+- **The writes of a recurring income:** two more actions, in `/replace` and in `/pin`, each with a
+  `plannedIncomeId`. `SET_PIN` sets the pinned value, and
+  `CLEAR_PIN` removes it. `SET`, `STOP`, and `UNPIN` change only the carried value, and
+  keep the pinned value. An entry with neither value is deleted.
+- **The frontend** sends "From this month on" as the carried value plus a cleared pinned
+  value, and "This month only" as the pinned value alone.
 - **The audit log** uses the same actions (CREATE, UPDATE, PIN, UNPIN, and the RECURRING_INCOME_
-  forms). The `changes` payload names `onlyAmount` or `onlyThisMonth` for a this-month-only change.
-- **The responses:** a future budget target has `amount` (carried), `pinned`, and `onlyAmount` when
+  forms). The `changes` payload names `pinnedAmount` or `pinnedRecurringIncome` for a pinned change.
+- **The responses:** a future budget target has `carriedAmount`, `pinned`, and `pinnedAmount` when
   present. A recurring income entry has the fields that the month shows, plus
-  `carriedRecurringIncome` and `hasOnlyThisMonth`.
+  `carriedRecurringIncome` and `hasPinnedRecurringIncome`.
 
 ### Edge cases
 
 - **A new category, with no history.** The densify step finds no row to walk back to, so it writes
-  `amount=null`. The category then appears in the current month with no target, and the user must
-  set one.
+  `carriedAmount=0`. The category then appears in the current month with a `$0` target. No amount
+  is ever `null`.
 - **A pin equal to the value that carries forward.** The app permits this, and it warns the user.
   See **Pin write semantics** and `pinMatchesCarriedValue`. The server writes the pin as asked.
 - **A pin stays through the month change.** When a pinned future month becomes the current month,
@@ -963,7 +965,7 @@ A Budget row and a recurring income can each hold **two values**:
 `DenseSparseStore`, where each row is `(yearMonth, key, value)`, and each caller passes the
 active keys:
 
-- `BudgetDensifyAdapter(budget_table)`: the key is a `categoryId`, and the value is the amount.
+- `BudgetDensifyAdapter(budget_table)`: the key is a `categoryId`, and the value is the carried amount.
   The cold-start value is `0`.
 - `RecurringIncomeDensifyAdapter(planned_income_table)`: the key is a `plannedIncomeId`, and the
   value is the recurring income, or `None` for a stop. It reads only the `REC#` items, so a one-time
@@ -1040,7 +1042,7 @@ each row of a month as a category row. A separate table keeps each of them as it
       "monthlyNet",              // net × the times per month of the frequency
       "stopped": false,
       "carriedRecurringIncome",  // the value that carries forward, or null
-      "hasOnlyThisMonth",        // true if the month shows a this-month-only value
+      "hasPinnedRecurringIncome",        // true if the month shows a pinned value
       "pinned"                   // future months only
     },
     { "plannedIncomeId", "stopped": true, "before": R | null, ... },  // a stop, in its own month only
@@ -1066,6 +1068,8 @@ own dense rows only, so its value never changes after the lock.
   this month on.
 - `STOP` stops a recurring income from this month on.
 - `UNPIN` removes the pin or the stop of a future month. It is for `/pin` only.
+- `SET_PIN` and `CLEAR_PIN` set or remove the value that only this month
+  uses. See **Pinned values**.
 - Each `plannedIncomeId` and each income source must exist.
 - `/replace` needs every recurring income with a value in that month. The response is the month.
 - `/pin` returns `{incomePlan: <the month>, warnings: {downstreamPins, pinMatchesCarriedValue}}`,

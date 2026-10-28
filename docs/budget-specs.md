@@ -53,7 +53,7 @@
    - For an editable year-month: the categories that are active now, and any category with
      expenditures other than zero in that month.
    - For a locked year-month: every category that had a budget target, or any expenditures in that
-     month. "Had a target" means a recorded amount, and `$0` counts; `null` means no target. This
+     month. "Had a target" means a recorded amount, and `$0` counts; no row means no target. This
      applies even if the category is not active today. A deactivated category stays on a past
      month, so the historical view stays true.
 
