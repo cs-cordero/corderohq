@@ -16,6 +16,9 @@ from corderohq.budget.treatment import BudgetTreatment
 # The most days apart that two rows of one transfer can be. The PAIR step only takes a saved transaction as the
 # other side of a row when the two dates are this close.
 PAIR_WINDOW_DAYS = 4
+_FOUR_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
+_OUTSIDE_KINDS = (TransactionKind.EXPENSE, TransactionKind.REFUND, TransactionKind.INCOME)
+_OWN_ACCOUNT_KINDS = (TransactionKind.CARD_PAYMENT, TransactionKind.OWN_TRANSFER)
 
 
 class SideKind(Enum):
@@ -28,6 +31,13 @@ class SideKind(Enum):
     ACCOUNT = auto()  # one of the user's own accounts, and the app knows which
     OWN_UNKNOWN = auto()  # one of the user's own accounts, but the app cannot tell which
     UNKNOWN = auto()
+
+
+_BANK_HINT_SIDES: dict[BankHint, tuple[SideKind, TransactionKind]] = {
+    BankHint.INCOME: (SideKind.OUTSIDE, TransactionKind.INCOME),
+    BankHint.CARD_PAYMENT: (SideKind.OWN_UNKNOWN, TransactionKind.CARD_PAYMENT),
+    BankHint.TRANSFER: (SideKind.OWN_UNKNOWN, TransactionKind.OWN_TRANSFER),
+}
 
 
 class SuggestedBy(StrEnum):
@@ -57,17 +67,6 @@ class ReviewReason(StrEnum):
     UNKNOWN_DIRECTION = "unknown_direction"
 
 
-_BANK_HINT_SIDES: dict[BankHint, tuple[SideKind, TransactionKind]] = {
-    BankHint.INCOME: (SideKind.OUTSIDE, TransactionKind.INCOME),
-    BankHint.CARD_PAYMENT: (SideKind.OWN_UNKNOWN, TransactionKind.CARD_PAYMENT),
-    BankHint.TRANSFER: (SideKind.OWN_UNKNOWN, TransactionKind.OWN_TRANSFER),
-}
-_OUTSIDE_KINDS = (TransactionKind.EXPENSE, TransactionKind.REFUND, TransactionKind.INCOME)
-_OWN_ACCOUNT_KINDS = (TransactionKind.CARD_PAYMENT, TransactionKind.OWN_TRANSFER)
-
-_FOUR_DIGITS = re.compile(r"(?<!\d)(\d{4})(?!\d)")
-
-
 @dataclass(frozen=True)
 class OtherSide:
     """The CSV importer's full assessment of a given row."""
@@ -93,51 +92,6 @@ class Suggestion:
     suggested_by: SuggestedBy
     pair_with: dict[str, str] | None
     review: list[ReviewReason] = field(default_factory=list)
-
-
-def _days_apart(first: date | None, second: date | None) -> int | None:
-    if first is None or second is None:
-        return None
-    return abs((first - second).days)
-
-
-def _find_pairs(
-    row: Mapping[str, Any], upload_account_id: str, saved: Sequence[Mapping[str, Any]]
-) -> list[Mapping[str, Any]]:
-    """Return the saved transactions that look like the other side of `row`."""
-
-    row_date = parse_date(str(row["transactionDate"]))
-    amount = int(row["amount"])
-    if row_date is None or amount == 0:
-        return []
-    matches: list[Mapping[str, Any]] = []
-    for transaction in saved:
-        account_id = transaction.get("accountId")
-        if not account_id or account_id == upload_account_id:
-            continue
-        if int(transaction.get("amount", 0)) != -amount:
-            continue
-        days = _days_apart(row_date, parse_date(str(transaction.get("transactionDate", ""))))
-        if days is not None and days <= PAIR_WINDOW_DAYS:
-            matches.append(transaction)
-    return matches
-
-
-def _account_side(
-    account: Mapping[str, Any] | None,
-    suggested_by: SuggestedBy,
-    pair_with: dict[str, str] | None = None,
-    review: tuple[ReviewReason, ...] = (),
-) -> OtherSide:
-    """Return the other side for a known account.
-
-    Only a SPENDING or HOLDING account keeps the money in the household. An EXTERNAL or NON_CASH account counts as the
-    outside world, so a payment to a mortgage is an expense.
-    """
-
-    role = get_cash_flow_role(dict(account)) if account is not None else None
-    kind = SideKind.ACCOUNT if role in (CashFlowRole.SPENDING, CashFlowRole.HOLDING) else SideKind.OUTSIDE
-    return OtherSide(kind=kind, role=role, suggested_by=suggested_by, pair_with=pair_with, review=review)
 
 
 def find_other_side(
@@ -268,3 +222,48 @@ def suggest_budget_treatments(
     upload_role = get_cash_flow_role(dict(upload_account))
     accounts_by_id = {str(a["accountId"]): a for a in accounts}
     return [suggest(row, upload_role, find_other_side(row, upload_account_id, accounts_by_id, saved)) for row in rows]
+
+
+def _days_apart(first: date | None, second: date | None) -> int | None:
+    if first is None or second is None:
+        return None
+    return abs((first - second).days)
+
+
+def _find_pairs(
+    row: Mapping[str, Any], upload_account_id: str, saved: Sequence[Mapping[str, Any]]
+) -> list[Mapping[str, Any]]:
+    """Return the saved transactions that look like the other side of `row`."""
+
+    row_date = parse_date(str(row["transactionDate"]))
+    amount = int(row["amount"])
+    if row_date is None or amount == 0:
+        return []
+    matches: list[Mapping[str, Any]] = []
+    for transaction in saved:
+        account_id = transaction.get("accountId")
+        if not account_id or account_id == upload_account_id:
+            continue
+        if int(transaction.get("amount", 0)) != -amount:
+            continue
+        days = _days_apart(row_date, parse_date(str(transaction.get("transactionDate", ""))))
+        if days is not None and days <= PAIR_WINDOW_DAYS:
+            matches.append(transaction)
+    return matches
+
+
+def _account_side(
+    account: Mapping[str, Any] | None,
+    suggested_by: SuggestedBy,
+    pair_with: dict[str, str] | None = None,
+    review: tuple[ReviewReason, ...] = (),
+) -> OtherSide:
+    """Return the other side for a known account.
+
+    Only a SPENDING or HOLDING account keeps the money in the household. An EXTERNAL or NON_CASH account counts as the
+    outside world, so a payment to a mortgage is an expense.
+    """
+
+    role = get_cash_flow_role(dict(account)) if account is not None else None
+    kind = SideKind.ACCOUNT if role in (CashFlowRole.SPENDING, CashFlowRole.HOLDING) else SideKind.OUTSIDE
+    return OtherSide(kind=kind, role=role, suggested_by=suggested_by, pair_with=pair_with, review=review)
