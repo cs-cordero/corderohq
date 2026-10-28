@@ -97,32 +97,29 @@ def densify(
 ) -> int:
     """Make every month up to `current_ym` dense. Return the number of rows written.
 
-    Each missing row gets the value of the nearest row before it, or None. An existing row does not change. When the
-    table is empty, each active key gets `cold_start_value` in `current_ym` only. A second call writes nothing.
+    The months to fill start after the latest month before `current_ym` that holds a row, and they always include
+    `current_ym`. The current month can already hold a row that the user set while it was in the future, so a row there
+    does not make the month dense. Each missing row gets the value of the nearest row before it, or None. An existing
+    row does not change. When no month before `current_ym` holds a row, each active key with no row gets
+    `cold_start_value` in `current_ym` only. A second call writes nothing.
     """
 
     rows = store.scan_stored_values()
     by_key = carry_map(rows)
 
-    past_months = sorted({year_month for year_month, _, _ in rows if year_month <= current_ym})
-    m_last = past_months[-1] if past_months else None
+    earlier_months = sorted({year_month for year_month, _, _ in rows if year_month < current_ym})
+    if earlier_months:
+        months_to_fill = _months_between_exclusive(earlier_months[-1], current_ym)
+    else:
+        months_to_fill = [current_ym]
 
-    if m_last is None:
-        for key in active_keys:
-            store.put_stored_value(current_ym, key, cold_start_value)
-        return len(active_keys)
-
-    if m_last >= current_ym:
-        return 0
-
-    months_to_fill = _months_between_exclusive(m_last, current_ym)
     rows_written = 0
     for month in months_to_fill:
         for key in active_keys:
             if (month, key) in by_key:
-                # A row is here already, such as a pin the user wrote before the month changed.
+                # A row is here already, such as a value the user set before the month changed.
                 continue
-            value = walk_back_for(by_key, month, key)
+            value = walk_back_for(by_key, month, key) if earlier_months else cold_start_value
             by_key[(month, key)] = value
             store.put_stored_value(month, key, value)
             rows_written += 1

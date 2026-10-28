@@ -749,7 +749,10 @@ previous month while it is in grace, or any locked month through the admin overr
 }
 ```
 
-This endpoint replaces every row. The handler checks the request in this order:
+This endpoint writes one row for each target, and each write replaces the row of its category. It
+writes all rows in one DynamoDB transaction, so all writes succeed or none of them do. It deletes
+no row. A month can hold at most 100 targets, the limit of one transaction. The handler checks the
+request in this order:
 
 1. **Editability**, as the **Enforcement** table states. If the app cannot write `{YYYY-MM}`, and no
    override applies, the handler returns `409` with the editability error and stops. It does not
@@ -855,9 +858,11 @@ When this runs during a request, the request waits for it to finish.
 
 ### Walk-forward through missed months
 
-The app first finds the year-months between `M_last` and `current_ym`. `M_last` is the most recent
-month that is dense already. `current_ym` is the month that holds now, in ET. It then takes each
-month `M` in that range, oldest first:
+The app first finds the year-months after `M_last`, up to and including `current_ym`. `M_last` is the
+most recent month before `current_ym` that has a row. `current_ym` is the month that holds now, in ET.
+The range always includes `current_ym`, even when it has rows already. A value that the user set in
+advance, through `/update`, puts a row in `current_ym` before the month starts. That row does not make
+the month dense. The app then takes each month `M` in that range, oldest first:
 
 1. For each category that is active now:
    - If a row exists at `(M, categoryId)`, from a value the user wrote earlier, leave it.
@@ -867,9 +872,9 @@ month `M` in that range, oldest first:
 2. The app adds no inactive category. It leaves in place an own value on an inactive category that exists
    already at `M`. The user may make the category active again, or may want the history.
 
-**The cold start, when no dense month exists.** `M_last` has no value when the Budget table is
-empty, so there is nothing to walk back to. The app then densifies `current_ym` only: it writes a
-row with `carriedAmount=0` for each category that is active. This is almost impossible in normal use. It
+**The cold start, when no dense month exists.** `M_last` has no value when the Budget table has no
+row before `current_ym`, so there is nothing to walk back to. The app then densifies `current_ym` only:
+it writes a row with `carriedAmount=0` for each category that is active and has no row there. This is almost impossible in normal use. It
 needs a new deploy, with categories made already, and before anyone opens a budget page. If it does
 happen, `$0` is a safe start, and the user can change it in the usual way.
 
@@ -1027,7 +1032,8 @@ that carries forward, so a change of frequency starts in the month where it is m
 A later month does not show it or count it, and the densify step does not copy it there. The end
 month is part of the value, so it carries forward like the other fields. Without the admin override:
 
-- An `endMonth` before the current month cannot be set.
+- An `endMonth` before the current month cannot be set. An `endMonth` before the month of the
+  write cannot be set either.
 - An end is locked once its month has passed, so the value of an ended income cannot change.
 - A restart is a new recurring income, with a new id.
 
@@ -1082,6 +1088,9 @@ own dense rows only, so its value never changes after the lock.
 - `SET_PIN` and `CLEAR_PIN` set or remove the value that only this month
   uses. See **Pinned values**.
 - Each `plannedIncomeId` and each income source must exist.
+- A new recurring income, or a move to a different income source, cannot name an inactive income
+  source. A recurring income can keep its inactive income source, so `/replace` can still send it.
+  The same rule applies to a one-time income. The admin override permits an inactive income source.
 - `/replace` needs every recurring income with a value in that month. The response is the month.
 - `/update` returns `{incomePlan: <the month>, warnings: {laterCarriedChanges, matchesInheritedValue}}`,
   the same two warnings as the budget `/update`.
@@ -1385,8 +1394,9 @@ SSM:
    (`spending_account_needs_flip()`). The "flip all signs" button on the review screen sends the
    file again with `flipSigns: true`. The response reports all three in `signCheck`.
 3. **Give a kind and a category.** `categorize_transactions()` sends each unique description one
-   time, with the active category names. It returns a `kind` (expense, refund, income,
-   card_payment, own_transfer) and a category for each one, and maps them back to every row.
+   time, with the active category names. Each LLM call holds at most 50 descriptions. It returns a
+   `kind` (expense, refund, income, card_payment, own_transfer) and a category for each one, and
+   maps them back to every row. An answer that the token limit cuts off is an error.
 4. **Suggest a budget treatment.** The import finds the other side of each row (see below). The
    direction table then gives the budget treatment. A transfer between two own accounts counts one time
    at most, on the side where the money leaves a spending account.

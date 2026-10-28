@@ -656,6 +656,30 @@ class TestIncomeReplace:
         body = {"recurring": [{"action": "CLEAR", "plannedIncomeId": "REC#a"}], "explanation": "x"}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 400
 
+    def test_a_recurring_income_keeps_its_inactive_source(self, tables: dict[str, MagicMock]) -> None:
+        tables["source"].get_income_source_by_id.return_value = _source("s1", active=False)
+        tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
+        body = {"recurring": [_set("REC#a", _RAISED_BODY)], "explanation": "raise"}
+        assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 200
+
+    def test_an_inactive_source_returns_400_for_a_new_or_moved_recurring_income(
+        self, tables: dict[str, MagicMock]
+    ) -> None:
+        tables["source"].get_income_source_by_id.return_value = _source("s1", active=False)
+        tables["plan"].scan_recurring_incomes.return_value = [
+            _recurring_item(_CURRENT, "REC#a", {**_SALARY_BODY, "incomeSourceId": "s2"})
+        ]
+        moved = {"recurring": [_set("REC#a")], "explanation": "x"}
+        result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", moved), None)
+        assert result["statusCode"] == 400
+        assert "is inactive" in result["body"]
+
+        kept = _set("REC#a", {**_SALARY_BODY, "incomeSourceId": "s2"})
+        created = {"recurring": [kept, _set(None)], "explanation": "x"}
+        assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", created), None)["statusCode"] == 400
+        admin = handler(_event("POST", f"/api/income/{_CURRENT}/replace", {**created, "override": True}, True), None)
+        assert admin["statusCode"] == 200
+
     def test_future_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
         body = {"recurring": [], "explanation": "x"}
         assert handler(_event("POST", f"/api/income/{_FUTURE}/replace", body), None)["statusCode"] == 409
@@ -718,6 +742,13 @@ class TestIncomeUpdate:
         admin = handler(_event("POST", f"/api/income/{_FUTURE}/update", {**body, "override": True}, True), None)
         assert admin["statusCode"] == 200
 
+    def test_an_end_month_before_the_month_returns_400(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
+        body = {"recurring": [_set("REC#a", {**_SALARY_BODY, "endMonth": _NEXT})], "explanation": "x"}
+        result = handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)
+        assert result["statusCode"] == 400
+        assert f"endMonth must not be before {_FUTURE}" in result["body"]
+
     def test_current_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
         body = {"recurring": [], "explanation": "x"}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/update", body), None)["statusCode"] == 409
@@ -774,6 +805,22 @@ class TestOneTimeIncomes:
         body = {**_RSU_BODY, "explanation": "x"}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/one-time", body), None)["statusCode"] == 400
         tables["plan"].create_one_time_income.assert_not_called()
+
+    def test_an_inactive_source_returns_400_unless_the_income_has_it_already(
+        self, tables: dict[str, MagicMock]
+    ) -> None:
+        tables["source"].get_income_source_by_id.return_value = _source("s1", active=False)
+        body = {**_RSU_BODY, "explanation": "x"}
+        assert handler(_event("POST", f"/api/income/{_CURRENT}/one-time", body), None)["statusCode"] == 400
+        tables["plan"].create_one_time_income.assert_not_called()
+
+        tables["plan"].get_planned_income.return_value = {
+            **_one_time_item(_CURRENT, "ONE#x", 1_000),
+            "incomeSourceId": "s1",
+        }
+        tables["plan"].update_one_time_income.return_value = _one_time_item(_CURRENT, "ONE#x", 10_000)
+        update = {**body, "plannedIncomeId": "ONE#x"}
+        assert handler(_event("POST", f"/api/income/{_CURRENT}/one-time", update), None)["statusCode"] == 200
 
     def test_locked_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
         body = {**_RSU_BODY, "explanation": "x"}

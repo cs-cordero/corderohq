@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from corderohq.aws.dynamodb import BudgetTable, BudgetTargetAmounts
 
 
@@ -37,18 +39,36 @@ class TestGetTargets:
 
 
 class TestPutTargets:
-    def test_deletes_old_and_writes_new(self) -> None:
+    def test_writes_each_target_in_one_transaction(self) -> None:
         table, mock = _make_table()
-        batch_mock = MagicMock()
-        mock.batch_writer.return_value.__enter__ = MagicMock(return_value=batch_mock)
-        mock.batch_writer.return_value.__exit__ = MagicMock(return_value=False)
-        mock.query.return_value = {"Items": [{"yearMonth": "2026-03", "categoryId": "old_cat", "carriedAmount": 100}]}
+        mock.name = "Budget-test"
+        targets = {
+            "cat1": BudgetTargetAmounts(carried_amount=200),
+            "cat2": BudgetTargetAmounts(carried_amount=0, pinned_amount=50),
+        }
 
-        result = table.set_all_budget_targets("2026-03", {"new_cat": BudgetTargetAmounts(carried_amount=200)})
+        result = table.set_all_budget_targets("2026-03", targets)
 
-        assert len(result) == 1
-        assert result[0]["categoryId"] == "new_cat"
-        assert result[0]["carriedAmount"] == 200
+        expected = [
+            {"yearMonth": "2026-03", "categoryId": "cat1", "carriedAmount": 200},
+            {"yearMonth": "2026-03", "categoryId": "cat2", "carriedAmount": 0, "pinnedAmount": 50},
+        ]
+        mock.meta.client.transact_write_items.assert_called_once_with(
+            TransactItems=[{"Put": {"TableName": "Budget-test", "Item": item}} for item in expected]
+        )
+        assert result == expected
+
+    def test_no_targets_writes_nothing(self) -> None:
+        table, mock = _make_table()
+        assert table.set_all_budget_targets("2026-03", {}) == []
+        mock.meta.client.transact_write_items.assert_not_called()
+
+    def test_more_targets_than_one_transaction_holds_is_an_error(self) -> None:
+        table, mock = _make_table()
+        targets = {f"cat{n}": BudgetTargetAmounts(carried_amount=n) for n in range(101)}
+        with pytest.raises(ValueError, match="at most 100"):
+            table.set_all_budget_targets("2026-03", targets)
+        mock.meta.client.transact_write_items.assert_not_called()
 
 
 class TestScan:

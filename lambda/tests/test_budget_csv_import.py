@@ -2,6 +2,8 @@ import json
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 os.environ.setdefault("SSM_API_KEY_PARAM", "/budget/anthropic-api-key")
 
 from corderohq.budget.csv_import import (
@@ -140,6 +142,42 @@ class TestCategorizeTransactions:
         result = categorize_transactions(["Store"], [{"categoryId": "cat1", "name": "Groceries"}])
 
         assert result == [{"index": 0, "kind": None, "categoryId": "", "categoryName": ""}]
+
+
+class TestCategorizeTransactionsInBatches:
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
+    def test_many_descriptions_go_in_batches_and_map_back(
+        self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock
+    ) -> None:
+        def answer(**kwargs: object) -> MagicMock:
+            text = kwargs["messages"][0]["content"][0]["text"]  # type: ignore[index]
+            lines = [line for line in text.split("\n") if "|" in line and line.split("|")[0].isdigit()]
+            return _mock_llm_response(
+                json.dumps(
+                    [{"index": int(line.split("|")[0]), "kind": "expense", "categoryId": "cat1"} for line in lines]
+                )
+            )
+
+        mock_anthropic_cls.return_value.messages.create.side_effect = answer
+        descriptions = [f"Shop {n}" for n in range(60)]
+
+        result = categorize_transactions(descriptions, [{"categoryId": "cat1", "name": "Food"}])
+
+        assert mock_anthropic_cls.return_value.messages.create.call_count == 2
+        assert [r["categoryName"] for r in result] == ["Food"] * 60
+
+    @patch("corderohq.budget.csv_import.llm.get_ssm_param", return_value="sk-ant-test")
+    @patch("corderohq.budget.csv_import.llm.anthropic.Anthropic")
+    def test_an_answer_cut_off_at_the_token_limit_is_an_error(
+        self, mock_anthropic_cls: MagicMock, mock_ssm: MagicMock
+    ) -> None:
+        response = _mock_llm_response("[{")
+        response.stop_reason = "max_tokens"
+        mock_anthropic_cls.return_value.messages.create.return_value = response
+
+        with pytest.raises(ValueError, match="cut off"):
+            categorize_transactions(["Shop"], [{"categoryId": "cat1", "name": "Food"}])
 
 
 class TestLocalChecks:

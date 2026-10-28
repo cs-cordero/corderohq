@@ -10,6 +10,8 @@ from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_a
 from corderohq.budget.densify import DenseSparseStore, StoredValue
 
 _LOGGER = logging.getLogger(__name__)
+# The most items that one DynamoDB TransactWriteItems call can hold.
+_MAX_TRANSACTION_ITEMS = 100
 
 
 @dataclass(frozen=True)
@@ -68,19 +70,22 @@ class BudgetTable:
     def set_all_budget_targets(
         self, year_month: str, targets: Mapping[str, BudgetTargetAmounts]
     ) -> list[dict[str, Any]]:
-        """Set the budget targets for one month, by categoryId. This writes over every target in that month."""
+        """Write the budget targets of one month, by categoryId, in one transaction.
 
-        existing = self.get_budget_targets(year_month)
-        with self._table.batch_writer() as batch:
-            for item in existing:
-                batch.delete_item(Key={"yearMonth": year_month, "categoryId": item["categoryId"]})
+        Each write replaces the row of its category. All writes succeed, or none of them do. A category that is not in
+        `targets` keeps its row.
+        """
 
-        items: list[dict[str, Any]] = []
-        with self._table.batch_writer() as batch:
-            for category_id, amounts in targets.items():
-                item = {"yearMonth": year_month, "categoryId": category_id, **amounts.to_item()}
-                batch.put_item(Item=item)
-                items.append(item)
+        if len(targets) > _MAX_TRANSACTION_ITEMS:
+            raise ValueError(f"a month can hold at most {_MAX_TRANSACTION_ITEMS} budget targets, not {len(targets)}")
+        items = [
+            {"yearMonth": year_month, "categoryId": category_id, **amounts.to_item()}
+            for category_id, amounts in targets.items()
+        ]
+        if items:
+            self._table.meta.client.transact_write_items(
+                TransactItems=[{"Put": {"TableName": self._table.name, "Item": item}} for item in items]
+            )
 
         _LOGGER.info("Set %d targets for %s", len(items), year_month)
         return items

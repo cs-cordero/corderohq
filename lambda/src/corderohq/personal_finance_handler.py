@@ -1202,23 +1202,51 @@ def _get_income(year_month: str, now: datetime) -> dict[str, Any]:
     return _json_response(200, json.dumps(_income_plan_response(year_month, now), default=_json_default))
 
 
-def _check_recurring_income_changes(changes: list[RecurringIncomeChange], known_ids: set[str]) -> dict[str, Any] | None:
-    """Return a 400 response if a change names an unknown recurring income or income source, else None."""
+def _check_recurring_income_changes(
+    changes: list[RecurringIncomeChange],
+    carried: dict[tuple[str, str], RecurringIncome],
+    year_month: str,
+    override_active: bool,
+) -> dict[str, Any] | None:
+    """Return a 400 response if a change names an unknown recurring income or income source, else None.
+
+    A new recurring income, or a move to a different income source, cannot name an inactive income source. A
+    recurring income can keep its inactive income source. The admin override permits an inactive income source.
+    """
 
     for index, change in enumerate(changes):
         planned_income_id = change.planned_income_id
-        if planned_income_id is not None and planned_income_id not in known_ids:
-            return _response(400, f"recurring[{index}]: recurring income '{planned_income_id}' does not exist")
+        previous: RecurringIncome | None = None
+        if planned_income_id is not None:
+            previous = value_at_or_before(carried, year_month, planned_income_id) or next(
+                (value for (_, key), value in carried.items() if key == planned_income_id), None
+            )
+            if previous is None:
+                return _response(400, f"recurring[{index}]: recurring income '{planned_income_id}' does not exist")
         match change:
             case SetRecurringIncome(income=income) | SetPin(income=income):
-                if _INCOME_SOURCE_TABLE.get_income_source_by_id(income.income_source_id) is None:
-                    return _response(
-                        400, f"recurring[{index}]: income source '{income.income_source_id}' does not exist"
-                    )
+                previous_source_id = previous.income_source_id if previous is not None else None
+                err = _check_income_source(income.income_source_id, previous_source_id, override_active)
+                if err:
+                    return _response(400, f"recurring[{index}]: {err}")
             case ClearRecurringIncome() | ClearPin():
                 pass
             case _:
                 assert_never(change)
+    return None
+
+
+def _check_income_source(income_source_id: str, previous_source_id: str | None, override_active: bool) -> str | None:
+    """Return an error message if the income source does not exist, else None.
+
+    An inactive income source is an error too, if it is not `previous_source_id` and the admin override is off.
+    """
+
+    source = _INCOME_SOURCE_TABLE.get_income_source_by_id(income_source_id)
+    if source is None:
+        return f"income source '{income_source_id}' does not exist"
+    if not source.get("active", True) and income_source_id != previous_source_id and not override_active:
+        return f"income source '{income_source_id}' is inactive"
     return None
 
 
@@ -1231,18 +1259,19 @@ def _check_end_month_rules(
 ) -> dict[str, Any] | None:
     """Return a 400 response if a change breaks a rule of the end month, else None.
 
-    An end month before the current month cannot be set, and a recurring income whose end month has passed cannot
-    change. The admin override permits both.
+    An end month before the current month or before `year_month` cannot be set, and a recurring income whose end
+    month has passed cannot change. The admin override permits both.
     """
 
     if override_active:
         return None
     current_ym = _year_month_of(now)
+    floor = max(current_ym, year_month)
     for index, change in enumerate(changes):
         match change:
             case SetRecurringIncome(income=income) | SetPin(income=income):
-                if income.end_month is not None and income.end_month < current_ym:
-                    return _response(400, f"recurring[{index}]: endMonth must not be before {current_ym}")
+                if income.end_month is not None and income.end_month < floor:
+                    return _response(400, f"recurring[{index}]: endMonth must not be before {floor}")
             case ClearRecurringIncome() | ClearPin():
                 pass
             case _:
@@ -1330,7 +1359,7 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     store = RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE)
     carried = carry_map(store.scan_stored_values())
     pinned = carry_map(store.scan_pinned_values())
-    err = _check_recurring_income_changes(changes, {key for _, key in carried})
+    err = _check_recurring_income_changes(changes, carried, year_month, override_active)
     if err:
         return err
     err = _check_end_month_rules(changes, carried, year_month, now, override_active)
@@ -1472,7 +1501,7 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     store = RecurringIncomeDensifyAdapter(_PLANNED_INCOME_TABLE)
     carried = carry_map(store.scan_stored_values())
     pinned = carry_map(store.scan_pinned_values())
-    err = _check_recurring_income_changes(changes, {key for _, key in carried})
+    err = _check_recurring_income_changes(changes, carried, year_month, override_active)
     if err:
         return err
     err = _check_end_month_rules(changes, carried, year_month, now, override_active)
@@ -1665,7 +1694,7 @@ def _create_one_time_income(
 ) -> dict[str, Any]:
     """Create a one-time income, and write a ONE_TIME_INCOME_CREATE audit entry."""
 
-    err = _check_one_time_income_source(args.income)
+    err = _check_one_time_income_source(args.income, None, override_active)
     if err:
         return err
     item = _PLANNED_INCOME_TABLE.create_one_time_income(year_month, args.income)
@@ -1690,7 +1719,8 @@ def _update_one_time_income(
     stored = _PLANNED_INCOME_TABLE.get_planned_income(year_month, args.planned_income_id)
     if stored is None:
         return _response(404, "One-time income not found")
-    err = _check_one_time_income_source(args.income)
+    before = parse_one_time_income(stored)
+    err = _check_one_time_income_source(args.income, before.income_source_id, override_active)
     if err:
         return err
     item = _PLANNED_INCOME_TABLE.update_one_time_income(year_month, args.planned_income_id, args.income)
@@ -1698,7 +1728,7 @@ def _update_one_time_income(
         year_month,
         AuditAction.ONE_TIME_INCOME_UPDATE,
         args.planned_income_id,
-        before=parse_one_time_income(stored),
+        before=before,
         after=args.income,
         explanation=explanation,
         user=user,
@@ -1729,14 +1759,18 @@ def _delete_one_time_income(
     return _json_response(200, json.dumps({"deleted": args.planned_income_id}, default=_json_default))
 
 
-def _check_one_time_income_source(income: OneTimeIncome) -> dict[str, Any] | None:
-    """Return a 400 response if the one-time income names an income source that does not exist, else None."""
+def _check_one_time_income_source(
+    income: OneTimeIncome, previous_source_id: str | None, override_active: bool
+) -> dict[str, Any] | None:
+    """Return a 400 response if the one-time income names a bad income source, else None.
+
+    See `_check_income_source` for the rules.
+    """
 
     if income.income_source_id is None:
         return None
-    if _INCOME_SOURCE_TABLE.get_income_source_by_id(income.income_source_id) is None:
-        return _response(400, f"income source '{income.income_source_id}' does not exist")
-    return None
+    err = _check_income_source(income.income_source_id, previous_source_id, override_active)
+    return _response(400, err) if err else None
 
 
 def _write_one_time_income_audit(
