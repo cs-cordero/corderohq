@@ -635,6 +635,23 @@ class TestIncomeReplace:
         admin = handler(_event("POST", f"/api/income/{_CURRENT}/replace", {**body, "override": True}, True), None)
         assert admin["statusCode"] == 200
 
+    def test_an_ended_recurring_income_with_no_change_does_not_block_the_grace_month(
+        self, tables: dict[str, MagicMock], _freeze_now: MagicMock
+    ) -> None:
+        _freeze_now.return_value = datetime(2026, 6, 3, 12, 0, 0, tzinfo=UTC)
+        grace = "2026-05"
+        ended = {**_SALARY_BODY, "endMonth": grace}
+        tables["plan"].scan_recurring_incomes.return_value = [
+            _recurring_item(grace, "REC#a", ended),
+            _recurring_item(grace, "REC#b"),
+        ]
+        body = {"recurring": [_set("REC#a", ended), _set("REC#b", _RAISED_BODY)], "explanation": "raise"}
+        result = handler(_event("POST", f"/api/income/{grace}/replace", body), None)
+        assert result["statusCode"] == 200
+        tables["plan"].put_recurring_income.assert_called_once_with(
+            grace, "REC#b", RecurringIncomeValues(carried=parse_recurring_income(_RAISED_BODY))
+        )
+
     def test_body_must_hold_every_recurring_income_with_a_value(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [
             _recurring_item(_CURRENT, "REC#a"),

@@ -5,6 +5,7 @@ import {
     parseAccountArray,
     parseAuditEntryArray,
     parseBudgetTargetArray,
+    parseBudgetUpdateResult,
     parseCategory,
     parseCategoryArray,
     parseCategoryGroup,
@@ -15,18 +16,31 @@ import {
     parseDeletedGroup,
     parseDeletedPerson,
     parseDeletionPreview,
+    parseDeactivateIncomeSourceResult,
+    parseDeletedOneTimeIncome,
     parseHardDeleteResult,
+    parseIncomeMonth,
+    parseIncomeSource,
+    parseIncomeSourceArray,
+    parseIncomeUpdateResult,
     parseNetWorthHistory,
     parseNetWorthMonth,
+    parseOneTimeIncomeItem,
     parsePerson,
     parsePersonArray,
-    parsePinResult,
     parseSummary,
     parseTransaction,
     parseTransactionArray,
     parseUploadResult,
 } from "./parsers";
-import type { AccountCreate, AccountUpdate, Transaction } from "./types";
+import type {
+    AccountCreate,
+    AccountUpdate,
+    BudgetTreatment,
+    OneTimeIncome,
+    RecurringIncomeChange,
+    Transaction,
+} from "./types";
 
 const API_BASE = "/api";
 
@@ -122,7 +136,8 @@ export const hardDeleteCategory = (id: string, opts: { confirm: true; confirmNam
 export const fetchBudget = (yearMonth: string) => request(`/budget/${yearMonth}`, parseBudgetTargetArray);
 export const replaceBudget = (
     yearMonth: string,
-    targets: { categoryId: string; amount: number }[],
+    // `pinnedAmount`: a number sets the pinned amount, null clears it, and absent keeps it.
+    targets: { categoryId: string; carriedAmount: number; pinnedAmount?: number | null }[],
     explanation: string,
     override = false,
 ) =>
@@ -130,12 +145,13 @@ export const replaceBudget = (
         method: "POST",
         ...jsonBody({ targets, explanation, ...(override ? { override: true } : {}) }),
     });
-export const pinBudget = (
+export const updateBudget = (
     yearMonth: string,
-    targets: { categoryId: string; amount: number | null }[],
+    // Each key is optional. A number sets that value, null removes it, and absent keeps it.
+    targets: { categoryId: string; carriedAmount?: number | null; pinnedAmount?: number | null }[],
     explanation: string,
 ) =>
-    request(`/budget/${yearMonth}/pin`, parsePinResult, {
+    request(`/budget/${yearMonth}/update`, parseBudgetUpdateResult, {
         method: "POST",
         ...jsonBody({ targets, explanation }),
     });
@@ -149,7 +165,10 @@ export const createTransaction = (
         transactionDate: string;
         description: string;
         amount: number;
-        categoryId: string;
+        budgetTreatment: BudgetTreatment;
+        // Required for BUDGET_IMPACTING, optional for OFF_BUDGET. The server drops it for SKIP.
+        categoryId?: string;
+        note?: string;
     },
     override = false,
 ) =>
@@ -160,7 +179,9 @@ export const createTransaction = (
 export const updateTransaction = (
     yearMonth: string,
     sortId: string,
-    updates: Partial<Pick<Transaction, "description" | "amount" | "categoryId">>,
+    // An empty string for `categoryId` or `note` removes the value. A change to SKIP removes the
+    // category on the server.
+    updates: Partial<Pick<Transaction, "description" | "amount" | "budgetTreatment" | "categoryId" | "note">>,
     override = false,
 ) =>
     request("/transactions/update", parseTransaction, {
@@ -172,13 +193,22 @@ export const deleteTransactions = (items: { yearMonth: string; sortId: string }[
         method: "POST",
         ...jsonBody({ items, ...(override ? { override: true } : {}) }),
     });
-export const uploadTransactions = (csvData: string) =>
+export const uploadTransactions = (csvData: string, accountId: string, flipSigns = false) =>
     request("/transactions/upload", parseUploadResult, {
         method: "POST",
-        ...jsonBody({ csvData }),
+        ...jsonBody({ csvData, accountId, ...(flipSigns ? { flipSigns: true } : {}) }),
     });
 export const commitTransactions = (
-    rows: { transactionDate: string; description: string; amount: number; categoryId: string }[],
+    rows: {
+        transactionDate: string;
+        description: string;
+        amount: number;
+        budgetTreatment: BudgetTreatment;
+        categoryId?: string;
+        accountId: string;
+        note?: string;
+        fingerprint: string;
+    }[],
     override = false,
 ) =>
     request("/transactions/commit", parseCommitResult, {
@@ -186,14 +216,78 @@ export const commitTransactions = (
         ...jsonBody({ rows, ...(override ? { override: true } : {}) }),
     });
 
+// Income sources and the income plan
+export const fetchAllIncomeSources = () => request("/income-sources?include_inactive=true", parseIncomeSourceArray);
+export const createIncomeSource = (data: { owners: string[]; label: string }) =>
+    request("/income-sources", parseIncomeSource, { method: "POST", ...jsonBody(data) });
+export const updateIncomeSource = (id: string, updates: { label?: string; owners?: string[] }) =>
+    request(`/income-sources/${id}`, parseIncomeSource, { method: "PUT", ...jsonBody(updates) });
+export const reorderIncomeSources = (order: string[]) =>
+    request("/income-sources/reorder", parseIncomeSourceArray, { method: "POST", ...jsonBody({ order }) });
+export const deactivateIncomeSource = (id: string, opts: { confirm?: boolean; explanation?: string } = {}) =>
+    request(`/income-sources/${id}/deactivate`, parseDeactivateIncomeSourceResult, {
+        method: "POST",
+        ...jsonBody(opts),
+    });
+export const reactivateIncomeSource = (id: string) =>
+    request(`/income-sources/${id}/reactivate`, parseIncomeSource, { method: "POST" });
+export const fetchIncomeMonth = (yearMonth: string) => request(`/income/${yearMonth}`, parseIncomeMonth);
+export const replaceIncome = (
+    yearMonth: string,
+    // The body must hold each recurring income with a carried value in the month.
+    recurring: RecurringIncomeChange[],
+    explanation: string,
+    override = false,
+) =>
+    request(`/income/${yearMonth}/replace`, parseIncomeMonth, {
+        method: "POST",
+        ...jsonBody({ recurring, explanation, ...(override ? { override: true } : {}) }),
+    });
+export const updateIncome = (
+    yearMonth: string,
+    recurring: RecurringIncomeChange[],
+    explanation: string,
+    // The override only lifts the rules of the end month and of an inactive income source.
+    override = false,
+) =>
+    request(`/income/${yearMonth}/update`, parseIncomeUpdateResult, {
+        method: "POST",
+        ...jsonBody({ recurring, explanation, ...(override ? { override: true } : {}) }),
+    });
+export const createOneTimeIncome = (yearMonth: string, income: OneTimeIncome, explanation: string, override = false) =>
+    request(`/income/${yearMonth}/one-time`, parseOneTimeIncomeItem, {
+        method: "POST",
+        ...jsonBody({ ...income, explanation, ...(override ? { override: true } : {}) }),
+    });
+export const updateOneTimeIncome = (
+    yearMonth: string,
+    plannedIncomeId: string,
+    income: OneTimeIncome,
+    explanation: string,
+    override = false,
+) =>
+    request(`/income/${yearMonth}/one-time`, parseOneTimeIncomeItem, {
+        method: "POST",
+        ...jsonBody({ ...income, plannedIncomeId, explanation, ...(override ? { override: true } : {}) }),
+    });
+export const deleteOneTimeIncome = (
+    yearMonth: string,
+    plannedIncomeId: string,
+    explanation: string,
+    override = false,
+) =>
+    request(`/income/${yearMonth}/one-time`, parseDeletedOneTimeIncome, {
+        method: "POST",
+        ...jsonBody({ plannedIncomeId, delete: true, explanation, ...(override ? { override: true } : {}) }),
+    });
+
 // Household profile (people)
-export const fetchProfile = () => request("/profile", parsePersonArray);
+export const fetchProfile = () => request("/profiles", parsePersonArray);
 export const createPerson = (name: string, birthYearMonth: string) =>
-    request("/profile/people", parsePerson, { method: "POST", ...jsonBody({ name, birthYearMonth }) });
+    request("/profiles", parsePerson, { method: "POST", ...jsonBody({ name, birthYearMonth }) });
 export const updatePerson = (id: string, updates: { name?: string; birthYearMonth?: string }) =>
-    request(`/profile/people/${id}`, parsePerson, { method: "PUT", ...jsonBody(updates) });
-export const deletePerson = (id: string) =>
-    request(`/profile/people/${id}/delete`, parseDeletedPerson, { method: "POST" });
+    request(`/profiles/${id}`, parsePerson, { method: "PUT", ...jsonBody(updates) });
+export const deletePerson = (id: string) => request(`/profiles/${id}/delete`, parseDeletedPerson, { method: "POST" });
 
 // Accounts
 export const fetchAccounts = () => request("/accounts", parseAccountArray);

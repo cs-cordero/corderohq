@@ -26,6 +26,9 @@ import {
     ACCOUNT_TYPES,
     ASSET_CLASS_LABELS,
     ASSET_CLASSES,
+    CASH_FLOW_ROLE_LABELS,
+    CASH_FLOW_ROLES,
+    DEFAULT_CASH_FLOW_ROLES,
     TARGET_YEAR_VINTAGES,
     type Account,
     type AccountCreate,
@@ -50,6 +53,8 @@ interface AccountFormState {
     loanRatePct: string; // e.g. "4.875" (percent) — converted to a decimal on submit
     loanPayment: string; // dollars, e.g. "2500.00"
     loanPayoff: string; // YYYY-MM
+    cashFlowRole: string; // "" means the default for the type
+    accountNumberLastFour: string; // comma-separated, e.g. "1234, 5678"
 }
 
 function emptyForm(): AccountFormState {
@@ -66,7 +71,21 @@ function emptyForm(): AccountFormState {
         loanRatePct: "",
         loanPayment: "",
         loanPayoff: "",
+        cashFlowRole: "",
+        accountNumberLastFour: "",
     };
+}
+
+// Read the comma-separated "last four digits" field. Each entry must be 4 digits.
+function parseAccountNumberLastFour(text: string): string[] {
+    const entries = text
+        .split(",")
+        .map((t) => t.trim())
+        .filter((t) => t !== "");
+    for (const entry of entries) {
+        if (!/^\d{4}$/.test(entry)) throw new Error(`"${entry}" is not 4 digits`);
+    }
+    return entries;
 }
 
 function formFromAccount(account: Account): AccountFormState {
@@ -83,6 +102,8 @@ function formFromAccount(account: Account): AccountFormState {
         loanRatePct: lt ? String(+(lt.interestRate * 100).toFixed(6)) : "",
         loanPayment: lt ? (lt.monthlyPayment / 1_000_000).toFixed(2) : "",
         loanPayoff: lt ? lt.payoffYearMonth : "",
+        cashFlowRole: account.cashFlowRole ?? "",
+        accountNumberLastFour: (account.accountNumberLastFour ?? []).join(", "),
     };
 }
 
@@ -288,6 +309,15 @@ export default function AccountsPage() {
             return;
         }
 
+        let accountNumberLastFour: string[];
+        try {
+            accountNumberLastFour = parseAccountNumberLastFour(form.accountNumberLastFour);
+        } catch (err) {
+            showError(err);
+            return;
+        }
+        const cashFlowRole = CASH_FLOW_ROLES.find((r) => r === form.cashFlowRole) ?? null;
+
         // Only send a targetYear when target_date is among the classes; otherwise the
         // server rejects it (and clears any stale one on update).
         const targetYear = form.assetClasses.includes("target_date") ? form.targetYear : null;
@@ -304,7 +334,11 @@ export default function AccountsPage() {
                 if (targetYear !== null) data.targetYear = targetYear;
                 if (loanTerms) data.loanTerms = loanTerms;
                 if (form.notes.trim()) data.notes = form.notes.trim();
-                await createAccount(data);
+                const created = await createAccount(data);
+                // The create route takes no budget fields. Send them in a second call.
+                if (cashFlowRole !== null || accountNumberLastFour.length > 0) {
+                    await updateAccount(created.accountId, { cashFlowRole, accountNumberLastFour });
+                }
                 showSuccess(`Created "${name}"`);
             } else {
                 // accountType/liability are immutable, so they're never sent. Asset
@@ -316,6 +350,8 @@ export default function AccountsPage() {
                     targetYear,
                     loanTerms,
                     notes: form.notes.trim() ? form.notes.trim() : null,
+                    cashFlowRole,
+                    accountNumberLastFour,
                 };
                 if (assetClassEditable) updates.assetClasses = form.assetClasses;
                 await updateAccount(editingId, updates);
@@ -645,6 +681,42 @@ export default function AccountsPage() {
                         <span className="hint">
                             Track this account's balances but leave them out of Total Assets / Liabilities / Net Worth
                             (e.g. a 529 you follow but don't own).
+                        </span>
+                    </div>
+
+                    <div className="form-field">
+                        <label htmlFor="acct-cash-flow-role">Cash flow role (for CSV uploads)</label>
+                        <select
+                            id="acct-cash-flow-role"
+                            value={form.cashFlowRole}
+                            onChange={(e) => setForm({ ...form, cashFlowRole: e.target.value })}
+                        >
+                            <option value="">
+                                Default for the type
+                                {DEFAULT_CASH_FLOW_ROLES[form.accountType]
+                                    ? ` (${CASH_FLOW_ROLE_LABELS[DEFAULT_CASH_FLOW_ROLES[form.accountType]]})`
+                                    : " (none — no CSV uploads)"}
+                            </option>
+                            {CASH_FLOW_ROLES.map((r) => (
+                                <option key={r} value={r}>
+                                    {CASH_FLOW_ROLE_LABELS[r]}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+
+                    <div className="form-field">
+                        <label htmlFor="acct-last-four">Last four digits of the account number (optional)</label>
+                        <input
+                            id="acct-last-four"
+                            type="text"
+                            value={form.accountNumberLastFour}
+                            placeholder="1234, 5678"
+                            onChange={(e) => setForm({ ...form, accountNumberLastFour: e.target.value })}
+                        />
+                        <span className="hint">
+                            The CSV import looks for these digits in a description, to find a transfer to or from this
+                            account.
                         </span>
                     </div>
 

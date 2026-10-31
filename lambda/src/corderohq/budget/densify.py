@@ -108,10 +108,7 @@ def densify(
     by_key = carry_map(rows)
 
     earlier_months = sorted({year_month for year_month, _, _ in rows if year_month < current_ym})
-    if earlier_months:
-        months_to_fill = _months_between_exclusive(earlier_months[-1], current_ym)
-    else:
-        months_to_fill = [current_ym]
+    months_to_fill = _months_between_exclusive(earlier_months[-1], current_ym) if earlier_months else [current_ym]
 
     rows_written = 0
     for month in months_to_fill:

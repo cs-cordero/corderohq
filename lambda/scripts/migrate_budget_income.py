@@ -42,8 +42,9 @@ def main() -> None:
     default. Run it on dev first, then on prod, right after the budget income code is deployed to that stage.
 
     Usage:
-        uv run python lambda/scripts/migrate_budget_income.py --stage dev
-        uv run python lambda/scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
+        cd lambda
+        uv run python scripts/migrate_budget_income.py --stage dev
+        uv run python scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
     """
 
     parser = argparse.ArgumentParser(description=main.__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

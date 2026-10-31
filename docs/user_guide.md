@@ -212,11 +212,11 @@ goal is `$0`. The summary page and the Allocations page show it.
    app calculates the net amount. The pay frequency sets the times that the plan counts it in each
    month: weekly 4, every two weeks 2, twice a month 2, and monthly 1. A recurring income starts in
    the month where you add it, and carries forward.
-2. **Change a recurring income.** Change it in the month where the change starts. The change
-   carries forward to the later months. To change one month only, pin it: a pinned value never
-   carries forward. To end an income, set its end month, the last month that counts it. Only an
-   admin can change an end month that has passed. If the income starts again later, add a new
-   recurring income.
+2. **Change a recurring income.** Change it in the month where the change starts, and choose "From
+   this month on". The change carries forward to the later months. To change one month only, choose
+   "This month only": that value never carries forward. To end an income, set its "Last month", the
+   last month that counts it. Only an admin can change an end month that has passed. If the income
+   starts again later, add a new recurring income.
 3. **Add extra money.** For a bonus, an RSU vest, a third paycheck, or a DCFSA payout that you want
    to budget, add a one-time income in that month. It can name its income source, and it can have
    deductions. Extra money with no one-time income is not part of the plan.
@@ -240,8 +240,9 @@ Run this one time on each stage, right after the budget income code is deployed 
 it on dev first. Without `--apply`, it only prints what it would change:
 
 ```bash
-uv run python lambda/scripts/migrate_budget_income.py --stage dev
-uv run python lambda/scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
+cd lambda
+uv run python scripts/migrate_budget_income.py --stage dev
+uv run python scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
 ```
 
 It does three things:
