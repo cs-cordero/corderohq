@@ -9,14 +9,24 @@ import type {
     AuditEntry,
     AuditUser,
     BudgetTarget,
+    BudgetUpdateResult,
     Category,
     CategoryGroup,
     CategoryNameHistoryEntry,
     ColumnMapping,
     CommitResult,
+    DeactivateIncomeSourceResult,
     DeactivateResult,
+    BudgetTreatment,
+    Deduction,
     DeletionPreview,
     HardDeleteResult,
+    IncomeMonth,
+    IncomeMonthOneTime,
+    IncomeMonthRecurring,
+    IncomeSource,
+    IncomeSourceFields,
+    IncomeUpdateResult,
     LoanTerms,
     NetWorthHistory,
     NetWorthClassEntry,
@@ -24,16 +34,22 @@ import type {
     NetWorthPrefill,
     NetWorthRow,
     NetWorthTotals,
+    OneTimeIncome,
+    PairWith,
     ParsedTransaction,
     Person,
-    PinResult,
+    RecurringIncome,
+    ReviewReason,
     RowValidation,
     RowValidationIssue,
+    SignCheck,
+    SuggestedBy,
     Summary,
     SummaryCategory,
     Transaction,
     UploadResult,
 } from "./types";
+import { CASH_FLOW_ROLES, DEDUCTION_KINDS, BUDGET_TREATMENTS, PAY_FREQUENCIES } from "./types";
 import {
     arrayOf,
     isObject,
@@ -133,23 +149,22 @@ export function parseHardDeleteResult(raw: unknown): HardDeleteResult {
 
 export function parseBudgetTarget(raw: unknown): BudgetTarget {
     const obj = requireObject(raw, "BudgetTarget");
-    // Densification writes `amount=null` for cells with no walk-back history
-    // (architecture: "New category, no prior history"). Null means "no target";
-    // the UI surfaces it as $0 because BudgetPage already coerces with `?? 0`.
-    const rawAmount = obj.amount;
-    let amount: number;
-    if (rawAmount === null) {
-        amount = 0;
-    } else if (typeof rawAmount === "number") {
-        amount = rawAmount;
+    // A future month with no value in any earlier month has `carriedAmount: null`. The page shows 0.
+    const rawCarried = obj.carriedAmount;
+    let carriedAmount: number;
+    if (rawCarried === null || rawCarried === undefined) {
+        carriedAmount = 0;
+    } else if (typeof rawCarried === "number") {
+        carriedAmount = rawCarried;
     } else {
-        throw new Error(`BudgetTarget.amount must be a number or null, got ${typeof rawAmount}`);
+        throw new Error(`BudgetTarget.carriedAmount must be a number or null, got ${typeof rawCarried}`);
     }
     return {
         yearMonth: requireString(obj, "yearMonth", "BudgetTarget"),
         categoryId: requireString(obj, "categoryId", "BudgetTarget"),
-        amount,
-        pinned: optionalBoolean(obj, "pinned", "BudgetTarget"),
+        carriedAmount,
+        inherited: optionalBoolean(obj, "inherited", "BudgetTarget"),
+        pinnedAmount: typeof obj.pinnedAmount === "number" ? obj.pinnedAmount : undefined,
     };
 }
 
@@ -157,27 +172,42 @@ export function parseBudgetTargetArray(raw: unknown): BudgetTarget[] {
     return arrayOf(raw, parseBudgetTarget, "BudgetTarget[]");
 }
 
-function parseDownstreamPin(raw: unknown): { categoryId: string; yearMonth: string } {
-    const obj = requireObject(raw, "DownstreamPin");
+function parseLaterCarriedChange<K extends string>(raw: unknown, key: K): Record<K, string> & { yearMonth: string } {
+    const obj = requireObject(raw, "LaterCarriedChange");
     return {
-        categoryId: requireString(obj, "categoryId", "DownstreamPin"),
-        yearMonth: requireString(obj, "yearMonth", "DownstreamPin"),
-    };
+        [key]: requireString(obj, key, "LaterCarriedChange"),
+        yearMonth: requireString(obj, "yearMonth", "LaterCarriedChange"),
+    } as Record<K, string> & { yearMonth: string };
 }
 
-export function parsePinResult(raw: unknown): PinResult {
-    const obj = requireObject(raw, "PinResult");
-    const warnings = requireObject(obj.warnings, "PinResult.warnings");
+export function parseBudgetUpdateResult(raw: unknown): BudgetUpdateResult {
+    const obj = requireObject(raw, "BudgetUpdateResult");
+    const warnings = requireObject(obj.warnings, "BudgetUpdateResult.warnings");
     return {
-        targets: arrayOf(obj.targets, parseBudgetTarget, "PinResult.targets"),
+        targets: arrayOf(obj.targets, parseBudgetTarget, "BudgetUpdateResult.targets"),
         warnings: {
-            downstreamPins: arrayOf(warnings.downstreamPins, parseDownstreamPin, "PinResult.warnings.downstreamPins"),
-            pinMatchesCarriedValue: stringArray(
-                warnings.pinMatchesCarriedValue,
-                "PinResult.warnings.pinMatchesCarriedValue",
+            laterCarriedChanges: arrayOf(
+                warnings.laterCarriedChanges,
+                (item) => parseLaterCarriedChange(item, "categoryId"),
+                "BudgetUpdateResult.warnings.laterCarriedChanges",
+            ),
+            matchesInheritedValue: stringArray(
+                warnings.matchesInheritedValue,
+                "BudgetUpdateResult.warnings.matchesInheritedValue",
             ),
         },
     };
+}
+
+function parseBudgetTreatment(obj: Record<string, unknown>, parentLabel: string): BudgetTreatment {
+    // An old row has no budget treatment. It is a BUDGET_IMPACTING row.
+    const raw = optionalString(obj, "budgetTreatment", parentLabel);
+    if (raw === undefined) return "BUDGET_IMPACTING";
+    const match = BUDGET_TREATMENTS.find((d) => d === raw);
+    if (match === undefined) {
+        throw new Error(`${parentLabel}.budgetTreatment: unexpected value '${raw}'`);
+    }
+    return match;
 }
 
 export function parseTransaction(raw: unknown): Transaction {
@@ -188,7 +218,10 @@ export function parseTransaction(raw: unknown): Transaction {
         transactionDate: requireString(obj, "transactionDate", "Transaction"),
         description: requireString(obj, "description", "Transaction"),
         amount: requireNumber(obj, "amount", "Transaction"),
-        categoryId: requireString(obj, "categoryId", "Transaction"),
+        budgetTreatment: parseBudgetTreatment(obj, "Transaction"),
+        categoryId: optionalString(obj, "categoryId", "Transaction"),
+        accountId: optionalString(obj, "accountId", "Transaction"),
+        note: optionalString(obj, "note", "Transaction"),
         createdAt: requireString(obj, "createdAt", "Transaction"),
     };
 }
@@ -227,6 +260,27 @@ function parseSummaryTotals(raw: unknown): { budgeted: number; actual: number; d
     };
 }
 
+function parseSummaryOffBudget(raw: unknown): { actual: number } {
+    const obj = requireObject(raw, "Summary.offBudget");
+    return { actual: requireNumber(obj, "actual", "Summary.offBudget") };
+}
+
+function parseSummaryTotalsWithOffBudget(raw: unknown): { budgeted: number; actual: number } {
+    const obj = requireObject(raw, "Summary.totalsWithOffBudget");
+    return {
+        budgeted: requireNumber(obj, "budgeted", "Summary.totalsWithOffBudget"),
+        actual: requireNumber(obj, "actual", "Summary.totalsWithOffBudget"),
+    };
+}
+
+function parseSummaryIncome(raw: unknown): { plannedNetIncome: number; leftToAssign: number } {
+    const obj = requireObject(raw, "Summary.income");
+    return {
+        plannedNetIncome: requireNumber(obj, "plannedNetIncome", "Summary.income"),
+        leftToAssign: requireNumber(obj, "leftToAssign", "Summary.income"),
+    };
+}
+
 export function parseSummary(raw: unknown): Summary {
     const obj = requireObject(raw, "Summary");
     const state = requireString(obj, "state", "Summary");
@@ -238,6 +292,9 @@ export function parseSummary(raw: unknown): Summary {
         state,
         categories: arrayOf(obj.categories, parseSummaryCategory, "Summary.categories"),
         totals: parseSummaryTotals(obj.totals),
+        offBudget: parseSummaryOffBudget(obj.offBudget),
+        totalsWithOffBudget: parseSummaryTotalsWithOffBudget(obj.totalsWithOffBudget),
+        income: parseSummaryIncome(obj.income),
     };
 }
 
@@ -274,7 +331,9 @@ export function parseAuditEntry(raw: unknown): AuditEntry {
         sortId: requireString(obj, "sortId", "AuditEntry"),
         changedAt: requireString(obj, "changedAt", "AuditEntry"),
         effectiveYearMonth: parseNullableYearMonth(obj.effectiveYearMonth),
-        categoryId: requireString(obj, "categoryId", "AuditEntry"),
+        categoryId: optionalString(obj, "categoryId", "AuditEntry"),
+        incomeSourceId: optionalString(obj, "incomeSourceId", "AuditEntry"),
+        plannedIncomeId: optionalString(obj, "plannedIncomeId", "AuditEntry"),
         action: requireString(obj, "action", "AuditEntry"),
         explanation: requireString(obj, "explanation", "AuditEntry"),
         user: parseAuditUser(obj.user),
@@ -297,22 +356,47 @@ function parseColumnMapping(raw: unknown): ColumnMapping {
     };
 }
 
+const _SUGGESTED_BY = new Set<string>(["PAIR", "ACCOUNT_NUMBER", "BANK", "LLM", "DEFAULT"]);
+
+function parsePairWith(raw: unknown): PairWith {
+    if (raw === null || raw === undefined) return null;
+    const obj = requireObject(raw, "ParsedTransaction.pairWith");
+    return {
+        yearMonth: requireString(obj, "yearMonth", "ParsedTransaction.pairWith"),
+        sortId: requireString(obj, "sortId", "ParsedTransaction.pairWith"),
+    };
+}
+
 function parseParsedTransaction(raw: unknown): ParsedTransaction {
     const obj = requireObject(raw, "ParsedTransaction");
+    const suggestedBy = requireString(obj, "suggestedBy", "ParsedTransaction");
+    if (!_SUGGESTED_BY.has(suggestedBy)) {
+        throw new Error(`ParsedTransaction.suggestedBy: unexpected value '${suggestedBy}'`);
+    }
     return {
         transactionDate: requireString(obj, "transactionDate", "ParsedTransaction"),
         description: requireString(obj, "description", "ParsedTransaction"),
         amount: requireNumber(obj, "amount", "ParsedTransaction"),
-        categoryId: requireString(obj, "categoryId", "ParsedTransaction"),
-        categoryName: requireString(obj, "categoryName", "ParsedTransaction"),
+        categoryId: optionalString(obj, "categoryId", "ParsedTransaction") ?? "",
+        categoryName: optionalString(obj, "categoryName", "ParsedTransaction") ?? "",
+        accountId: requireString(obj, "accountId", "ParsedTransaction"),
+        budgetTreatment: parseBudgetTreatment(obj, "ParsedTransaction"),
+        suggestedBy: suggestedBy as SuggestedBy,
+        pairWith: parsePairWith(obj.pairWith),
+        fingerprint: requireString(obj, "fingerprint", "ParsedTransaction"),
+        duplicate: requireBoolean(obj, "duplicate", "ParsedTransaction"),
     };
 }
 
 const _ROW_VALIDATION_ISSUES = new Set<string>(["missing_category", "locked_month"]);
+const _REVIEW_REASONS = new Set<string>(["no_pair_found", "llm_guess", "many_pairs", "unknown_direction"]);
 
 function parseRowValidation(raw: unknown): RowValidation {
     const obj = requireObject(raw, "RowValidation");
     const issuesRaw = stringArray(obj.issues, "RowValidation.issues");
+    // The commit's 409 response has no `review` list. An unknown reason is dropped, because a
+    // reason only puts a row first on the review screen.
+    const reviewRaw = obj.review === undefined ? [] : stringArray(obj.review, "RowValidation.review");
     return {
         index: requireNumber(obj, "index", "RowValidation"),
         issues: issuesRaw.map((s) => {
@@ -321,12 +405,24 @@ function parseRowValidation(raw: unknown): RowValidation {
             }
             return s as RowValidationIssue;
         }),
+        review: reviewRaw.filter((s) => _REVIEW_REASONS.has(s)) as ReviewReason[],
+    };
+}
+
+function parseSignCheck(raw: unknown): SignCheck {
+    const obj = requireObject(raw, "UploadResult.signCheck");
+    return {
+        llmInverted: requireBoolean(obj, "llmInverted", "UploadResult.signCheck"),
+        locallyFlipped: requireBoolean(obj, "locallyFlipped", "UploadResult.signCheck"),
+        userFlipped: requireBoolean(obj, "userFlipped", "UploadResult.signCheck"),
     };
 }
 
 export function parseUploadResult(raw: unknown): UploadResult {
     const obj = requireObject(raw, "UploadResult");
     return {
+        accountId: requireString(obj, "accountId", "UploadResult"),
+        signCheck: parseSignCheck(obj.signCheck),
         columnMapping: parseColumnMapping(obj.columnMapping),
         transactions: arrayOf(obj.transactions, parseParsedTransaction, "UploadResult.transactions"),
         validations: arrayOf(obj.validations, parseRowValidation, "UploadResult.validations"),
@@ -338,6 +434,17 @@ export function parseCommitResult(raw: unknown): CommitResult {
     return {
         count: requireNumber(obj, "count", "CommitResult"),
         transactions: arrayOf(obj.transactions, parseTransaction, "CommitResult.transactions"),
+        skippedDuplicates:
+            obj.skippedDuplicates === undefined
+                ? []
+                : arrayOf(
+                      obj.skippedDuplicates,
+                      (item) => {
+                          if (typeof item !== "number") throw new Error("CommitResult.skippedDuplicates: not a number");
+                          return item;
+                      },
+                      "CommitResult.skippedDuplicates",
+                  ),
     };
 }
 
@@ -370,6 +477,168 @@ export function parseDeletedGroup(raw: unknown): { groupId: string } {
 }
 
 // --- The net worth record ---
+
+// --- The income plan ---
+
+export function parseIncomeSource(raw: unknown): IncomeSource {
+    const obj = requireObject(raw, "IncomeSource");
+    return {
+        incomeSourceId: requireString(obj, "incomeSourceId", "IncomeSource"),
+        owners: stringArray(obj.owners, "IncomeSource.owners"),
+        label: requireString(obj, "label", "IncomeSource"),
+        active: requireBoolean(obj, "active", "IncomeSource"),
+        sortOrder: requireNumber(obj, "sortOrder", "IncomeSource"),
+    };
+}
+
+export function parseIncomeSourceArray(raw: unknown): IncomeSource[] {
+    return arrayOf(raw, parseIncomeSource, "IncomeSource[]");
+}
+
+export function parseDeactivateIncomeSourceResult(raw: unknown): DeactivateIncomeSourceResult {
+    const label = "DeactivateIncomeSourceResult";
+    const obj = requireObject(raw, label);
+    return {
+        incomeSource: parseIncomeSource(obj.incomeSource),
+        endedRecurringIncomes: stringArray(obj.endedRecurringIncomes, `${label}.endedRecurringIncomes`),
+        deletedFutureValues: arrayOf(
+            obj.deletedFutureValues,
+            (item) => parseLaterCarriedChange(item, "plannedIncomeId"),
+            `${label}.deletedFutureValues`,
+        ),
+    };
+}
+
+function parseDeductions(raw: unknown, label: string): Deduction[] {
+    return arrayOf(
+        raw,
+        (item, index) => {
+            const d = requireObject(item, `${label}[${index}]`);
+            const kind = requireString(d, "kind", `${label}[${index}]`);
+            const match = DEDUCTION_KINDS.find((k) => k === kind);
+            if (match === undefined) throw new Error(`${label}[${index}].kind: unexpected '${kind}'`);
+            return {
+                label: requireString(d, "label", `${label}[${index}]`),
+                kind: match,
+                amount: requireNumber(d, "amount", `${label}[${index}]`),
+            };
+        },
+        label,
+    );
+}
+
+function parseRecurringIncomeFields(obj: Record<string, unknown>, label: string): RecurringIncome {
+    const frequency = requireString(obj, "frequency", label);
+    const match = PAY_FREQUENCIES.find((f) => f === frequency);
+    if (match === undefined) throw new Error(`${label}.frequency: unexpected '${frequency}'`);
+    const income: RecurringIncome = {
+        incomeSourceId: requireString(obj, "incomeSourceId", label),
+        label: requireString(obj, "label", label),
+        frequency: match,
+        gross: requireNumber(obj, "gross", label),
+        deductions: parseDeductions(obj.deductions, `${label}.deductions`),
+    };
+    const endMonth = optionalString(obj, "endMonth", label);
+    if (endMonth !== undefined) income.endMonth = endMonth;
+    return income;
+}
+
+function parseOneTimeIncomeFields(obj: Record<string, unknown>, label: string): OneTimeIncome {
+    const income: OneTimeIncome = {
+        label: requireString(obj, "label", label),
+        gross: requireNumber(obj, "gross", label),
+        deductions: parseDeductions(obj.deductions, `${label}.deductions`),
+    };
+    const incomeSourceId = optionalString(obj, "incomeSourceId", label);
+    if (incomeSourceId !== undefined) income.incomeSourceId = incomeSourceId;
+    return income;
+}
+
+function parseIncomeSourceFields(obj: Record<string, unknown>, label: string): IncomeSourceFields {
+    return {
+        sourceLabel: requireString(obj, "sourceLabel", label),
+        owners: stringArray(obj.owners, `${label}.owners`),
+        sourceSortOrder: requireNumber(obj, "sourceSortOrder", label),
+    };
+}
+
+function parseIncomeMonthRecurring(raw: unknown): IncomeMonthRecurring {
+    const label = "IncomeMonth.recurring[]";
+    const obj = requireObject(raw, label);
+    const carried = obj.carriedRecurringIncome;
+    return {
+        ...parseRecurringIncomeFields(obj, label),
+        ...parseIncomeSourceFields(obj, label),
+        plannedIncomeId: requireString(obj, "plannedIncomeId", label),
+        net: requireNumber(obj, "net", label),
+        monthlyNet: requireNumber(obj, "monthlyNet", label),
+        carriedRecurringIncome:
+            carried === null || carried === undefined
+                ? null
+                : parseRecurringIncomeFields(requireObject(carried, `${label}.carriedRecurringIncome`), label),
+        hasPinnedRecurringIncome: requireBoolean(obj, "hasPinnedRecurringIncome", label),
+        inherited: optionalBoolean(obj, "inherited", label),
+    };
+}
+
+function parseIncomeMonthOneTime(raw: unknown): IncomeMonthOneTime {
+    const label = "IncomeMonth.oneTime[]";
+    const obj = requireObject(raw, label);
+    return {
+        ...parseOneTimeIncomeFields(obj, label),
+        ...(obj.sourceLabel === undefined ? {} : parseIncomeSourceFields(obj, label)),
+        plannedIncomeId: requireString(obj, "plannedIncomeId", label),
+        net: requireNumber(obj, "net", label),
+    };
+}
+
+export function parseIncomeMonth(raw: unknown): IncomeMonth {
+    const obj = requireObject(raw, "IncomeMonth");
+    const state = requireString(obj, "state", "IncomeMonth");
+    if (state !== "EDITABLE" && state !== "GRACE" && state !== "LOCKED") {
+        throw new Error(`IncomeMonth.state: unexpected value '${state}'`);
+    }
+    return {
+        yearMonth: requireString(obj, "yearMonth", "IncomeMonth"),
+        state,
+        recurring: arrayOf(obj.recurring, parseIncomeMonthRecurring, "IncomeMonth.recurring"),
+        oneTime: arrayOf(obj.oneTime, parseIncomeMonthOneTime, "IncomeMonth.oneTime"),
+        plannedNetIncome: requireNumber(obj, "plannedNetIncome", "IncomeMonth"),
+    };
+}
+
+export function parseIncomeUpdateResult(raw: unknown): IncomeUpdateResult {
+    const obj = requireObject(raw, "IncomeUpdateResult");
+    const warnings = requireObject(obj.warnings, "IncomeUpdateResult.warnings");
+    return {
+        incomePlan: parseIncomeMonth(obj.incomePlan),
+        warnings: {
+            laterCarriedChanges: arrayOf(
+                warnings.laterCarriedChanges,
+                (item) => parseLaterCarriedChange(item, "plannedIncomeId"),
+                "IncomeUpdateResult.warnings.laterCarriedChanges",
+            ),
+            matchesInheritedValue: stringArray(
+                warnings.matchesInheritedValue,
+                "IncomeUpdateResult.warnings.matchesInheritedValue",
+            ),
+        },
+    };
+}
+
+// The response of a create or a change of a one-time income: the stored item.
+export function parseOneTimeIncomeItem(raw: unknown): OneTimeIncome & { plannedIncomeId: string } {
+    const obj = requireObject(raw, "OneTimeIncomeItem");
+    return {
+        ...parseOneTimeIncomeFields(obj, "OneTimeIncomeItem"),
+        plannedIncomeId: requireString(obj, "plannedIncomeId", "OneTimeIncomeItem"),
+    };
+}
+
+export function parseDeletedOneTimeIncome(raw: unknown): { deleted: string } {
+    const obj = requireObject(raw, "{deleted}");
+    return { deleted: requireString(obj, "deleted", "{deleted}") };
+}
 
 export function parsePerson(raw: unknown): Person {
     const obj = requireObject(raw, "Person");
@@ -424,6 +693,12 @@ export function parseAccount(raw: unknown): Account {
     // what was actually asserted), so tolerate their absence here.
     const notes = optionalString(obj, "notes", "Account");
     if (notes !== undefined) account.notes = notes;
+    const cashFlowRole = optionalString(obj, "cashFlowRole", "Account");
+    const role = CASH_FLOW_ROLES.find((r) => r === cashFlowRole);
+    if (role !== undefined) account.cashFlowRole = role;
+    if (obj.accountNumberLastFour !== undefined) {
+        account.accountNumberLastFour = stringArray(obj.accountNumberLastFour, "Account.accountNumberLastFour");
+    }
     if (typeof obj.targetYear === "number") account.targetYear = obj.targetYear;
     if (obj.loanTerms !== undefined) account.loanTerms = parseLoanTerms(obj.loanTerms);
     return account;

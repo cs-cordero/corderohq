@@ -268,6 +268,59 @@ main {
     color: #94a3b8;
 }
 
+/* The choice of a change: from this month on, or this month only. */
+.scope-choice {
+    display: inline-flex;
+    gap: 0.75rem;
+    margin-right: 0.5rem;
+    white-space: nowrap;
+}
+
+/* The left to assign line on the summary and budget pages. The goal is $0. */
+.left-to-assign {
+    font-size: 1.05rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 6px;
+}
+
+.left-to-assign-balanced {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.left-to-assign-unassigned {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.left-to-assign-overassigned {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+/* The Income page: one card for each payment, and the payment form. */
+.payment-card {
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.payment-card h3 {
+    margin: 0 0 0.5rem;
+}
+
+.payment-breakdown {
+    max-width: 32rem;
+}
+
+.payment-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    align-items: flex-start;
+}
+
 .section-separator td {
     background: #e5e7eb;
     font-weight: 600;
@@ -952,9 +1005,37 @@ textarea:focus {
     margin-left: 0.5rem;
 }
 
+/* Upload review: a row that the table holds already, and a row to look at first. */
+.badge-duplicate {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+.badge-review {
+    background: #fef3c7;
+    color: #92400e;
+    margin-right: 0.25rem;
+}
+
 .amount-refund {
     color: #1e40af;
     font-weight: 600;
+}
+
+/* Transaction budget treatment badges. A BUDGET_IMPACTING row shows no badge. */
+.badge-budget-treatment-OFF_BUDGET {
+    background: #f3e8ff;
+    color: #6b21a8;
+}
+
+.badge-budget-treatment-SKIP {
+    background: #f1f5f9;
+    color: #475569;
+}
+
+/* The Off-budget rows below the summary total. */
+.summary-off-budget-row td {
+    color: #6b21a8;
 }
 
 .row-has-issue {

@@ -16,6 +16,7 @@ interface SubLink {
 const BUDGET_LINKS: SubLink[] = [
     { to: "/", label: "Summary", end: true },
     { to: "/budget", label: "Allocations" },
+    { to: "/income", label: "Income" },
     { to: "/transactions", label: "Transactions" },
     { to: "/upload", label: "Upload" },
     { to: "/categories", label: "Categories" },

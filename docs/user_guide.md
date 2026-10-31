@@ -200,7 +200,63 @@ npm run lint
 npm run format:check
 ```
 
+### The personal finance app: income, accounts, and uploads
+
+The budget's top line is **left to assign**: the planned net income minus the budget targets. The
+goal is `$0`. The summary page and the Allocations page show it.
+
+1. **Set up the income.** On the Income page, add one income source for each payer, such as each
+   job, each bank, or a landlord business. Then add a recurring income for each stream of money
+   from it, such as a salary, or the rent of each property. For a salary, type the gross amount and
+   each deduction from a paystub. For an income with no deductions, type only the gross amount. The
+   app calculates the net amount. The pay frequency sets the times that the plan counts it in each
+   month: weekly 4, every two weeks 2, twice a month 2, and monthly 1. A recurring income starts in
+   the month where you add it, and carries forward.
+2. **Change a recurring income.** Change it in the month where the change starts, and choose "From
+   this month on". The change carries forward to the later months. To change one month only, choose
+   "This month only": that value never carries forward. To end an income, set its "Last month", the
+   last month that counts it. Only an admin can change an end month that has passed. If the income
+   starts again later, add a new recurring income.
+3. **Add extra money.** For a bonus, an RSU vest, a third paycheck, or a DCFSA payout that you want
+   to budget, add a one-time income in that month. It can name its income source, and it can have
+   deductions. Extra money with no one-time income is not part of the plan.
+4. **Set up the accounts for uploads.** On the Accounts page, each account that takes a CSV upload
+   needs the cash flow role "Spending" or "Holding". Checking and credit card accounts are "Spending"
+   by default. Savings, brokerage, retirement, HSA, and 529 accounts are "Holding" by default. Add
+   the last four digits of each account, so that the upload can find a transfer to it.
+5. **Upload a CSV.** On the Upload page, choose the account of the file first. The review screen
+   suggests a type for each row: Budget, Off-budget, or Skip. Look at the first list ("Look at
+   these first"), change what is wrong, and commit. A row that you uploaded before starts
+   unselected. If the signs of the amounts look wrong, click "Flip all signs".
+6. **Mark a transaction as Off-budget** for work travel that your employer pays back, or for a
+   payment with money from a savings fund. Add a note with the reason. The summary shows the
+   Off-budget total below the Total.
+
 ## Scripts
+
+### Migrate the data to the budget income feature
+
+Run this one time on each stage, right after the budget income code is deployed to that stage. Run
+it on dev first. Without `--apply`, it only prints what it would change:
+
+```bash
+cd lambda
+uv run python scripts/migrate_budget_income.py --stage dev
+uv run python scripts/migrate_budget_income.py --stage dev --apply --to-credit-card <accountId>
+```
+
+It does three things:
+
+1. It moves each mortgage and each other liability from the `other` class to `debt`.
+   `--to-credit-card` changes an `other_liability` account to a credit card. Repeat the flag for
+   each card. Get the account IDs from the Accounts page or the DynamoDB console.
+2. It moves the net worth history of those accounts from `other` to `debt`.
+3. It renames the amounts of each budget target: `amount` to `carriedAmount`, and `onlyAmount` to
+   `pinnedAmount`. An empty amount becomes `$0`.
+
+The budget pages fail until step 3 runs, so run the script right after the deploy. The script does
+not change the audit log. Delete the old entries of `BudgetAuditLog-{stage}` by hand, because they
+use the old names.
 
 ### Dry run
 

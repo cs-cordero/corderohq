@@ -37,6 +37,13 @@ function createTestTemplate(stage: "dev" | "prod"): Template {
         partitionKey: { name: "yearMonth", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "sortId", type: dynamodb.AttributeType.STRING },
     });
+    const incomeSourceTable = new dynamodb.Table(helperStack, "IncomeSourceTable", {
+        partitionKey: { name: "incomeSourceId", type: dynamodb.AttributeType.STRING },
+    });
+    const plannedIncomeTable = new dynamodb.Table(helperStack, "PlannedIncomeTable", {
+        partitionKey: { name: "yearMonth", type: dynamodb.AttributeType.STRING },
+        sortKey: { name: "plannedIncomeId", type: dynamodb.AttributeType.STRING },
+    });
     const profileTable = new dynamodb.Table(helperStack, "ProfileTable", {
         partitionKey: { name: "householdId", type: dynamodb.AttributeType.STRING },
         sortKey: { name: "personId", type: dynamodb.AttributeType.STRING },
@@ -63,6 +70,8 @@ function createTestTemplate(stage: "dev" | "prod"): Template {
         budgetTable,
         budgetAuditLogTable,
         transactionsTable,
+        incomeSourceTable,
+        plannedIncomeTable,
         profileTable,
         accountTable,
         netWorthSnapshotTable,
@@ -108,6 +117,8 @@ describe("PersonalFinanceWebStack", () => {
                         BUDGET_TABLE_NAME: Match.anyValue(),
                         BUDGET_AUDIT_LOG_TABLE_NAME: Match.anyValue(),
                         TRANSACTIONS_TABLE_NAME: Match.anyValue(),
+                        INCOME_SOURCE_TABLE_NAME: Match.anyValue(),
+                        PLANNED_INCOME_TABLE_NAME: Match.anyValue(),
                         PROFILE_TABLE_NAME: Match.anyValue(),
                         ACCOUNT_TABLE_NAME: Match.anyValue(),
                         NETWORTH_SNAPSHOT_TABLE_NAME: Match.anyValue(),
@@ -115,6 +126,36 @@ describe("PersonalFinanceWebStack", () => {
                     }),
                 },
             });
+        });
+
+        test("scheduled densify Lambda has the budget and planned income table names", () => {
+            template.hasResourceProperties("AWS::Lambda::Function", {
+                FunctionName: "budget-scheduled-densify-prod",
+                Environment: {
+                    Variables: Match.objectLike({
+                        CATEGORY_TABLE_NAME: Match.anyValue(),
+                        BUDGET_TABLE_NAME: Match.anyValue(),
+                        PLANNED_INCOME_TABLE_NAME: Match.anyValue(),
+                    }),
+                },
+            });
+        });
+
+        test("API Gateway has the income routes", () => {
+            for (const routeKey of [
+                "GET /api/income-sources",
+                "POST /api/income-sources",
+                "POST /api/income-sources/reorder",
+                "PUT /api/income-sources/{incomeSourceId}",
+                "POST /api/income-sources/{incomeSourceId}/deactivate",
+                "POST /api/income-sources/{incomeSourceId}/reactivate",
+                "GET /api/income/{yearMonth}",
+                "POST /api/income/{yearMonth}/replace",
+                "POST /api/income/{yearMonth}/update",
+                "POST /api/income/{yearMonth}/one-time",
+            ]) {
+                template.hasResourceProperties("AWS::ApiGatewayV2::Route", { RouteKey: routeKey });
+            }
         });
 
         test("creates an API Gateway HTTP API", () => {
