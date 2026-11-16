@@ -666,8 +666,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Initial budget setup",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Initial budget setup"}],
                 },
             ),
             None,
@@ -697,8 +696,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 750}],
-                    "explanation": "Bumping grocery target",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 750, "explanation": "Bumping grocery target"}],
                 },
             ),
             None,
@@ -726,8 +724,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "No-op resubmit",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "No-op resubmit"}],
                 },
             ),
             None,
@@ -749,8 +746,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 600}],
-                    "explanation": "Forgot cat2",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 600, "explanation": "Forgot cat2"}],
                 },
             ),
             None,
@@ -776,8 +772,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Missing cat2 which has a transaction",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Missing cat2 which has a transaction"}],
                 },
             ),
             None,
@@ -806,8 +801,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "cat2 only has a $0 transaction so it's not required",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "cat2 only has a $0 transaction so it's not required"}],
                 },
             ),
             None,
@@ -821,8 +815,7 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Trying to use replace for a future month",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Trying to use replace for a future month"}],
                 },
             ),
             None,
@@ -832,19 +825,118 @@ class TestPostBudgetReplace:
         assert body["yearMonth"] == _FUTURE_MONTH
         assert "use /update" in body["error"]
 
-    def test_returns_400_when_explanation_missing(self) -> None:
-        result = handler(
-            _make_event(
-                "POST",
-                f"/api/budget/{_EDITABLE_MONTH}/replace",
-                body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                },
-            ),
-            None,
-        )
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_each_changed_target_needs_an_explanation(
+        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
+    ) -> None:
+        mock_bt.get_budget_targets.return_value = [
+            {"categoryId": "cat1", "carriedAmount": 500},
+            {"categoryId": "cat2", "carriedAmount": 100},
+            {"categoryId": "cat3", "carriedAmount": 300},
+        ]
+        mock_tt.list_transactions_for_month.return_value = []
+        body = {
+            "targets": [
+                {"categoryId": "cat1", "carriedAmount": 600},
+                {"categoryId": "cat2", "carriedAmount": 100},
+                {"categoryId": "cat3", "carriedAmount": 400, "explanation": "   "},
+            ],
+        }
+
+        result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)
+
         assert result["statusCode"] == 400
-        assert "explanation" in result["body"]
+        response = json.loads(result["body"])
+        assert response["rowsWithoutExplanation"] == [0, 2]
+        assert "targets[0], targets[2]" in response["error"]
+        mock_bt.set_all_budget_targets.assert_not_called()
+        mock_audit.write_entry.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_each_audit_entry_uses_the_explanation_of_its_target(
+        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
+    ) -> None:
+        mock_bt.get_budget_targets.return_value = [
+            {"categoryId": "cat1", "carriedAmount": 500},
+            {"categoryId": "cat2", "carriedAmount": 100},
+            {"categoryId": "cat3", "carriedAmount": 300},
+        ]
+        mock_bt.set_all_budget_targets.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
+        body = {
+            "targets": [
+                {"categoryId": "cat1", "carriedAmount": 600, "explanation": "More food"},
+                {"categoryId": "cat2", "carriedAmount": 100},
+                {"categoryId": "cat3", "carriedAmount": 200, "pinnedAmount": 250, "explanation": "Less fuel"},
+            ],
+        }
+
+        result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)
+
+        assert result["statusCode"] == 200
+        entries = [
+            (call.kwargs["category_id"], call.kwargs["action"], call.kwargs["explanation"])
+            for call in mock_audit.write_entry.call_args_list
+        ]
+        assert entries == [
+            ("cat1", "UPDATE", "More food"),
+            ("cat3", "UPDATE", "Less fuel"),
+            ("cat3", "PIN", "Less fuel"),
+        ]
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_the_server_ignores_an_explanation_in_the_body(
+        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
+    ) -> None:
+        mock_bt.get_budget_targets.return_value = [{"categoryId": "cat1", "carriedAmount": 500}]
+        mock_tt.list_transactions_for_month.return_value = []
+        body = {"targets": [{"categoryId": "cat1", "carriedAmount": 600}], "explanation": "In the body"}
+
+        result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)
+
+        assert result["statusCode"] == 400
+        mock_bt.set_all_budget_targets.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_a_target_with_no_stored_row_needs_an_explanation(
+        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
+    ) -> None:
+        # cat2 has a transaction and no row. The body must hold it, and its new row is a change.
+        mock_bt.get_budget_targets.return_value = [{"categoryId": "cat1", "carriedAmount": 500}]
+        mock_tt.list_transactions_for_month.return_value = [{"categoryId": "cat2", "amount": 5_000_000}]
+        body = {"targets": [{"categoryId": "cat1", "carriedAmount": 500}, {"categoryId": "cat2", "carriedAmount": 0}]}
+
+        result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)
+
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        mock_bt.set_all_budget_targets.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_a_category_with_no_row_and_no_transaction_can_stay_out_of_the_body(
+        self, mock_bt: MagicMock, mock_audit: MagicMock, mock_tt: MagicMock
+    ) -> None:
+        # A category made after this month has no row here. An edit of this month must not make one.
+        mock_bt.get_budget_targets.return_value = [{"categoryId": "cat1", "carriedAmount": 500}]
+        mock_bt.set_all_budget_targets.return_value = []
+        mock_tt.list_transactions_for_month.return_value = []
+        body = {"targets": [{"categoryId": "cat1", "carriedAmount": 550, "explanation": "A bit more"}]}
+
+        result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)
+
+        assert result["statusCode"] == 200
+        written = mock_bt.set_all_budget_targets.call_args.args[1]
+        assert set(written) == {"cat1"}
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
@@ -866,8 +958,7 @@ class TestPostBudgetReplace:
             "POST",
             f"/api/budget/{_EDITABLE_MONTH}/replace",
             body={
-                "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                "explanation": "Initial budget setup",
+                "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Initial budget setup"}],
             },
         )
         event["requestContext"]["authorizer"]["jwt"]["claims"].update(
@@ -1188,6 +1279,28 @@ class TestGetAuditLog:
 
 
 class TestPostBudgetUpdate:
+    @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
+    @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_a_changed_target_needs_an_explanation(
+        self, mock_bt: MagicMock, mock_ct: MagicMock, mock_audit: MagicMock
+    ) -> None:
+        mock_bt.scan.return_value = [{"yearMonth": _FUTURE_MONTH, "categoryId": "cat2", "carriedAmount": 300}]
+        body = {
+            "targets": [
+                {"categoryId": "cat2", "carriedAmount": 300},
+                {"categoryId": "cat1", "carriedAmount": 500},
+            ],
+            "explanation": "In the body",
+        }
+
+        result = handler(_make_event("POST", f"/api/budget/{_FUTURE_MONTH}/update", body=body), None)
+
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        mock_bt.set_single_budget_target.assert_not_called()
+        mock_audit.write_entry.assert_not_called()
+
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
     @patch("corderohq.personal_finance_handler._AUDIT_LOG_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
@@ -1208,8 +1321,7 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Holiday spending bump",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Holiday spending bump"}],
                 },
             ),
             None,
@@ -1244,8 +1356,7 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": None}],
-                    "explanation": "Remove the holiday value",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": None, "explanation": "Remove the holiday value"}],
                 },
             ),
             None,
@@ -1278,8 +1389,7 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Resubmit the same value",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Resubmit the same value"}],
                 },
             ),
             None,
@@ -1294,8 +1404,7 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Wrong endpoint for current month",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Wrong endpoint for current month"}],
                 },
             ),
             None,
@@ -1326,8 +1435,7 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Pin to the value that would have carried forward anyway",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Pin to the value that would have carried forward anyway"}],
                 },
             ),
             None,
@@ -1361,8 +1469,7 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 700}],
-                    "explanation": "Change a month before a month with its own value",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 700, "explanation": "Change a month before a month with its own value"}],
                 },
             ),
             None,
@@ -1386,8 +1493,7 @@ class TestEditabilityEnforcement:
                 "POST",
                 f"/api/budget/{_LOCKED_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Adjusting past month",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Adjusting past month"}],
                 },
             ),
             None,
@@ -1405,8 +1511,7 @@ class TestEditabilityEnforcement:
                 "POST",
                 f"/api/budget/{_LOCKED_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Adjusting past month",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Adjusting past month"}],
                     "override": True,
                 },
             ),
@@ -1433,8 +1538,7 @@ class TestEditabilityEnforcement:
                 "POST",
                 f"/api/budget/{_LOCKED_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Backdated correction for an old month",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Backdated correction for an old month"}],
                     "override": True,
                 },
                 groups=[_ADMIN_GROUP],
@@ -1464,8 +1568,7 @@ class TestEditabilityEnforcement:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500}],
-                    "explanation": "Setting initial budget",
+                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Setting initial budget"}],
                 },
             ),
             None,
@@ -2415,7 +2518,7 @@ class TestTransactionBudgetTreatments:
             _make_event(
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
-                body={"targets": [{"categoryId": "cat1", "carriedAmount": 500}], "explanation": "x"},
+                body={"targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "x"}]},
             ),
             None,
         )
@@ -2496,7 +2599,7 @@ class TestPinnedBudgetAmounts:
     def test_update_sets_a_pinned_amount(self, mock_bt: MagicMock, mock_audit: MagicMock, mock_ct: MagicMock) -> None:
         mock_bt.scan.return_value = [{"yearMonth": "2026-06", "categoryId": "cat1", "carriedAmount": 500}]
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
-        body = {"targets": [{"categoryId": "cat1", "pinnedAmount": 800}], "explanation": "December gifts"}
+        body = {"targets": [{"categoryId": "cat1", "pinnedAmount": 800, "explanation": "December gifts"}]}
 
         result = handler(_make_event("POST", "/api/budget/2026-09/update", body=body), None)
 
@@ -2518,7 +2621,7 @@ class TestPinnedBudgetAmounts:
             {"yearMonth": "2026-09", "categoryId": "cat1", "carriedAmount": 600, "pinnedAmount": 800},
         ]
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
-        body = {"targets": [{"categoryId": "cat1", "pinnedAmount": None}], "explanation": "undo"}
+        body = {"targets": [{"categoryId": "cat1", "pinnedAmount": None, "explanation": "undo"}]}
 
         handler(_make_event("POST", "/api/budget/2026-09/update", body=body), None)
 
@@ -2538,7 +2641,7 @@ class TestPinnedBudgetAmounts:
             {"yearMonth": "2026-12", "categoryId": "cat1", "pinnedAmount": 900},
         ]
         mock_ct.get_active_categories.return_value = [{"categoryId": "cat1", "name": "Gifts", "active": True}]
-        body = {"targets": [{"categoryId": "cat1", "carriedAmount": 700}], "explanation": "raise"}
+        body = {"targets": [{"categoryId": "cat1", "carriedAmount": 700, "explanation": "raise"}]}
 
         result = handler(_make_event("POST", "/api/budget/2026-09/update", body=body), None)
 
@@ -2560,10 +2663,9 @@ class TestPinnedBudgetAmounts:
         mock_tt.list_transactions_for_month.return_value = []
         body = {
             "targets": [
-                {"categoryId": "cat1", "carriedAmount": 500, "pinnedAmount": 900},
-                {"categoryId": "cat2", "carriedAmount": 100},
+                {"categoryId": "cat1", "carriedAmount": 500, "pinnedAmount": 900, "explanation": "October only"},
+                {"categoryId": "cat2", "carriedAmount": 100, "explanation": "October only"},
             ],
-            "explanation": "October only",
         }
 
         result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)

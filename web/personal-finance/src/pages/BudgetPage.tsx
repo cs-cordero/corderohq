@@ -1,6 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useAdmin } from "../admin";
 import {
+    ApiError,
+    type BudgetReplaceTarget,
     fetchAllCategories,
     fetchBudget,
     fetchCategoryGroups,
@@ -31,6 +33,20 @@ interface BudgetRow {
 }
 
 const MAX_EXPLANATION_LENGTH = 1000;
+const INITIAL_ALLOCATION = "Initial allocation";
+
+// Return the categories that a 409 of /replace names as missing from the body, else an empty list.
+function missingCategoryIds(err: unknown): string[] {
+    if (!(err instanceof ApiError) || err.status !== 409) return [];
+    try {
+        const body: unknown = JSON.parse(err.responseBody);
+        if (typeof body !== "object" || body === null || !("missingCategoryIds" in body)) return [];
+        const ids = body.missingCategoryIds;
+        return Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+        return [];
+    }
+}
 
 export default function BudgetPage() {
     const [month, setMonth] = useState(currentYearMonth);
@@ -69,8 +85,11 @@ export default function BudgetPage() {
             const targetMap = new Map<string, BudgetTarget>();
             for (const t of targets) targetMap.set(t.categoryId, t);
 
+            // A dense month lists only the categories with a stored row in it. A category that the user
+            // made after the month has no row there, and an edit of the month must not make one.
+            const dense = month <= currentYearMonth();
             const newRows: BudgetRow[] = cats
-                .filter((cat) => cat.active || targetMap.has(cat.categoryId))
+                .filter((cat) => targetMap.has(cat.categoryId) || (!dense && cat.active))
                 .map((cat) => {
                     const target = targetMap.get(cat.categoryId);
                     const carried = target?.carriedAmount ?? 0;
@@ -136,13 +155,35 @@ export default function BudgetPage() {
     };
 
     // A dense month (the current, grace, or a locked month) is written whole through /replace: each
-    // row sends its carried amount, and the edited row also sends its pinned amount.
-    const replaceWith = (changed: BudgetRow, carried: number, pinnedAmount: number | null) =>
+    // row sends its carried amount, and the edited row also sends its pinned amount and the explanation.
+    const replaceWith = (
+        changed: BudgetRow,
+        carried: number,
+        pinnedAmount: number | null,
+        explanation: string,
+    ): BudgetReplaceTarget[] =>
         rows.map((r) =>
             r.categoryId === changed.categoryId
-                ? { categoryId: r.categoryId, carriedAmount: carried, pinnedAmount }
+                ? { categoryId: r.categoryId, carriedAmount: carried, pinnedAmount, explanation }
                 : { categoryId: r.categoryId, carriedAmount: r.carried },
         );
+
+    // The server requires each category with a budget transaction in the month. When one has no row,
+    // send the request again with that category at $0.
+    const replaceDenseMonth = async (targets: BudgetReplaceTarget[]) => {
+        try {
+            await replaceBudget(month, targets, willOverride);
+        } catch (err) {
+            const missing = missingCategoryIds(err);
+            if (missing.length === 0) throw err;
+            const initial = missing.map((categoryId) => ({
+                categoryId,
+                carriedAmount: 0,
+                explanation: INITIAL_ALLOCATION,
+            }));
+            await replaceBudget(month, [...targets, ...initial], willOverride);
+        }
+    };
 
     const handleSaveRow = async (row: BudgetRow) => {
         const newAmount = parseCurrencyInput(editAmount);
@@ -162,15 +203,11 @@ export default function BudgetPage() {
             if (isFutureMonth) {
                 // "From this month on" sets the carried amount and clears a pinned amount.
                 // "This month only" sets only the pinned amount.
-                const result = await updateBudget(
-                    month,
-                    [
-                        forward
-                            ? { categoryId: row.categoryId, carriedAmount: newAmount, pinnedAmount: null }
-                            : { categoryId: row.categoryId, pinnedAmount: newAmount },
-                    ],
-                    explanation,
-                );
+                const result = await updateBudget(month, [
+                    forward
+                        ? { categoryId: row.categoryId, carriedAmount: newAmount, pinnedAmount: null, explanation }
+                        : { categoryId: row.categoryId, pinnedAmount: newAmount, explanation },
+                ]);
                 cancelEdit();
                 await load();
 
@@ -186,11 +223,13 @@ export default function BudgetPage() {
                     );
                     if (shouldClear) {
                         for (const later of laterForThisCat) {
-                            await updateBudget(
-                                later.yearMonth,
-                                [{ categoryId: later.categoryId, carriedAmount: null }],
-                                `Clearing later changes after a change of ${row.categoryName} in ${month}`,
-                            );
+                            await updateBudget(later.yearMonth, [
+                                {
+                                    categoryId: later.categoryId,
+                                    carriedAmount: null,
+                                    explanation: `Clearing later changes after a change of ${row.categoryName} in ${month}`,
+                                },
+                            ]);
                         }
                         await load();
                         showSuccess("Saved; later changes cleared");
@@ -203,8 +242,10 @@ export default function BudgetPage() {
                     showSuccess("Saved");
                 }
             } else {
-                const targets = forward ? replaceWith(row, newAmount, null) : replaceWith(row, row.carried, newAmount);
-                await replaceBudget(month, targets, explanation, willOverride);
+                const targets = forward
+                    ? replaceWith(row, newAmount, null, explanation)
+                    : replaceWith(row, row.carried, newAmount, explanation);
+                await replaceDenseMonth(targets);
                 cancelEdit();
                 await load();
                 showSuccess(willOverride ? "Saved with override" : "Saved");
@@ -224,17 +265,13 @@ export default function BudgetPage() {
         showLoading("Undoing...");
         try {
             if (isFutureMonth) {
-                await updateBudget(
-                    month,
-                    [
-                        row.hasPinned
-                            ? { categoryId: row.categoryId, pinnedAmount: null }
-                            : { categoryId: row.categoryId, carriedAmount: null },
-                    ],
-                    explanation,
-                );
+                await updateBudget(month, [
+                    row.hasPinned
+                        ? { categoryId: row.categoryId, pinnedAmount: null, explanation }
+                        : { categoryId: row.categoryId, carriedAmount: null, explanation },
+                ]);
             } else {
-                await replaceBudget(month, replaceWith(row, row.carried, null), explanation, willOverride);
+                await replaceDenseMonth(replaceWith(row, row.carried, null, explanation));
             }
             await load();
             showSuccess("Change undone");

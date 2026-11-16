@@ -319,11 +319,13 @@ export interface IncomeMonth {
 }
 
 // One change in the body of the income `/replace` or `/update`.
-export type RecurringIncomeChange =
+// A row that changes a stored value needs an `explanation`. A row that changes nothing needs none.
+export type RecurringIncomeChange = (
     | { action: "SET"; plannedIncomeId?: string; recurringIncome: RecurringIncome }
     | { action: "CLEAR"; plannedIncomeId: string }
     | { action: "SET_PIN"; plannedIncomeId: string; recurringIncome: RecurringIncome }
-    | { action: "CLEAR_PIN"; plannedIncomeId: string };
+    | { action: "CLEAR_PIN"; plannedIncomeId: string }
+) & { explanation?: string };
 
 export interface IncomeUpdateResult {
     incomePlan: IncomeMonth;

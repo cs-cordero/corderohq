@@ -216,6 +216,14 @@ type RecurringIncomeChange = SetRecurringIncome | ClearRecurringIncome | SetPin 
 
 
 @dataclass(frozen=True)
+class RecurringIncomeRow:
+    """One checked row of a recurring income request: its change, and its explanation (None when it has none)."""
+
+    change: RecurringIncomeChange
+    explanation: str | None
+
+
+@dataclass(frozen=True)
 class CreateOneTimeIncomeArgs:
     """The checked arguments of a new one-time income."""
 
@@ -327,24 +335,29 @@ def parse_update_income_source_args(payload: Mapping[str, Any]) -> UpdateIncomeS
     )
 
 
-def parse_recurring_income_changes(payload: Mapping[str, Any]) -> list[RecurringIncomeChange]:
-    """Convert `recurring`, a list of `{action, plannedIncomeId?, recurringIncome?}`, into checked changes.
+def parse_recurring_income_rows(payload: Mapping[str, Any]) -> list[RecurringIncomeRow]:
+    """Convert `recurring`, a list of `{action, plannedIncomeId?, recurringIncome?, explanation?}`, into checked rows.
 
     Raise ValueError for bad input. SET needs `recurringIncome`, and creates a new recurring income when it has no
     `plannedIncomeId`. SET_PIN needs `plannedIncomeId` and `recurringIncome`. CLEAR and CLEAR_PIN need
-    `plannedIncomeId`. It does not check that an id or an income source exists.
+    `plannedIncomeId`. A blank explanation is None. It does not check that an id or an income source exists.
     """
 
     raw_rows = payload.get("recurring")
     if not isinstance(raw_rows, list):
         raise ValueError("recurring array is required")
-    changes: list[RecurringIncomeChange] = []
+    rows: list[RecurringIncomeRow] = []
     for index, raw in enumerate(raw_rows):
         try:
-            changes.append(_parse_recurring_income_change(raw))
+            change = _parse_recurring_income_change(raw)
+            rows.append(
+                RecurringIncomeRow(
+                    change=change, explanation=parse_optional_str(raw.get("explanation"), "explanation")
+                )
+            )
         except ValueError as e:
             raise ValueError(f"recurring[{index}]: {e}") from None
-    return changes
+    return rows
 
 
 def parse_one_time_income_args(payload: Mapping[str, Any]) -> OneTimeIncomeArgs:

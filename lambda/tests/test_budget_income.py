@@ -41,6 +41,7 @@ from corderohq.budget.income import (
     OneTimeIncome,
     PayFrequency,
     RecurringIncome,
+    RecurringIncomeRow,
     SetPin,
     SetRecurringIncome,
     UpdateIncomeSourceArgs,
@@ -49,7 +50,7 @@ from corderohq.budget.income import (
     parse_one_time_income,
     parse_one_time_income_args,
     parse_recurring_income,
-    parse_recurring_income_changes,
+    parse_recurring_income_rows,
     parse_update_income_source_args,
     validate_label,
 )
@@ -203,20 +204,25 @@ class TestParseIncomeSourceArgs:
             parse_update_income_source_args({"frequency": "weekly"})
 
 
-class TestParseRecurringIncomeChanges:
+class TestParseRecurringIncomeRows:
     def test_each_action(self) -> None:
         body = {
             "recurring": [
-                {"action": "SET", "recurringIncome": _SALARY_BODY},
+                {"action": "SET", "recurringIncome": _SALARY_BODY, "explanation": " new job "},
                 {"action": "SET", "plannedIncomeId": "REC#a", "recurringIncome": _SALARY_BODY},
-                {"action": "CLEAR", "plannedIncomeId": "REC#b"},
+                {"action": "CLEAR", "plannedIncomeId": "REC#b", "explanation": "  "},
             ]
         }
-        assert parse_recurring_income_changes(body) == [
-            SetRecurringIncome(planned_income_id=None, income=_SALARY),
-            SetRecurringIncome(planned_income_id="REC#a", income=_SALARY),
-            ClearRecurringIncome(planned_income_id="REC#b"),
+        assert parse_recurring_income_rows(body) == [
+            RecurringIncomeRow(SetRecurringIncome(planned_income_id=None, income=_SALARY), "new job"),
+            RecurringIncomeRow(SetRecurringIncome(planned_income_id="REC#a", income=_SALARY), None),
+            RecurringIncomeRow(ClearRecurringIncome(planned_income_id="REC#b"), None),
         ]
+
+    def test_explanation_must_be_a_string(self) -> None:
+        entry = {"action": "CLEAR", "plannedIncomeId": "REC#a", "explanation": 5}
+        with pytest.raises(ValueError, match=r"recurring\[0\]: explanation must be a string"):
+            parse_recurring_income_rows({"recurring": [entry]})
 
     @pytest.mark.parametrize(
         ("entry", "message"),
@@ -229,11 +235,11 @@ class TestParseRecurringIncomeChanges:
     )
     def test_rejects_a_broken_entry_and_names_its_index(self, entry: dict[str, Any], message: str) -> None:
         with pytest.raises(ValueError, match=rf"recurring\[0\]: {message}"):
-            parse_recurring_income_changes({"recurring": [entry]})
+            parse_recurring_income_rows({"recurring": [entry]})
 
     def test_recurring_is_required(self) -> None:
         with pytest.raises(ValueError, match="recurring array is required"):
-            parse_recurring_income_changes({})
+            parse_recurring_income_rows({})
 
 
 class TestParseOneTimeIncomeArgs:
@@ -486,8 +492,12 @@ def _audit_actions(audit: MagicMock) -> list[str]:
     return [call.kwargs["action"] for call in audit.write_entry.call_args_list]
 
 
-def _set(planned_income_id: str | None, body: dict[str, Any] = _SALARY_BODY) -> dict[str, Any]:
+def _set(
+    planned_income_id: str | None, body: dict[str, Any] = _SALARY_BODY, explanation: str | None = "x"
+) -> dict[str, Any]:
     entry: dict[str, Any] = {"action": "SET", "recurringIncome": body}
+    if explanation is not None:
+        entry["explanation"] = explanation
     if planned_income_id is not None:
         entry["plannedIncomeId"] = planned_income_id
     return entry
@@ -577,7 +587,7 @@ class TestDeactivateIncomeSource:
 
 class TestIncomeReplace:
     def test_set_with_no_id_creates_a_recurring_income(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [_set(None)], "explanation": "new job"}
+        body = {"recurring": [_set(None)]}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
@@ -592,7 +602,7 @@ class TestIncomeReplace:
 
     def test_writes_a_changed_value_with_an_update_entry(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
-        body = {"recurring": [_set("REC#a", _RAISED_BODY)], "explanation": "raise"}
+        body = {"recurring": [_set("REC#a", _RAISED_BODY)]}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
@@ -602,7 +612,7 @@ class TestIncomeReplace:
 
     def test_same_value_is_a_no_op(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
-        body = {"recurring": [_set("REC#a")], "explanation": "same"}
+        body = {"recurring": [_set("REC#a")]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_not_called()
         tables["audit"].write_entry.assert_not_called()
@@ -610,7 +620,7 @@ class TestIncomeReplace:
     def test_an_end_month_in_the_current_month_is_set(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
         ending = {**_SALARY_BODY, "endMonth": _CURRENT}
-        body = {"recurring": [_set("REC#a", ending)], "explanation": "sold the property"}
+        body = {"recurring": [_set("REC#a", ending)]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
             _CURRENT, "REC#a", RecurringIncomeValues(carried=parse_recurring_income(ending))
@@ -618,7 +628,7 @@ class TestIncomeReplace:
 
     def test_an_end_month_before_the_current_month_needs_the_override(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
-        body = {"recurring": [_set("REC#a", {**_SALARY_BODY, "endMonth": "2026-05"})], "explanation": "x"}
+        body = {"recurring": [_set("REC#a", {**_SALARY_BODY, "endMonth": "2026-05"})]}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 400
         assert "endMonth must not be before" in result["body"]
@@ -628,7 +638,7 @@ class TestIncomeReplace:
     def test_an_ended_recurring_income_cannot_change_without_the_override(self, tables: dict[str, MagicMock]) -> None:
         ended = {**_SALARY_BODY, "endMonth": "2026-05"}
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item("2026-05", "REC#a", ended)]
-        body = {"recurring": [_set("REC#a")], "explanation": "start again"}
+        body = {"recurring": [_set("REC#a")]}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 400
         assert "only an admin can change it" in result["body"]
@@ -645,7 +655,7 @@ class TestIncomeReplace:
             _recurring_item(grace, "REC#a", ended),
             _recurring_item(grace, "REC#b"),
         ]
-        body = {"recurring": [_set("REC#a", ended), _set("REC#b", _RAISED_BODY)], "explanation": "raise"}
+        body = {"recurring": [_set("REC#a", ended), _set("REC#b", _RAISED_BODY)]}
         result = handler(_event("POST", f"/api/income/{grace}/replace", body), None)
         assert result["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
@@ -657,26 +667,26 @@ class TestIncomeReplace:
             _recurring_item(_CURRENT, "REC#a"),
             _recurring_item(_CURRENT, "REC#b"),
         ]
-        body = {"recurring": [_set("REC#a")], "explanation": "x"}
+        body = {"recurring": [_set("REC#a")]}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
         assert result["statusCode"] == 409
         assert json.loads(result["body"])["missingPlannedIncomeIds"] == ["REC#b"]
 
     def test_unknown_id_or_source_returns_400(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [_set("REC#nope")], "explanation": "x"}
+        body = {"recurring": [_set("REC#nope")]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 400
         tables["source"].get_income_source_by_id.return_value = None
-        body = {"recurring": [_set(None)], "explanation": "x"}
+        body = {"recurring": [_set(None)]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 400
 
     def test_clear_returns_400(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [{"action": "CLEAR", "plannedIncomeId": "REC#a"}], "explanation": "x"}
+        body = {"recurring": [{"action": "CLEAR", "plannedIncomeId": "REC#a", "explanation": "x"}]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 400
 
     def test_a_recurring_income_keeps_its_inactive_source(self, tables: dict[str, MagicMock]) -> None:
         tables["source"].get_income_source_by_id.return_value = _source("s1", active=False)
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
-        body = {"recurring": [_set("REC#a", _RAISED_BODY)], "explanation": "raise"}
+        body = {"recurring": [_set("REC#a", _RAISED_BODY)]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 200
 
     def test_an_inactive_source_returns_400_for_a_new_or_moved_recurring_income(
@@ -686,23 +696,23 @@ class TestIncomeReplace:
         tables["plan"].scan_recurring_incomes.return_value = [
             _recurring_item(_CURRENT, "REC#a", {**_SALARY_BODY, "incomeSourceId": "s2"})
         ]
-        moved = {"recurring": [_set("REC#a")], "explanation": "x"}
+        moved = {"recurring": [_set("REC#a")]}
         result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", moved), None)
         assert result["statusCode"] == 400
         assert "is inactive" in result["body"]
 
         kept = _set("REC#a", {**_SALARY_BODY, "incomeSourceId": "s2"})
-        created = {"recurring": [kept, _set(None)], "explanation": "x"}
+        created = {"recurring": [kept, _set(None)]}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", created), None)["statusCode"] == 400
         admin = handler(_event("POST", f"/api/income/{_CURRENT}/replace", {**created, "override": True}, True), None)
         assert admin["statusCode"] == 200
 
     def test_future_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [], "explanation": "x"}
+        body = {"recurring": []}
         assert handler(_event("POST", f"/api/income/{_FUTURE}/replace", body), None)["statusCode"] == 409
 
     def test_locked_month_needs_the_override(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [_set(None)], "explanation": "x"}
+        body = {"recurring": [_set(None)]}
         assert handler(_event("POST", f"/api/income/{_LOCKED}/replace", body), None)["statusCode"] == 409
 
         overridden = handler(_event("POST", f"/api/income/{_LOCKED}/replace", {**body, "override": True}, True), None)
@@ -713,7 +723,7 @@ class TestIncomeReplace:
 class TestIncomeUpdate:
     def test_set_writes_and_warns_when_it_matches_the_inherited_value(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
-        body = {"recurring": [_set("REC#a")], "explanation": "x"}
+        body = {"recurring": [_set("REC#a")]}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)
         assert result["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
@@ -723,7 +733,7 @@ class TestIncomeUpdate:
         assert json.loads(result["body"])["warnings"]["matchesInheritedValue"] == ["REC#a"]
 
     def test_set_with_no_id_creates_a_recurring_income_from_that_month(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [_set(None)], "explanation": "new tenant"}
+        body = {"recurring": [_set(None)]}
         assert handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
             _FUTURE, "REC#new", RecurringIncomeValues(carried=_SALARY)
@@ -736,7 +746,7 @@ class TestIncomeUpdate:
             _recurring_item(_CURRENT, "REC#a"),
             _recurring_item(later, "REC#a"),
         ]
-        body = {"recurring": [_set("REC#a", _RAISED_BODY)], "explanation": "x"}
+        body = {"recurring": [_set("REC#a", _RAISED_BODY)]}
         warnings = json.loads(handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)["body"])["warnings"]
         assert warnings["laterCarriedChanges"] == [{"plannedIncomeId": "REC#a", "yearMonth": later}]
         assert warnings["matchesInheritedValue"] == []
@@ -746,7 +756,7 @@ class TestIncomeUpdate:
             _recurring_item(_CURRENT, "REC#a"),
             _recurring_item(_FUTURE, "REC#a", _RAISED_BODY),
         ]
-        body = {"recurring": [{"action": "CLEAR", "plannedIncomeId": "REC#a"}], "explanation": "x"}
+        body = {"recurring": [{"action": "CLEAR", "plannedIncomeId": "REC#a", "explanation": "x"}]}
         assert handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)["statusCode"] == 200
         tables["plan"].delete_recurring_income.assert_called_once_with(_FUTURE, "REC#a")
         assert _audit_actions(tables["audit"]) == ["RECURRING_INCOME_CLEAR"]
@@ -754,20 +764,20 @@ class TestIncomeUpdate:
     def test_an_ended_recurring_income_cannot_change_without_the_override(self, tables: dict[str, MagicMock]) -> None:
         ended = {**_SALARY_BODY, "endMonth": "2026-05"}
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item("2026-05", "REC#a", ended)]
-        body = {"recurring": [_set("REC#a")], "explanation": "start again"}
+        body = {"recurring": [_set("REC#a")]}
         assert handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)["statusCode"] == 400
         admin = handler(_event("POST", f"/api/income/{_FUTURE}/update", {**body, "override": True}, True), None)
         assert admin["statusCode"] == 200
 
     def test_an_end_month_before_the_month_returns_400(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
-        body = {"recurring": [_set("REC#a", {**_SALARY_BODY, "endMonth": _NEXT})], "explanation": "x"}
+        body = {"recurring": [_set("REC#a", {**_SALARY_BODY, "endMonth": _NEXT})]}
         result = handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)
         assert result["statusCode"] == 400
         assert f"endMonth must not be before {_FUTURE}" in result["body"]
 
     def test_current_month_returns_409(self, tables: dict[str, MagicMock]) -> None:
-        body = {"recurring": [], "explanation": "x"}
+        body = {"recurring": []}
         assert handler(_event("POST", f"/api/income/{_CURRENT}/update", body), None)["statusCode"] == 409
 
 
@@ -883,12 +893,12 @@ class TestPinnedRecurringIncome:
                 {"action": "CLEAR_PIN", "plannedIncomeId": "REC#a"},
             ]
         }
-        assert parse_recurring_income_changes(body) == [
+        assert [row.change for row in parse_recurring_income_rows(body)] == [
             SetPin(planned_income_id="REC#a", income=parse_recurring_income(_SHORT_BODY)),
             ClearPin(planned_income_id="REC#a"),
         ]
         with pytest.raises(ValueError, match="SET_PIN needs plannedIncomeId"):
-            parse_recurring_income_changes({"recurring": [{"action": "SET_PIN", "recurringIncome": _SHORT_BODY}]})
+            parse_recurring_income_rows({"recurring": [{"action": "SET_PIN", "recurringIncome": _SHORT_BODY}]})
 
     def test_densify_keeps_the_pinned_value(self) -> None:
         table, mock = _plan_table([_recurring_item("2026-04", "REC#a"), _only_item("2026-05", "REC#a")])
@@ -921,9 +931,8 @@ class TestPinnedRecurringIncome:
         body = {
             "recurring": [
                 _set("REC#a"),
-                {"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY},
+                {"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY, "explanation": "unpaid leave"},
             ],
-            "explanation": "unpaid leave",
         }
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 200
         tables["plan"].put_recurring_income.assert_called_once_with(
@@ -935,8 +944,7 @@ class TestPinnedRecurringIncome:
     def test_pin_with_no_carried_value(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
         body = {
-            "recurring": [{"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY}],
-            "explanation": "short month",
+            "recurring": [{"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY, "explanation": "short month"}],
         }
         result = handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)
         assert result["statusCode"] == 200
@@ -952,7 +960,7 @@ class TestPinnedRecurringIncome:
             _recurring_item(_CURRENT, "REC#a"),
             _only_item(_FUTURE, "REC#a"),
         ]
-        body = {"recurring": [{"action": "CLEAR_PIN", "plannedIncomeId": "REC#a"}], "explanation": "undo"}
+        body = {"recurring": [{"action": "CLEAR_PIN", "plannedIncomeId": "REC#a", "explanation": "undo"}]}
         assert handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)["statusCode"] == 200
         tables["plan"].delete_recurring_income.assert_called_once_with(_FUTURE, "REC#a")
         assert _audit_actions(tables["audit"]) == ["RECURRING_INCOME_UNPIN"]
@@ -966,3 +974,69 @@ class TestPinnedRecurringIncome:
         body = {"explanation": "job ended", "confirm": True}
         assert handler(_event("POST", "/api/income-sources/s1/deactivate", body), None)["statusCode"] == 200
         tables["plan"].delete_recurring_income.assert_called_once_with(_FUTURE, "REC#a")
+
+
+class TestRecurringIncomeExplanations:
+    """Each row that changes a stored value needs its own explanation. A row that changes nothing needs none."""
+
+    def test_a_changed_row_with_no_explanation_returns_400_and_writes_nothing(
+        self, tables: dict[str, MagicMock]
+    ) -> None:
+        tables["plan"].scan_recurring_incomes.return_value = [
+            _recurring_item(_CURRENT, "REC#a"),
+            _recurring_item(_CURRENT, "REC#b"),
+        ]
+        body = {
+            "recurring": [_set("REC#a", explanation=None), _set("REC#b", _RAISED_BODY, explanation=None)],
+            "explanation": "In the body",
+        }
+        result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        tables["plan"].put_recurring_income.assert_not_called()
+        tables["audit"].write_entry.assert_not_called()
+
+    def test_an_unchanged_set_needs_no_explanation(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].scan_recurring_incomes.return_value = [
+            _recurring_item(_CURRENT, "REC#a"),
+            _recurring_item(_CURRENT, "REC#b"),
+        ]
+        body = {"recurring": [_set("REC#a", explanation=None), _set("REC#b", _RAISED_BODY, explanation="raise")]}
+        result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
+        assert result["statusCode"] == 200
+        tables["plan"].put_recurring_income.assert_called_once_with(
+            _CURRENT, "REC#b", RecurringIncomeValues(carried=parse_recurring_income(_RAISED_BODY))
+        )
+        assert tables["audit"].write_entry.call_args.kwargs["explanation"] == "raise"
+
+    def test_set_and_clear_pin_each_need_an_explanation(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].scan_recurring_incomes.return_value = [_with_only(_recurring_item(_CURRENT, "REC#a"))]
+        clear_pin: dict[str, Any] = {"action": "CLEAR_PIN", "plannedIncomeId": "REC#a"}
+        body = {"recurring": [_set("REC#a", _RAISED_BODY, explanation="raise"), clear_pin]}
+        result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        tables["plan"].put_recurring_income.assert_not_called()
+
+        body = {"recurring": [_set("REC#a", _RAISED_BODY, explanation="raise"), {**clear_pin, "explanation": "raise"}]}
+        result = handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)
+        assert result["statusCode"] == 200
+        tables["plan"].put_recurring_income.assert_called_once_with(
+            _CURRENT, "REC#a", RecurringIncomeValues(carried=parse_recurring_income(_RAISED_BODY))
+        )
+        entries = [(call.kwargs["action"], call.kwargs["explanation"]) for call in tables["audit"].write_entry.call_args_list]
+        assert entries == [("RECURRING_INCOME_UPDATE", "raise"), ("RECURRING_INCOME_UNPIN", "raise")]
+
+    def test_update_checks_each_row_before_the_first_write(self, tables: dict[str, MagicMock]) -> None:
+        tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
+        body = {
+            "recurring": [
+                _set(None, explanation="new tenant"),
+                {"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY},
+            ]
+        }
+        result = handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)
+        assert result["statusCode"] == 400
+        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        tables["plan"].put_recurring_income.assert_not_called()
+        tables["audit"].write_entry.assert_not_called()

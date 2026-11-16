@@ -399,7 +399,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | existing row or a non-zero         |
 |        |                                          | transaction in this month. Writes  |
 |        |                                          | per-category audit entries for     |
-|        |                                          | every diff.                        |
+|        |                                          | every diff. Each target that       |
+|        |                                          | changes a value needs its own      |
+|        |                                          | explanation.                       |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/budget/{YYYY-MM}/update             | Future-month write. Body lists     |
 |        |                                          | only the categories the user       |
@@ -414,7 +416,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | semantics**. Writes per-category   |
 |        |                                          | audit entries: UPDATE or CLEAR for |
 |        |                                          | a carried amount, PIN or UNPIN for |
-|        |                                          | a pinned amount.                   |
+|        |                                          | a pinned amount. Each target that  |
+|        |                                          | changes a value needs its own      |
+|        |                                          | explanation.                       |
 +--------+------------------------------------------+------------------------------------+
 | GET    | /api/transactions?month=YYYY-MM          | List transactions for a month.     |
 +--------+------------------------------------------+------------------------------------+
@@ -471,9 +475,11 @@ Assign** for the bodies and the responses.
 | POST   | /api/income-sources/{id}/reactivate        | The same as a category.                |
 | GET    | /api/income/{YYYY-MM}                      | The income plan of one month.          |
 | POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the recurring     |
-|        |                                            | incomes.                               |
+|        |                                            | incomes. Each row that changes a value |
+|        |                                            | needs its own explanation.             |
 | POST   | /api/income/{YYYY-MM}/update               | Future-month write of the recurring    |
-|        |                                            | incomes.                               |
+|        |                                            | incomes. Each row that changes a value |
+|        |                                            | needs its own explanation.             |
 | POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time income (no           |
 |        |                                            | `plannedIncomeId`), change it (an id), |
 |        |                                            | or delete it (an id and `delete:       |
@@ -607,6 +613,8 @@ Recorded in `BudgetAuditLog-{stage}`:
   row for the category and writes one `CATEGORY_HARD_DELETE` entry.
 - `POST /api/budget/{YYYY-MM}/update` → one `UPDATE` or `CLEAR` entry for each changed carried
   amount, and one `PIN` or `UNPIN` entry for each changed pinned amount.
+- In `/replace` and `/update`, each entry gets the explanation of its own target. One target can make
+  two entries, a carried change and a pinned change. Both entries get the explanation of that target.
 - `POST /api/categories/{id}/deactivate`, when `confirm` is `true` and `affectedMonths` holds at
   least one month → one `CLEAR` or `UNPIN` entry for each amount it drops. The budget-target audit
   log therefore stays complete, even when the app drops a value as a side effect. The deactivation
@@ -743,8 +751,7 @@ previous month while it is in grace, or any locked month through the admin overr
 
 ```
 {
-  "targets": [{ "categoryId", "carriedAmount": number, "pinnedAmount"?: number | null }, ...],
-  "explanation": "...",
+  "targets": [{ "categoryId", "carriedAmount": number, "pinnedAmount"?: number | null, "explanation"?: "..." }, ...],
   "override": false
 }
 ```
@@ -762,9 +769,21 @@ request in this order:
      not change.
    - The body must hold every category with a transaction in that month whose amount is not zero.
 
-If the body fails either rule, and editability passed, the response is `409 Conflict`. The body
-lists each `categoryId` that is absent, and the app **writes no rows**. The client must send the
-request again with those entries added. Usually it copies the values that exist.
+3. **An explanation on each changed target.** A target that changes a stored value must have an
+   `explanation` that is not blank. A target with no stored row is a change. A target that changes
+   nothing needs no explanation, and the handler ignores one there. The handler ignores an
+   `explanation` key in the body.
+
+If the body fails rule 2, and editability passed, the response is `409 Conflict`. The body lists
+each `categoryId` that is absent, and the app **writes no rows**. The client must send the request
+again with those entries added. Usually it copies the values that exist.
+
+If the body fails rule 3, the response is `400`, with `rowsWithoutExplanation`: the index in
+`targets` of each such target. The app **writes no rows**.
+
+The body does not need a category with no row and no transaction in the month. A category that the
+user made after the month has no row there. An edit of an earlier month leaves it out, and the app
+then writes no row for it in that month.
 
 `carriedAmount` must be a number. `0` is valid, and it is a real target. A carried amount is never
 `null`. A `pinnedAmount` key sets the pinned amount (a number) or clears it (`null`). Without the
@@ -781,13 +800,14 @@ editable year-month. Body:
 
 ```
 {
-  "targets": [{ "categoryId", "carriedAmount"?: number | null, "pinnedAmount"?: number | null }, ...],
-  "explanation": "..."
+  "targets": [{ "categoryId", "carriedAmount"?: number | null, "pinnedAmount"?: number | null, "explanation"?: "..." }, ...]
 }
 ```
 
 This endpoint writes a row, or changes the row that is there. It does not touch a category that the
 body leaves out, or a key that a target leaves out. Each target needs at least one of the two keys.
+A target that changes a value needs an `explanation`, with the same rule and the same `400` as
+`/replace`. The handler checks each target before the first write.
 
 `carriedAmount: number` → the month holds that carried amount as its own. `carriedAmount: null` →
 the app removes it, and the month inherits again. `pinnedAmount` works the same way for the pinned
@@ -1079,8 +1099,17 @@ own dense rows only, so its value never changes after the lock.
 ### Writes
 
 `/replace` and `/update` copy the budget endpoints. The body key is `recurring`, a list of
-`{action, plannedIncomeId?, recurringIncome?}`, in place of `targets`. Each body has an
-`explanation`, and `/replace` takes an optional `override`.
+`{action, plannedIncomeId?, recurringIncome?, explanation?}`, in place of `targets`. Each body
+takes an optional `override`.
+
+- A row that changes a stored value needs an `explanation` that is not blank, and its audit entry
+  uses it. A row that changes nothing needs none. The handler applies the rows in order to a copy of
+  the state, to find which rows change a value. It does this before the first write. A failure is a
+  `400` with `rowsWithoutExplanation`, the index in `recurring` of each such row.
+- One edit of the user can be two rows, `SET` and `CLEAR_PIN`. Each row changes a value, so each
+  row needs an explanation.
+- The `/replace` body holds, for each recurring income with a carried value in the month: the rows
+  of the change of the user, or one unchanged `SET` with no explanation.
 
 - `SET` writes `recurringIncome`. With no `plannedIncomeId`, it creates a new recurring income from
   this month on.
