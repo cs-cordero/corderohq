@@ -9,7 +9,13 @@ from enum import StrEnum
 from typing import Any, assert_never
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import CashFlowRole, parse_create_account_args, parse_update_account_args, validate_asset_class
+from corderohq.accounts import (
+    CashFlowRole,
+    parse_create_account_args,
+    parse_update_account_args,
+    resolve_removed_asset_classes,
+    validate_asset_class,
+)
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -320,13 +326,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _post_accounts_reorder(event)
         elif path.startswith("/api/accounts/") and path.endswith("/deactivate") and method == "POST":
             account_id = path.split("/")[-2]
-            return _deactivate_account(account_id)
+            return _deactivate_account(account_id, now)
         elif path.startswith("/api/accounts/") and path.endswith("/reactivate") and method == "POST":
             account_id = path.split("/")[-2]
             return _reactivate_account(account_id)
         elif path.startswith("/api/accounts/") and method == "PUT":
             account_id = path.split("/")[-1]
-            return _put_account(event, account_id)
+            return _put_account(event, account_id, now)
 
         # The net worth snapshots. The fixed /history path comes before the /{YYYY-MM}
         # pattern, so that the app does not read "history" as a year-month.
@@ -2373,10 +2379,12 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     return _json_response(201, json.dumps(item, default=_json_default))
 
 
-def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
+def _put_account(event: dict[str, Any], account_id: str, now: datetime) -> dict[str, Any]:
     """Change the given fields of an account.
 
-    See `parse_update_account_args` for the editable fields. The type of an account cannot change.
+    See `parse_update_account_args` for the editable fields. The type of an account cannot change. A change of the
+    asset classes also changes `removedAssetClasses`: a class that the request takes out gets the current month, and a
+    class that the request adds again loses its entry.
     """
 
     body = _parse_json_body(event)
@@ -2390,6 +2398,10 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
         args = parse_update_account_args(body, existing)
     except ValueError as e:
         return _response(400, str(e))
+    args = replace(
+        args,
+        removed_asset_classes=resolve_removed_asset_classes(existing, args.asset_classes, _year_month_of(now)),
+    )
     match args.owners:
         case SetTo(value=owners):
             err = _check_owners_exist(owners)
@@ -2405,8 +2417,10 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
-def _deactivate_account(account_id: str) -> dict[str, Any]:
-    item = _ACCOUNT_TABLE.deactivate(account_id)
+def _deactivate_account(account_id: str, now: datetime) -> dict[str, Any]:
+    """Close an account. The current month in ET is the last month in which it counts."""
+
+    item = _ACCOUNT_TABLE.deactivate(account_id, _year_month_of(now))
     if item is None:
         return _response(404, "Account not found")
     return _json_response(200, json.dumps(item, default=_json_default))

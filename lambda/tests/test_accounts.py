@@ -16,6 +16,7 @@ from corderohq.accounts import (
     parse_create_account_args,
     parse_loan_terms,
     parse_update_account_args,
+    resolve_removed_asset_classes,
     resolve_target_year,
     validate_account_number_last_four,
     validate_account_type,
@@ -333,6 +334,21 @@ class TestParseUpdateAccountArgs:
             {"assetClasses": ["target_date"], "targetYear": 2055}, _stored("brokerage", assetClasses=["cash"])
         )
         assert args.target_year == SetTo(2055)
+
+    def test_no_change_of_the_classes_keeps_the_removed_classes(self) -> None:
+        stored = _stored("brokerage", assetClasses=["cash"], removedAssetClasses={"bonds": "2026-01"})
+        assert resolve_removed_asset_classes(stored, Keep(), "2026-06") == Keep()
+        assert resolve_removed_asset_classes(stored, SetTo([AssetClass.CASH]), "2026-06") == Keep()
+
+    def test_a_removed_class_gets_the_month(self) -> None:
+        stored = _stored("brokerage", assetClasses=["cash", "bonds"], removedAssetClasses={"real_estate": "2025-02"})
+        change = resolve_removed_asset_classes(stored, SetTo([AssetClass.CASH]), "2026-06")
+        assert change == SetTo({"bonds": "2026-06", "real_estate": "2025-02"})
+
+    def test_a_class_that_the_user_adds_again_loses_its_entry(self) -> None:
+        stored = _stored("brokerage", assetClasses=["cash"], removedAssetClasses={"bonds": "2026-01"})
+        change = resolve_removed_asset_classes(stored, SetTo([AssetClass.CASH, AssetClass.BONDS]), "2026-06")
+        assert change == Remove()
 
     def test_a_stored_year_stays_with_target_date(self) -> None:
         stored = _stored("401k", assetClasses=["target_date"], targetYear=2050)

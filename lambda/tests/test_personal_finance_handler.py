@@ -2040,6 +2040,20 @@ _STORED_CHECKING = {"accountId": "a1", "name": "A", "accountType": "checking", "
 
 class TestPutAccount:
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
+    def test_a_removed_class_gets_the_current_month(self, mock_at: MagicMock) -> None:
+        mock_at.get_account_by_id.return_value = {
+            "accountId": "a2",
+            "name": "B",
+            "accountType": "brokerage",
+            "assetClasses": ["cash", "bonds"],
+        }
+        mock_at.update_account.return_value = {"accountId": "a2"}
+        result = handler(_make_event("PUT", "/api/accounts/a2", body={"assetClasses": ["cash"]}), None)
+        assert result["statusCode"] == 200
+        _, args = mock_at.update_account.call_args.args
+        assert args.removed_asset_classes == SetTo({"bonds": _EDITABLE_MONTH})
+
+    @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_updates_fields(self, mock_at: MagicMock) -> None:
         mock_at.get_account_by_id.return_value = _STORED_CHECKING
         mock_at.update_account.return_value = {"accountId": "a1", "name": "Renamed"}
@@ -2115,7 +2129,7 @@ class TestAccountLifecycle:
         mock_at.deactivate.return_value = {"accountId": "a1", "active": False}
         result = handler(_make_event("POST", "/api/accounts/a1/deactivate"), None)
         assert result["statusCode"] == 200
-        mock_at.deactivate.assert_called_once_with("a1")
+        mock_at.deactivate.assert_called_once_with("a1", _EDITABLE_MONTH)
 
     @patch("corderohq.personal_finance_handler._ACCOUNT_TABLE")
     def test_deactivate_missing_returns_404(self, mock_at: MagicMock) -> None:

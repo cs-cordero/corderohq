@@ -153,6 +153,31 @@ def parse_update_account_args(payload: Mapping[str, Any], existing: Mapping[str,
     )
 
 
+def resolve_removed_asset_classes(
+    existing: Mapping[str, Any], asset_classes: Keep | SetTo[list[AssetClass]], year_month: str
+) -> FieldChange[dict[str, str]]:
+    """Return the change to `removedAssetClasses`, from the asset classes that the account has after the update.
+
+    `removedAssetClasses` maps each asset class that the account no longer holds to the last month in which it counts.
+    A class that the update takes out gets `year_month`. A class that the update adds again loses its entry. An empty
+    map removes the attribute.
+    """
+
+    match asset_classes:
+        case Keep():
+            return Keep()
+        case SetTo(value=new_classes):
+            new = {str(c) for c in new_classes}
+            stored: dict[str, str] = dict(existing.get("removedAssetClasses") or {})
+            removed = {c: month for c, month in stored.items() if c not in new}
+            for c in existing.get("assetClasses", []):
+                if c not in new:
+                    removed[c] = year_month
+            if removed == stored:
+                return Keep()
+            return SetTo(dict(sorted(removed.items()))) if removed else Remove()
+
+
 def _parse_cash_flow_role_change(payload: Mapping[str, Any]) -> FieldChange[CashFlowRole]:
     """Return the change to `cashFlowRole`. A null value removes it, and the type default applies."""
 

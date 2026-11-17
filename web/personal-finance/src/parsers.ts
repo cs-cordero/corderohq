@@ -715,7 +715,19 @@ export function parseAccount(raw: unknown): Account {
     }
     if (typeof obj.targetYear === "number") account.targetYear = obj.targetYear;
     if (obj.loanTerms !== undefined) account.loanTerms = parseLoanTerms(obj.loanTerms);
+    const deactivatedYearMonth = optionalString(obj, "deactivatedYearMonth", "Account");
+    if (deactivatedYearMonth !== undefined) account.deactivatedYearMonth = deactivatedYearMonth;
+    if (obj.removedAssetClasses !== undefined) {
+        account.removedAssetClasses = parseStringMap(obj.removedAssetClasses, "Account.removedAssetClasses");
+    }
     return account;
+}
+
+function parseStringMap(raw: unknown, label: string): Record<string, string> {
+    const obj = requireObject(raw, label);
+    const map: Record<string, string> = {};
+    for (const key of Object.keys(obj)) map[key] = requireString(obj, key, label);
+    return map;
 }
 
 export function parseAccountArray(raw: unknown): Account[] {

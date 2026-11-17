@@ -130,6 +130,7 @@ class AccountTable:
             "loanTerms": loan_terms,
             "cashFlowRole": args.cash_flow_role,
             "accountNumberLastFour": args.account_number_last_four,
+            "removedAssetClasses": args.removed_asset_classes,
         }
         response = self._table.update_item(
             Key={"accountId": account_id},
@@ -138,15 +139,40 @@ class AccountTable:
         )
         return response["Attributes"]
 
-    def deactivate(self, account_id: str) -> dict[str, Any] | None:
-        """Close an account, and keep its history. Return the item, or None if it does not exist."""
+    def deactivate(self, account_id: str, year_month: str) -> dict[str, Any] | None:
+        """Close an account, and keep its history. Return the item, or None if it does not exist.
 
-        return self._set_active(account_id, False)
+        `year_month` becomes `deactivatedYearMonth`, the last month in which the account counts. An account that is
+        inactive already does not change, so it keeps its stored month.
+        """
+
+        existing = self.get_account_by_id(account_id)
+        if existing is None:
+            return None
+        if not existing.get("active", True):
+            return existing
+        response = self._table.update_item(
+            Key={"accountId": account_id},
+            UpdateExpression="SET active = :val, deactivatedYearMonth = :ym, updatedAt = :now",
+            ExpressionAttributeValues={":val": False, ":ym": year_month, ":now": datetime.now(tz=UTC).isoformat()},
+            ReturnValues="ALL_NEW",
+        )
+        _LOGGER.info("Deactivated account %s in %s", account_id, year_month)
+        return response["Attributes"]
 
     def reactivate(self, account_id: str) -> dict[str, Any] | None:
-        """Open a closed account again. Return the item, or None if it does not exist."""
+        """Open a closed account again, and remove its `deactivatedYearMonth`. Return the item, or None if absent."""
 
-        return self._set_active(account_id, True)
+        if self.get_account_by_id(account_id) is None:
+            return None
+        response = self._table.update_item(
+            Key={"accountId": account_id},
+            UpdateExpression="SET active = :val, updatedAt = :now REMOVE deactivatedYearMonth",
+            ExpressionAttributeValues={":val": True, ":now": datetime.now(tz=UTC).isoformat()},
+            ReturnValues="ALL_NEW",
+        )
+        _LOGGER.info("Reactivated account %s", account_id)
+        return response["Attributes"]
 
     def reorder(self, account_ids_in_order: list[str]) -> None:
         """Set the sortOrder of each account to its position in the list."""
@@ -183,16 +209,3 @@ class AccountTable:
         if not accounts:
             return 0
         return max(int(a.get("sortOrder", 0)) for a in accounts) + 1
-
-    def _set_active(self, account_id: str, active: bool) -> dict[str, Any] | None:
-        if self.get_account_by_id(account_id) is None:
-            return None
-        now = datetime.now(tz=UTC).isoformat()
-        response = self._table.update_item(
-            Key={"accountId": account_id},
-            UpdateExpression="SET active = :val, updatedAt = :now",
-            ExpressionAttributeValues={":val": active, ":now": now},
-            ReturnValues="ALL_NEW",
-        )
-        _LOGGER.info("%s account %s", "Reactivated" if active else "Deactivated", account_id)
-        return response["Attributes"]

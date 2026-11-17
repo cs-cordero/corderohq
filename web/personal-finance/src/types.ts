@@ -390,6 +390,11 @@ export interface Account {
     cashFlowRole?: CashFlowRole;
     // The last four digits of the account numbers, which the CSV import looks for in a description.
     accountNumberLastFour?: string[];
+    // The last month (YYYY-MM) in which an inactive account counts. An account that was inactive
+    // before the app stored this month has none.
+    deactivatedYearMonth?: string;
+    // A map from each asset class that the account no longer holds to the last month in which it counts.
+    removedAssetClasses?: Record<string, string>;
     createdAt: string;
     updatedAt: string;
 }

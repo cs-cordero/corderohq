@@ -209,3 +209,5 @@ class UpdateAccountArgs:
     loan_terms: FieldChange[LoanTerms]
     cash_flow_role: FieldChange[CashFlowRole]
     account_number_last_four: FieldChange[list[str]]
+    # A map from each asset class that the account no longer holds to the last month in which it counts.
+    removed_asset_classes: FieldChange[dict[str, str]] = Keep()

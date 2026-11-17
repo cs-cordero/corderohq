@@ -236,6 +236,16 @@ class TestAccountTableUpdate:
         assert values[":loanTerms"]["interestRate"] == Decimal("0.045")
         assert kwargs["ExpressionAttributeNames"]["#name"] == "name"
 
+    def test_sets_the_removed_asset_classes(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
+        args = _update_args(asset_classes=SetTo([AssetClass.BONDS]), removed_asset_classes=SetTo({"cash": "2026-06"}))
+        accounts.update_account("a1", args)
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == (
+            "SET updatedAt = :updatedAt, #assetClasses = :assetClasses, #removedAssetClasses = :removedAssetClasses"
+        )
+        assert kwargs["ExpressionAttributeValues"][":removedAssetClasses"] == {"cash": "2026-06"}
+
     def test_removes_each_removed_field(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.update_item.return_value = {"Attributes": {"accountId": "a1"}}
         accounts.update_account("a1", _update_args(notes=Remove(), target_year=Remove(), loan_terms=Remove()))
@@ -294,13 +304,36 @@ class TestAccountTableMisc:
 
     def test_deactivate_returns_none_when_absent(self, accounts: AccountTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
-        assert accounts.deactivate("nope") is None
+        assert accounts.deactivate("nope", "2026-03") is None
+        mock.update_item.assert_not_called()
 
-    def test_deactivate_sets_active_false(self, accounts: AccountTable, mock: MagicMock) -> None:
-        mock.get_item.return_value = {"Item": {"accountId": "a1", "name": "A"}}
+    def test_deactivate_sets_active_false_and_the_month(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {"Item": {"accountId": "a1", "name": "A", "active": True}}
         mock.update_item.return_value = {"Attributes": {"accountId": "a1", "active": False}}
-        result = accounts.deactivate("a1")
+        result = accounts.deactivate("a1", "2026-03")
         assert result is not None and result["active"] is False
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == "SET active = :val, deactivatedYearMonth = :ym, updatedAt = :now"
+        assert kwargs["ExpressionAttributeValues"][":ym"] == "2026-03"
+
+    def test_a_second_deactivate_keeps_the_stored_month(self, accounts: AccountTable, mock: MagicMock) -> None:
+        stored = {"accountId": "a1", "name": "A", "active": False, "deactivatedYearMonth": "2026-03"}
+        mock.get_item.return_value = {"Item": stored}
+        assert accounts.deactivate("a1", "2026-07") == stored
+        mock.update_item.assert_not_called()
+
+    def test_reactivate_removes_the_month(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {"Item": {"accountId": "a1", "active": False, "deactivatedYearMonth": "2026-03"}}
+        mock.update_item.return_value = {"Attributes": {"accountId": "a1", "active": True}}
+        assert accounts.reactivate("a1") == {"accountId": "a1", "active": True}
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == "SET active = :val, updatedAt = :now REMOVE deactivatedYearMonth"
+        assert kwargs["ExpressionAttributeValues"][":val"] is True
+
+    def test_reactivate_returns_none_when_absent(self, accounts: AccountTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {}
+        assert accounts.reactivate("nope") is None
+        mock.update_item.assert_not_called()
 
     def test_reorder_writes_index_per_account(self, accounts: AccountTable, mock: MagicMock) -> None:
         accounts.reorder(["a2", "a0", "a1"])

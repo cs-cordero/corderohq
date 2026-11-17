@@ -256,6 +256,10 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | default for the type) and  |
 |                          |                       |            | accountNumberLastFour      |
 |                          |                       |            | (list of 4-digit strings). |
+|                          |                       |            | deactivatedYearMonth and   |
+|                          |                       |            | removedAssetClasses: see   |
+|                          |                       |            | **The months on an         |
+|                          |                       |            | account**.                 |
 |                          |                       |            | Every liability            |
 |                          |                       |            | (credit_card, mortgage,    |
 |                          |                       |            | other_liability) has the   |
@@ -264,6 +268,25 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | in each month.             |
 +--------------------------+-----------------------+------------+----------------------------+
 ```
+
+### The months on an account
+
+An account stores two months. Each one is the last month in which a thing counts, in the same sense
+as `endMonth` of a recurring income. An account that the user deactivates in March counts in March,
+and not from April on.
+
+- `deactivatedYearMonth`: `POST /api/accounts/{id}/deactivate` sets it to the current month in ET.
+  A deactivate of an account that is inactive already changes nothing, so the stored month stays.
+  `POST /api/accounts/{id}/reactivate` removes it. An account that was inactive before this
+  attribute existed has no month.
+- `removedAssetClasses`: a map from an asset class to a month. `PUT /api/accounts/{id}` sets the
+  current month in ET for each class that the request takes out of `assetClasses`. It deletes the
+  entry of a class that the request adds again. An empty map is not stored. Only an account type
+  with a free choice of classes can change `assetClasses`, so a type with a fixed class and a
+  liability never get an entry.
+
+The account response includes both attributes when they are present. The net worth routes do not
+read them. The frontend calculates each total that it shows.
 
 ### Category name uniqueness
 
