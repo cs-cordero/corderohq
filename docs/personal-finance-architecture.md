@@ -142,7 +142,12 @@ it.
 |                        |                    |            | nameHistory (list of        |
 |                        |                    |            | {previousName, replacedAt   |
 |                        |                    |            | ISO-8601 UTC}). Soft-delete |
-|                        |                    |            | via active=False. Names are |
+|                        |                    |            | via active=False.           |
+|                        |                    |            | deactivatedYearMonth: the   |
+|                        |                    |            | month in ET of the          |
+|                        |                    |            | deactivation, on an         |
+|                        |                    |            | inactive category only.     |
+|                        |                    |            | Names are                   |
 |                        |                    |            | unique case-insensitive     |
 |                        |                    |            | across active + inactive —  |
 |                        |                    |            | see **Category name         |
@@ -256,6 +261,10 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | default for the type) and  |
 |                          |                       |            | accountNumberLastFour      |
 |                          |                       |            | (list of 4-digit strings). |
+|                          |                       |            | deactivatedYearMonth and   |
+|                          |                       |            | removedAssetClasses: see   |
+|                          |                       |            | **The months on an         |
+|                          |                       |            | account**.                 |
 |                          |                       |            | Every liability            |
 |                          |                       |            | (credit_card, mortgage,    |
 |                          |                       |            | other_liability) has the   |
@@ -264,6 +273,44 @@ in detail yet. See the code in `networth/` and in `aws/dynamodb/` (`profile.py`,
 |                          |                       |            | in each month.             |
 +--------------------------+-----------------------+------------+----------------------------+
 ```
+
+### The months on an account
+
+An account stores two months. Each one is the last month in which a thing counts, in the same sense
+as `endMonth` of a recurring income. An account that the user deactivates in March counts in March,
+and not from April on.
+
+- `deactivatedYearMonth`: `POST /api/accounts/{id}/deactivate` sets it to the current month in ET.
+  A deactivate of an account that is inactive already changes nothing, so the stored month stays.
+  `POST /api/accounts/{id}/reactivate` removes it. An account that was inactive before this
+  attribute existed has no month.
+- `removedAssetClasses`: a map from an asset class to a month. `PUT /api/accounts/{id}` sets the
+  current month in ET for each class that the request takes out of `assetClasses`. It deletes the
+  entry of a class that the request adds again. An empty map is not stored. Only an account type
+  with a free choice of classes can change `assetClasses`, so a type with a fixed class and a
+  liability never get an entry.
+
+The account response includes both attributes when they are present. The net worth routes do not
+read them. The frontend calculates each total that it shows.
+
+### A change of the date
+
+`POST /api/transactions/update` accepts `transactionDate`. It must be a real date, as `YYYY-MM-DD`,
+else the response is `400`. The stored date is no change, and the usual update runs.
+
+The sort key holds the date, so a new date needs a new item. The new item has each attribute of the
+old one, also `createdAt` and `fingerprint`, with a new `sortId` and the `yearMonth` of the new date.
+Each other change of the same request applies to the new item. One `transact_write_items` call puts
+the new item and deletes the old key, with the condition `attribute_exists(sortId)`. Two separate
+calls could leave two items after a failure, and the summary would then count the money two times.
+If the old item is gone, the response is `404`.
+
+The old month and the new month must both be editable, with the usual override rule. The response
+is the new item, so the frontend replaces the old row by its old key.
+
+The CSV import looks for saved fingerprints in the months of the file and in one month on each side.
+A transaction that moves more than one month away is outside that range, so a second import of its
+file saves the row again.
 
 ### Category name uniqueness
 
@@ -357,7 +404,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | amount. If confirm is absent or    |
 |        |                                          | false and affectedMonths is non-   |
 |        |                                          | empty, it returns 409 so the UI    |
-|        |                                          | can prompt.                        |
+|        |                                          | can prompt. Sets                   |
+|        |                                          | deactivatedYearMonth to the        |
+|        |                                          | current month in ET.               |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/categories/{id}/reactivate          | Reactivate a deactivated category. |
 |        |                                          | The future values dropped at       |
@@ -392,6 +441,12 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | month is not yet dense — see       |
 |        |                                          | **Carry-Forward**.                 |
 +--------+------------------------------------------+------------------------------------+
+| GET    | /api/budget/{YYYY-MM}/later-changes      | Each later month that holds its    |
+|        |                                          | own carried amount for a category: |
+|        |                                          | [{categoryId, yearMonth,           |
+|        |                                          | carriedAmount}]. See **Later       |
+|        |                                          | changes**.                         |
++--------+------------------------------------------+------------------------------------+
 | POST   | /api/budget/{YYYY-MM}/replace            | Dense-month write (current, grace, |
 |        |                                          | or — via override — locked).       |
 |        |                                          | Replace-all semantics; body must   |
@@ -399,7 +454,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | existing row or a non-zero         |
 |        |                                          | transaction in this month. Writes  |
 |        |                                          | per-category audit entries for     |
-|        |                                          | every diff.                        |
+|        |                                          | every diff. Each target that       |
+|        |                                          | changes a value needs its own      |
+|        |                                          | explanation.                       |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/budget/{YYYY-MM}/update             | Future-month write. Body lists     |
 |        |                                          | only the categories the user       |
@@ -414,11 +471,16 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | semantics**. Writes per-category   |
 |        |                                          | audit entries: UPDATE or CLEAR for |
 |        |                                          | a carried amount, PIN or UNPIN for |
-|        |                                          | a pinned amount.                   |
+|        |                                          | a pinned amount. Each target that  |
+|        |                                          | changes a value needs its own      |
+|        |                                          | explanation.                       |
 +--------+------------------------------------------+------------------------------------+
 | GET    | /api/transactions?month=YYYY-MM          | List transactions for a month.     |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions                        | Create one transaction.            |
+| POST   | /api/transactions                        | Create one transaction. The        |
+|        |                                          | transactionDate must be a real     |
+|        |                                          | date, as YYYY-MM-DD. Its first     |
+|        |                                          | seven characters are the month.    |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/upload                 | Body {csvData, accountId,          |
 |        |                                          | flipSigns?}. Returns the parsed    |
@@ -436,9 +498,11 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | each row whose fingerprint exists  |
 |        |                                          | (skippedDuplicates).               |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions/update                 | Update mutable fields (description,|
+| POST   | /api/transactions/update                 | Update mutable fields              |
+|        |                                          | (transactionDate, description,     |
 |        |                                          | amount, budgetTreatment,           |
-|        |                                          | categoryId, accountId, note).      |
+|        |                                          | categoryId, accountId, note). See  |
+|        |                                          | **A change of the date**.          |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/delete                 | Body {items: [{yearMonth, sortId}, |
 |        |                                          | ...]}. Batch delete.               |
@@ -471,9 +535,11 @@ Assign** for the bodies and the responses.
 | POST   | /api/income-sources/{id}/reactivate        | The same as a category.                |
 | GET    | /api/income/{YYYY-MM}                      | The income plan of one month.          |
 | POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the recurring     |
-|        |                                            | incomes.                               |
+|        |                                            | incomes. Each entry that changes a     |
+|        |                                            | value needs its own explanation.       |
 | POST   | /api/income/{YYYY-MM}/update               | Future-month write of the recurring    |
-|        |                                            | incomes.                               |
+|        |                                            | incomes. Each entry that changes a     |
+|        |                                            | value needs its own explanation.       |
 | POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time income (no           |
 |        |                                            | `plannedIncomeId`), change it (an id), |
 |        |                                            | or delete it (an id and `delete:       |
@@ -559,7 +625,7 @@ offset. The grace period ends at **midnight ET on day 8** of the new month.
 | `POST /api/budget/{YYYY-MM}/replace` | `{YYYY-MM}` must be the current month, GRACE, or — via override — LOCKED |
 | `POST /api/budget/{YYYY-MM}/update` | `{YYYY-MM}` must be strictly in the future — i.e., EDITABLE and `yearMonth > current_ym` (one of the next 12 months). A write to the current month, the grace month, or any locked month is rejected with `409`; those months are dense and `/replace` is the right endpoint. Override does not unlock `/update` for non-future months — it has no use here |
 | `POST /api/transactions` | `transactionDate`'s year-month must be EDITABLE or GRACE |
-| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. An update cannot change `transactionDate` |
+| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. A new `transactionDate` must also have a month that is EDITABLE or GRACE |
 | `POST /api/transactions/delete` | Each item's `yearMonth` must be EDITABLE or GRACE |
 | `POST /api/transactions/commit` | Every row's `transactionDate` year-month must be EDITABLE or GRACE; see **CSV commit semantics** |
 | `POST /api/income/{YYYY-MM}/replace` | The same as the budget `/replace` |
@@ -607,6 +673,8 @@ Recorded in `BudgetAuditLog-{stage}`:
   row for the category and writes one `CATEGORY_HARD_DELETE` entry.
 - `POST /api/budget/{YYYY-MM}/update` → one `UPDATE` or `CLEAR` entry for each changed carried
   amount, and one `PIN` or `UNPIN` entry for each changed pinned amount.
+- In `/replace` and `/update`, each entry gets the explanation of its own target. One target can make
+  two entries, a carried change and a pinned change. Both entries get the explanation of that target.
 - `POST /api/categories/{id}/deactivate`, when `confirm` is `true` and `affectedMonths` holds at
   least one month → one `CLEAR` or `UNPIN` entry for each amount it drops. The budget-target audit
   log therefore stays complete, even when the app drops a value as a side effect. The deactivation
@@ -743,8 +811,7 @@ previous month while it is in grace, or any locked month through the admin overr
 
 ```
 {
-  "targets": [{ "categoryId", "carriedAmount": number, "pinnedAmount"?: number | null }, ...],
-  "explanation": "...",
+  "targets": [{ "categoryId", "carriedAmount": number, "pinnedAmount"?: number | null, "explanation"?: "..." }, ...],
   "override": false
 }
 ```
@@ -762,9 +829,21 @@ request in this order:
      not change.
    - The body must hold every category with a transaction in that month whose amount is not zero.
 
-If the body fails either rule, and editability passed, the response is `409 Conflict`. The body
-lists each `categoryId` that is absent, and the app **writes no rows**. The client must send the
-request again with those entries added. Usually it copies the values that exist.
+3. **An explanation on each changed target.** A target that changes a stored value must have an
+   `explanation` that is not blank. A target with no stored row is a change. A target that changes
+   nothing needs no explanation, and the handler ignores one there. The handler ignores an
+   `explanation` key in the body.
+
+If the body fails rule 2, and editability passed, the response is `409 Conflict`. The body lists
+each `categoryId` that is absent, and the app **writes no rows**. The client must send the request
+again with those entries added. Usually it copies the values that exist.
+
+If the body fails rule 3, the response is `400`, with `entriesWithoutExplanation`: the index in
+`targets` of each such target. The app **writes no rows**.
+
+The body does not need a category with no row and no transaction in the month. A category that the
+user made after the month has no row there. An edit of an earlier month leaves it out, and the app
+then writes no row for it in that month.
 
 `carriedAmount` must be a number. `0` is valid, and it is a real target. A carried amount is never
 `null`. A `pinnedAmount` key sets the pinned amount (a number) or clears it (`null`). Without the
@@ -781,13 +860,14 @@ editable year-month. Body:
 
 ```
 {
-  "targets": [{ "categoryId", "carriedAmount"?: number | null, "pinnedAmount"?: number | null }, ...],
-  "explanation": "..."
+  "targets": [{ "categoryId", "carriedAmount"?: number | null, "pinnedAmount"?: number | null, "explanation"?: "..." }, ...]
 }
 ```
 
 This endpoint writes a row, or changes the row that is there. It does not touch a category that the
 body leaves out, or a key that a target leaves out. Each target needs at least one of the two keys.
+A target that changes a value needs an `explanation`, with the same rule and the same `400` as
+`/replace`. The handler checks each target before the first write.
 
 `carriedAmount: number` → the month holds that carried amount as its own. `carriedAmount: null` →
 the app removes it, and the month inherits again. `pinnedAmount` works the same way for the pinned
@@ -812,6 +892,23 @@ The response holds the month and the warnings:
 - **matchesInheritedValue** — this appears for each category where the new carried amount equals
   the value that the month inherits already. The frontend then warns the user: the month now holds
   that value as its own, so a later change in an earlier month stops there. (Spec 20.)
+
+### Later changes
+
+`GET /api/budget/{YYYY-MM}/later-changes` returns, before a save, the months at which a change from
+`{YYYY-MM}` on stops:
+
+```
+[{ "categoryId", "yearMonth", "carriedAmount" }, ...]
+```
+
+The list holds each month after `max({YYYY-MM}, current_ym)`, in the editable range, that holds its
+own carried amount for a category. It is in order of month, and then category. A pinned amount does
+not count, because it does not stop a change. The `laterCarriedChanges` warning of `/update` uses the
+same rule.
+
+The list starts after `current_ym` for a past month too. Each dense month holds a carried amount for
+each category, so without that rule the list for a past month would always hold the next month.
 
 ## Carry-Forward
 
@@ -908,8 +1005,11 @@ both of these:
   `CLEAR` or `UNPIN` audit entry for each amount it drops. The budget-target audit trail therefore stays
   complete — see **Audit scope**. The app leaves the past dense rows as they are, in the current
   month, the grace month, and every locked month. The history therefore stays true, as Spec 2
-  requires.
-- **Reactivate** (`POST /api/categories/{id}/reactivate`) — this changes the flag back. It does not
+  requires. The deactivation sets `deactivatedYearMonth` to the current month in ET. A deactivate
+  of a category that is inactive already changes nothing, so the stored month stays. A category
+  that was inactive before this attribute existed has no month.
+- **Reactivate** (`POST /api/categories/{id}/reactivate`) — this changes the flag back, and removes
+  `deactivatedYearMonth`. It does not
   restore a future value that the deactivation dropped. The category joins the active set again. The
   next densify step, or any write to the current month, then treats it like a new category for
   that month.
@@ -1079,8 +1179,18 @@ own dense rows only, so its value never changes after the lock.
 ### Writes
 
 `/replace` and `/update` copy the budget endpoints. The body key is `recurring`, a list of
-`{action, plannedIncomeId?, recurringIncome?}`, in place of `targets`. Each body has an
-`explanation`, and `/replace` takes an optional `override`.
+`{action, plannedIncomeId?, recurringIncome?, explanation?}`, in place of `targets`. Each body
+takes an optional `override`.
+
+- An entry that changes a stored value needs an `explanation` that is not blank, and its audit
+  entry uses it. An entry that changes nothing needs none. The handler applies the entries in order
+  to a copy of the state, to find which entries change a value. It does this before the first write.
+  A failure is a `400` with `entriesWithoutExplanation`, the index in `recurring` of each such
+  entry.
+- One edit of the user can be two entries, `SET` and `CLEAR_PIN`. Each entry changes a value, so
+  each entry needs an explanation.
+- The `/replace` body holds, for each recurring income with a carried value in the month: the
+  entries of the change of the user, or one unchanged `SET` with no explanation.
 
 - `SET` writes `recurringIncome`. With no `plannedIncomeId`, it creates a new recurring income from
   this month on.

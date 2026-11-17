@@ -23,6 +23,7 @@ import {
     parseIncomeSource,
     parseIncomeSourceArray,
     parseIncomeUpdateResult,
+    parseLaterBudgetChangeArray,
     parseNetWorthHistory,
     parseNetWorthMonth,
     parseOneTimeIncomeItem,
@@ -134,26 +135,33 @@ export const hardDeleteCategory = (id: string, opts: { confirm: true; confirmNam
 
 // Budget
 export const fetchBudget = (yearMonth: string) => request(`/budget/${yearMonth}`, parseBudgetTargetArray);
-export const replaceBudget = (
-    yearMonth: string,
-    // `pinnedAmount`: a number sets the pinned amount, null clears it, and absent keeps it.
-    targets: { categoryId: string; carriedAmount: number; pinnedAmount?: number | null }[],
-    explanation: string,
-    override = false,
-) =>
+// A target that changes a stored value needs an `explanation`. A target that changes nothing needs none.
+export interface BudgetReplaceTarget {
+    categoryId: string;
+    carriedAmount: number;
+    // A number sets the pinned amount, null clears it, and absent keeps it.
+    pinnedAmount?: number | null;
+    explanation?: string;
+}
+export interface BudgetUpdateTarget {
+    categoryId: string;
+    // Each amount key is optional. A number sets that value, null removes it, and absent keeps it.
+    carriedAmount?: number | null;
+    pinnedAmount?: number | null;
+    explanation?: string;
+}
+export const replaceBudget = (yearMonth: string, targets: BudgetReplaceTarget[], override = false) =>
     request(`/budget/${yearMonth}/replace`, parseBudgetTargetArray, {
         method: "POST",
-        ...jsonBody({ targets, explanation, ...(override ? { override: true } : {}) }),
+        ...jsonBody({ targets, ...(override ? { override: true } : {}) }),
     });
-export const updateBudget = (
-    yearMonth: string,
-    // Each key is optional. A number sets that value, null removes it, and absent keeps it.
-    targets: { categoryId: string; carriedAmount?: number | null; pinnedAmount?: number | null }[],
-    explanation: string,
-) =>
+// Each later month, after this month and after the current month, that holds its own carried amount.
+export const fetchLaterBudgetChanges = (yearMonth: string) =>
+    request(`/budget/${yearMonth}/later-changes`, parseLaterBudgetChangeArray);
+export const updateBudget = (yearMonth: string, targets: BudgetUpdateTarget[]) =>
     request(`/budget/${yearMonth}/update`, parseBudgetUpdateResult, {
         method: "POST",
-        ...jsonBody({ targets, explanation }),
+        ...jsonBody({ targets }),
     });
 
 // Transactions
@@ -161,13 +169,14 @@ export const fetchTransactions = (yearMonth: string) =>
     request(`/transactions?month=${yearMonth}`, parseTransactionArray);
 export const createTransaction = (
     data: {
-        yearMonth: string;
+        // YYYY-MM-DD. The server takes the month of the transaction from it.
         transactionDate: string;
         description: string;
         amount: number;
         budgetTreatment: BudgetTreatment;
         // Required for BUDGET_IMPACTING, optional for OFF_BUDGET. The server drops it for SKIP.
         categoryId?: string;
+        accountId?: string;
         note?: string;
     },
     override = false,
@@ -179,9 +188,15 @@ export const createTransaction = (
 export const updateTransaction = (
     yearMonth: string,
     sortId: string,
-    // An empty string for `categoryId` or `note` removes the value. A change to SKIP removes the
-    // category on the server.
-    updates: Partial<Pick<Transaction, "description" | "amount" | "budgetTreatment" | "categoryId" | "note">>,
+    // An empty string for `categoryId`, `accountId`, or `note` removes the value. A change to SKIP
+    // removes the category on the server. A new `transactionDate` (YYYY-MM-DD) moves the transaction
+    // to a new item, also in a different month. The response is the new item, with a new `sortId`.
+    updates: Partial<
+        Pick<
+            Transaction,
+            "transactionDate" | "description" | "amount" | "budgetTreatment" | "categoryId" | "accountId" | "note"
+        >
+    >,
     override = false,
 ) =>
     request("/transactions/update", parseTransaction, {
@@ -236,23 +251,21 @@ export const replaceIncome = (
     yearMonth: string,
     // The body must hold each recurring income with a carried value in the month.
     recurring: RecurringIncomeChange[],
-    explanation: string,
     override = false,
 ) =>
     request(`/income/${yearMonth}/replace`, parseIncomeMonth, {
         method: "POST",
-        ...jsonBody({ recurring, explanation, ...(override ? { override: true } : {}) }),
+        ...jsonBody({ recurring, ...(override ? { override: true } : {}) }),
     });
 export const updateIncome = (
     yearMonth: string,
     recurring: RecurringIncomeChange[],
-    explanation: string,
     // The override only lifts the rules of the end month and of an inactive income source.
     override = false,
 ) =>
     request(`/income/${yearMonth}/update`, parseIncomeUpdateResult, {
         method: "POST",
-        ...jsonBody({ recurring, explanation, ...(override ? { override: true } : {}) }),
+        ...jsonBody({ recurring, ...(override ? { override: true } : {}) }),
     });
 export const createOneTimeIncome = (yearMonth: string, income: OneTimeIncome, explanation: string, override = false) =>
     request(`/income/${yearMonth}/one-time`, parseOneTimeIncomeItem, {

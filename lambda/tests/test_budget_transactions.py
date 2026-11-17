@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -106,6 +106,50 @@ def _changes(**changes: Any) -> UpdateTransactionArgs:
         "note": Keep(),
     }
     return UpdateTransactionArgs(**(fields | changes))
+
+
+class TestMove:
+    _OLD: ClassVar[dict[str, Any]] = {
+        "yearMonth": "2026-03",
+        "sortId": "2026-03-15#A",
+        "transactionDate": "2026-03-15",
+        "description": "Coffee",
+        "amount": 5,
+        "note": "old",
+        "createdAt": "2026-03-15T12:00:00+00:00",
+        "fingerprint": "fp1",
+    }
+
+    def test_writes_the_new_item_and_deletes_the_old_one_in_one_call(
+        self, table: TransactionsTable, mock: MagicMock
+    ) -> None:
+        mock.name = "Transactions"
+        result = table.move_transaction(self._OLD, _changes(note=Remove(), amount=SetTo(7)), "2026-04-02")
+
+        assert result is not None
+        assert result["yearMonth"] == "2026-04"
+        assert result["transactionDate"] == "2026-04-02"
+        assert result["sortId"].startswith("2026-04-02#")
+        assert result["amount"] == 7
+        assert "note" not in result
+        assert (result["createdAt"], result["fingerprint"]) == (self._OLD["createdAt"], "fp1")
+        [put, delete] = mock.meta.client.transact_write_items.call_args.kwargs["TransactItems"]
+        assert put == {"Put": {"TableName": "Transactions", "Item": result}}
+        assert delete == {
+            "Delete": {
+                "TableName": "Transactions",
+                "Key": {"yearMonth": "2026-03", "sortId": "2026-03-15#A"},
+                "ConditionExpression": "attribute_exists(sortId)",
+            }
+        }
+
+    def test_returns_none_when_the_old_item_is_gone(self, table: TransactionsTable, mock: MagicMock) -> None:
+        class TransactionCanceledError(Exception):
+            pass
+
+        mock.meta.client.exceptions.TransactionCanceledException = TransactionCanceledError
+        mock.meta.client.transact_write_items.side_effect = TransactionCanceledError()
+        assert table.move_transaction(self._OLD, _changes(), "2026-03-20") is None
 
 
 class TestUpdate:

@@ -513,32 +513,43 @@ export default function IncomePage() {
     };
 
     // A dense month (the current, grace, or a locked month) is written whole through /replace: the
-    // body sends the carried value of each recurring income again, and the server skips each value
-    // that did not change. `changes` come after them, so they win.
-    const replaceWith = (changes: RecurringIncomeChange[]): RecurringIncomeChange[] => [
-        ...(income?.recurring ?? []).flatMap((r): RecurringIncomeChange[] =>
-            r.carriedRecurringIncome === null
-                ? []
-                : [{ action: "SET", plannedIncomeId: r.plannedIncomeId, recurringIncome: r.carriedRecurringIncome }],
-        ),
-        ...changes,
-    ];
+    // body holds `changes`, and the carried value of each other recurring income again, with no
+    // explanation. The server skips each value that did not change.
+    const replaceWith = (changes: RecurringIncomeChange[]): RecurringIncomeChange[] => {
+        const changedIds = new Set(changes.map((c) => c.plannedIncomeId));
+        return [
+            ...(income?.recurring ?? []).flatMap((r): RecurringIncomeChange[] =>
+                r.carriedRecurringIncome === null || changedIds.has(r.plannedIncomeId)
+                    ? []
+                    : [
+                          {
+                              action: "SET",
+                              plannedIncomeId: r.plannedIncomeId,
+                              recurringIncome: r.carriedRecurringIncome,
+                          },
+                      ],
+            ),
+            ...changes,
+        ];
+    };
 
-    // Send the changes of this month: /update for a future month, else /replace. Return the
-    // later carried changes of /update for `plannedIncomeId`, so that the caller can offer to clear them.
+    // Send the changes of this month, each with the explanation: /update for a future month, else
+    // /replace. Return the later carried changes of /update for `plannedIncomeId`, so that the caller
+    // can offer to clear them.
     const writeChanges = async (
-        changes: RecurringIncomeChange[],
+        userChanges: RecurringIncomeChange[],
         explanation: string,
         plannedIncomeId: string | null,
     ): Promise<{ yearMonth: string }[]> => {
+        const changes = userChanges.map((c) => ({ ...c, explanation }));
         if (isFutureMonth) {
-            const result = await updateIncome(month, changes, explanation);
+            const result = await updateIncome(month, changes);
             setIncome(result.incomePlan);
             return plannedIncomeId === null
                 ? []
                 : result.warnings.laterCarriedChanges.filter((c) => c.plannedIncomeId === plannedIncomeId);
         }
-        setIncome(await replaceIncome(month, replaceWith(changes), explanation, willOverride));
+        setIncome(await replaceIncome(month, replaceWith(changes), willOverride));
         return [];
     };
 
@@ -586,11 +597,13 @@ export default function IncomePage() {
                 );
                 if (shouldClear) {
                     for (const c of later) {
-                        await updateIncome(
-                            c.yearMonth,
-                            [{ action: "CLEAR", plannedIncomeId: editingId }],
-                            `Clearing later changes after a change of ${value.label} in ${month}`,
-                        );
+                        await updateIncome(c.yearMonth, [
+                            {
+                                action: "CLEAR",
+                                plannedIncomeId: editingId,
+                                explanation: `Clearing later changes after a change of ${value.label} in ${month}`,
+                            },
+                        ]);
                     }
                     await load();
                     showSuccess("Saved; later changes cleared");

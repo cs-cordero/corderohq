@@ -27,6 +27,7 @@ import type {
     IncomeSource,
     IncomeSourceFields,
     IncomeUpdateResult,
+    LaterBudgetChange,
     LoanTerms,
     NetWorthHistory,
     NetWorthClassEntry,
@@ -91,7 +92,7 @@ export function parseCategoryGroupArray(raw: unknown): CategoryGroup[] {
 
 export function parseCategory(raw: unknown): Category {
     const obj = requireObject(raw, "Category");
-    return {
+    const category: Category = {
         categoryId: requireString(obj, "categoryId", "Category"),
         name: requireString(obj, "name", "Category"),
         active: requireBoolean(obj, "active", "Category"),
@@ -107,6 +108,9 @@ export function parseCategory(raw: unknown): Category {
         groupId: typeof obj.groupId === "string" ? obj.groupId : "",
         orderInGroup: typeof obj.orderInGroup === "number" ? obj.orderInGroup : 0,
     };
+    const deactivatedYearMonth = optionalString(obj, "deactivatedYearMonth", "Category");
+    if (deactivatedYearMonth !== undefined) category.deactivatedYearMonth = deactivatedYearMonth;
+    return category;
 }
 
 export function parseCategoryArray(raw: unknown): Category[] {
@@ -178,6 +182,19 @@ function parseLaterCarriedChange<K extends string>(raw: unknown, key: K): Record
         [key]: requireString(obj, key, "LaterCarriedChange"),
         yearMonth: requireString(obj, "yearMonth", "LaterCarriedChange"),
     } as Record<K, string> & { yearMonth: string };
+}
+
+function parseLaterBudgetChange(raw: unknown): LaterBudgetChange {
+    const obj = requireObject(raw, "LaterBudgetChange");
+    return {
+        categoryId: requireString(obj, "categoryId", "LaterBudgetChange"),
+        yearMonth: requireString(obj, "yearMonth", "LaterBudgetChange"),
+        carriedAmount: requireNumber(obj, "carriedAmount", "LaterBudgetChange"),
+    };
+}
+
+export function parseLaterBudgetChangeArray(raw: unknown): LaterBudgetChange[] {
+    return arrayOf(raw, parseLaterBudgetChange, "LaterBudgetChange[]");
 }
 
 export function parseBudgetUpdateResult(raw: unknown): BudgetUpdateResult {
@@ -701,7 +718,19 @@ export function parseAccount(raw: unknown): Account {
     }
     if (typeof obj.targetYear === "number") account.targetYear = obj.targetYear;
     if (obj.loanTerms !== undefined) account.loanTerms = parseLoanTerms(obj.loanTerms);
+    const deactivatedYearMonth = optionalString(obj, "deactivatedYearMonth", "Account");
+    if (deactivatedYearMonth !== undefined) account.deactivatedYearMonth = deactivatedYearMonth;
+    if (obj.removedAssetClasses !== undefined) {
+        account.removedAssetClasses = parseStringMap(obj.removedAssetClasses, "Account.removedAssetClasses");
+    }
     return account;
+}
+
+function parseStringMap(raw: unknown, label: string): Record<string, string> {
+    const obj = requireObject(raw, label);
+    const map: Record<string, string> = {};
+    for (const key of Object.keys(obj)) map[key] = requireString(obj, key, label);
+    return map;
 }
 
 export function parseAccountArray(raw: unknown): Account[] {

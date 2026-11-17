@@ -108,14 +108,33 @@ class TestUpdate:
 
 
 class TestDeactivate:
-    def test_sets_active_to_false(self, table: CategoryTable, mock: MagicMock) -> None:
+    def test_sets_active_to_false_and_the_month(self, table: CategoryTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {"Item": {"categoryId": "abc", "name": "Groceries", "active": True}}
         mock.update_item.return_value = {"Attributes": {"categoryId": "abc", "name": "Groceries", "active": False}}
-        result = table.deactivate("abc")
+        result = table.deactivate("abc", "2026-03")
         assert result is not None
         assert result["active"] is False
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == "SET active = :val, deactivatedYearMonth = :ym, updatedAt = :now"
+        assert kwargs["ExpressionAttributeValues"][":ym"] == "2026-03"
+
+    def test_a_second_deactivate_keeps_the_stored_month(self, table: CategoryTable, mock: MagicMock) -> None:
+        stored = {"categoryId": "abc", "active": False, "deactivatedYearMonth": "2026-03"}
+        mock.get_item.return_value = {"Item": stored}
+        assert table.deactivate("abc", "2026-07") == stored
+        mock.update_item.assert_not_called()
 
     def test_returns_none_when_not_found(self, table: CategoryTable, mock: MagicMock) -> None:
         mock.get_item.return_value = {}
-        result = table.deactivate("nonexistent")
+        result = table.deactivate("nonexistent", "2026-03")
         assert result is None
+
+
+class TestReactivate:
+    def test_sets_active_and_removes_the_month(self, table: CategoryTable, mock: MagicMock) -> None:
+        mock.get_item.return_value = {"Item": {"categoryId": "abc", "active": False, "deactivatedYearMonth": "2026-03"}}
+        mock.update_item.return_value = {"Attributes": {"categoryId": "abc", "active": True}}
+        assert table.reactivate("abc") == {"categoryId": "abc", "active": True}
+        kwargs = mock.update_item.call_args.kwargs
+        assert kwargs["UpdateExpression"] == "SET active = :val, updatedAt = :now REMOVE deactivatedYearMonth"
+        assert kwargs["ExpressionAttributeValues"][":val"] is True

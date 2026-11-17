@@ -26,6 +26,9 @@ export interface Category {
     // string or 0. The UI then does not fail on an old row.
     groupId: string;
     orderInGroup: number;
+    // The month (YYYY-MM) of the deactivation of an inactive category. A category that was
+    // inactive before the app stored this month has none.
+    deactivatedYearMonth?: string;
 }
 
 export interface DeactivateResult {
@@ -64,6 +67,14 @@ export interface BudgetTarget {
 
 // How a change applies: from this month on (the carried value), or to this month only (the pinned value).
 export type ChangeScope = "FORWARD" | "THIS_MONTH";
+
+// A later month that holds its own carried amount for a category. A change from an earlier month on
+// stops at it.
+export interface LaterBudgetChange {
+    categoryId: string;
+    yearMonth: string;
+    carriedAmount: number;
+}
 
 export interface BudgetUpdateResult {
     targets: BudgetTarget[];
@@ -319,11 +330,13 @@ export interface IncomeMonth {
 }
 
 // One change in the body of the income `/replace` or `/update`.
-export type RecurringIncomeChange =
+// A row that changes a stored value needs an `explanation`. A row that changes nothing needs none.
+export type RecurringIncomeChange = (
     | { action: "SET"; plannedIncomeId?: string; recurringIncome: RecurringIncome }
     | { action: "CLEAR"; plannedIncomeId: string }
     | { action: "SET_PIN"; plannedIncomeId: string; recurringIncome: RecurringIncome }
-    | { action: "CLEAR_PIN"; plannedIncomeId: string };
+    | { action: "CLEAR_PIN"; plannedIncomeId: string }
+) & { explanation?: string };
 
 export interface IncomeUpdateResult {
     incomePlan: IncomeMonth;
@@ -380,6 +393,11 @@ export interface Account {
     cashFlowRole?: CashFlowRole;
     // The last four digits of the account numbers, which the CSV import looks for in a description.
     accountNumberLastFour?: string[];
+    // The last month (YYYY-MM) in which an inactive account counts. An account that was inactive
+    // before the app stored this month has none.
+    deactivatedYearMonth?: string;
+    // A map from each asset class that the account no longer holds to the last month in which it counts.
+    removedAssetClasses?: Record<string, string>;
     createdAt: string;
     updatedAt: string;
 }

@@ -3,14 +3,14 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, assert_never
 
 from ulid import ULID
 
 from corderohq.aws.dynamodb.util import DYNAMO_RESOURCE, query_all_items, scan_all_items, update_expression
 from corderohq.budget.transaction_args import CreateTransactionArgs, UpdateTransactionArgs
 from corderohq.budget.treatment import BudgetTreatment
-from corderohq.common import FieldChange
+from corderohq.common import FieldChange, Keep, Remove, SetTo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,7 +72,70 @@ class TransactionsTable:
         Raise ValueError if the changes change nothing.
         """
 
-        changes: dict[str, FieldChange[Any]] = {
+        response = self._table.update_item(
+            Key={"yearMonth": year_month, "sortId": sort_id},
+            ReturnValues="ALL_NEW",
+            **update_expression(self._field_changes(args)),
+        )
+        _LOGGER.info("Updated transaction %s/%s", year_month, sort_id)
+        return response["Attributes"]
+
+    def move_transaction(
+        self, existing: Mapping[str, Any], args: UpdateTransactionArgs, transaction_date: str
+    ) -> dict[str, Any] | None:
+        """Give a transaction a new date, apply the other changes of `args`, and return the new item.
+
+        The sort key holds the date, so the new date needs a new item. The new item keeps each attribute of the old
+        one, with a new `sortId` and the `yearMonth` of the new date. One DynamoDB transaction writes the new item and
+        deletes the old one, so a failure never leaves two items. Return None if the old item is gone.
+        """
+
+        item = dict(existing)
+        for attribute, change in self._field_changes(args).items():
+            match change:
+                case SetTo(value=value):
+                    item[attribute] = value
+                case Remove():
+                    item.pop(attribute, None)
+                case Keep():
+                    pass
+                case _:
+                    assert_never(change)
+        item["transactionDate"] = transaction_date
+        item["yearMonth"] = transaction_date[:7]
+        item["sortId"] = f"{transaction_date}#{ULID()}"
+        old_key = {"yearMonth": existing["yearMonth"], "sortId": existing["sortId"]}
+        client = self._table.meta.client
+        try:
+            client.transact_write_items(
+                TransactItems=[
+                    {"Put": {"TableName": self._table.name, "Item": item}},
+                    {
+                        "Delete": {
+                            "TableName": self._table.name,
+                            "Key": old_key,
+                            "ConditionExpression": "attribute_exists(sortId)",
+                        }
+                    },
+                ]
+            )
+        except client.exceptions.TransactionCanceledException:
+            _LOGGER.warning("Transaction %s/%s is gone; the move did not run", old_key["yearMonth"], old_key["sortId"])
+            return None
+        _LOGGER.info(
+            "Moved transaction %s/%s to %s/%s",
+            old_key["yearMonth"],
+            old_key["sortId"],
+            item["yearMonth"],
+            item["sortId"],
+        )
+        return item
+
+    @staticmethod
+    def _field_changes(args: UpdateTransactionArgs) -> dict[str, FieldChange[Any]]:
+        """Return the change of each stored attribute, except the date."""
+
+        return {
             "description": args.description,
             "amount": args.amount,
             "budgetTreatment": args.budget_treatment,
@@ -80,11 +143,6 @@ class TransactionsTable:
             "accountId": args.account_id,
             "note": args.note,
         }
-        response = self._table.update_item(
-            Key={"yearMonth": year_month, "sortId": sort_id}, ReturnValues="ALL_NEW", **update_expression(changes)
-        )
-        _LOGGER.info("Updated transaction %s/%s", year_month, sort_id)
-        return response["Attributes"]
 
     def delete_transaction(self, year_month: str, sort_id: str) -> bool:
         """Delete a transaction. Returns True if deleted, False if not found."""

@@ -3,13 +3,19 @@ import csv
 import io
 import json
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, assert_never
 from zoneinfo import ZoneInfo
 
-from corderohq.accounts import CashFlowRole, parse_create_account_args, parse_update_account_args, validate_asset_class
+from corderohq.accounts import (
+    CashFlowRole,
+    parse_create_account_args,
+    parse_update_account_args,
+    resolve_removed_asset_classes,
+    validate_asset_class,
+)
 from corderohq.aws.dynamodb import (
     AccountTable,
     AuditAction,
@@ -62,22 +68,25 @@ from corderohq.budget.income import (
     OneTimeIncome,
     RecurringIncome,
     RecurringIncomeChange,
+    RecurringIncomeEntry,
     SetPin,
     SetRecurringIncome,
     UpdateOneTimeIncomeArgs,
     parse_create_income_source_args,
     parse_one_time_income,
     parse_one_time_income_args,
-    parse_recurring_income_changes,
+    parse_recurring_income_entries,
     parse_update_income_source_args,
 )
+from corderohq.budget.targets import parse_replace_targets, parse_update_targets
 from corderohq.budget.transaction_args import (
     CreateTransactionArgs,
     parse_create_transaction_args,
+    parse_transaction_date,
     parse_update_transaction_args,
 )
 from corderohq.budget.treatment import BudgetTreatment, Classification, parse_classification
-from corderohq.common import FieldChange, Keep, Remove, SetTo, resolve_change
+from corderohq.common import Keep, Remove, SetTo, resolve_change
 from corderohq.networth.snapshots import build_history, build_month_view, compute_prefill
 from corderohq.util import YEAR_MONTH_PATTERN, get_env_var
 
@@ -229,7 +238,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             category_id = path.split("/")[-1]
             return _hard_delete_category(event, category_id, user)
 
-        # Budget
+        # Budget. The /later-changes path comes before the /{YYYY-MM} pattern, so that the app does not read
+        # "later-changes" as a year-month.
+        elif path.startswith("/api/budget/") and path.endswith("/later-changes") and method == "GET":
+            year_month = path.split("/")[-2]
+            return _get_budget_later_changes(year_month, now)
         elif path.startswith("/api/budget/") and method == "GET":
             year_month = path.split("/")[-1]
             return _get_budget(year_month, now)
@@ -314,13 +327,13 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _post_accounts_reorder(event)
         elif path.startswith("/api/accounts/") and path.endswith("/deactivate") and method == "POST":
             account_id = path.split("/")[-2]
-            return _deactivate_account(account_id)
+            return _deactivate_account(account_id, now)
         elif path.startswith("/api/accounts/") and path.endswith("/reactivate") and method == "POST":
             account_id = path.split("/")[-2]
             return _reactivate_account(account_id)
         elif path.startswith("/api/accounts/") and method == "PUT":
             account_id = path.split("/")[-1]
-            return _put_account(event, account_id)
+            return _put_account(event, account_id, now)
 
         # The net worth snapshots. The fixed /history path comes before the /{YYYY-MM}
         # pattern, so that the app does not read "history" as a year-month.
@@ -438,7 +451,8 @@ def _deactivate_category(
 
     Without `confirm: true`, return the future months that have their own values for the category, and change
     nothing. With `confirm: true`, deactivate it, and delete those rows. Each deleted row writes one CLEAR audit entry
-    for its carried amount, and one UNPIN entry for its pinned amount.
+    for its carried amount, and one UNPIN entry for its pinned amount. The current month in ET becomes the
+    `deactivatedYearMonth` of the category.
     """
 
     body = _parse_json_body(event) or {}
@@ -491,7 +505,7 @@ def _deactivate_category(
                 changes={name: {"before": before, "after": None}},
             )
 
-    item = _CATEGORY_TABLE.deactivate(category_id)
+    item = _CATEGORY_TABLE.deactivate(category_id, current_month)
     return _json_response(
         200,
         json.dumps({"category": item, "affectedMonths": affected_months}, default=_json_default),
@@ -741,6 +755,41 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     return _json_response(200, json.dumps(targets, default=_json_default))
 
 
+def _get_budget_later_changes(year_month: str, now: datetime) -> dict[str, Any]:
+    """Return the later months that hold their own carried amount, as `[{categoryId, yearMonth, carriedAmount}]`.
+
+    The list holds each month after `year_month` and after the current month, in the editable range. A change from
+    `year_month` on stops at each one. A dense month holds a carried amount for each category, so a month up to the
+    current month is never in the list.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    after = max(year_month, _year_month_of(now))
+    changes = _later_carried_changes(_BUDGET_TABLE.scan(), after, now)
+    return _json_response(200, json.dumps(changes, default=_json_default))
+
+
+def _later_carried_changes(rows: list[dict[str, Any]], after: str, now: datetime) -> list[dict[str, Any]]:
+    """Return each Budget row after `after`, in the editable range, that holds its own carried amount.
+
+    Each result is `{categoryId, yearMonth, carriedAmount}`, in order of month and then category. Only an own carried
+    amount stops a change from moving forward. A pinned amount does not, so a row with only a pinned amount is not in
+    the list.
+    """
+
+    return sorted(
+        (
+            {"categoryId": r["categoryId"], "yearMonth": r["yearMonth"], "carriedAmount": r["carriedAmount"]}
+            for r in rows
+            if r["yearMonth"] > after
+            and "carriedAmount" in r
+            and editability(r["yearMonth"], now) == EditabilityState.EDITABLE
+        ),
+        key=lambda change: (change["yearMonth"], change["categoryId"]),
+    )
+
+
 def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
     """Replace all budget targets of a dense month.
 
@@ -749,8 +798,10 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     month. Else a 409 lists the missing categories. A new or changed carried amount writes one CREATE or UPDATE audit
     entry. A set or removed pinned amount writes one PIN or UNPIN entry.
 
-    Each target is `{categoryId, carriedAmount, pinnedAmount?}`. `carriedAmount` is a number. A `pinnedAmount` key sets
-    the pinned amount (a number) or clears it (null). A target without the key keeps the stored pinned amount.
+    Each target is `{categoryId, carriedAmount, pinnedAmount?, explanation?}`. `carriedAmount` is a number. A
+    `pinnedAmount` key sets the pinned amount (a number) or clears it (null). A target without the key keeps the stored
+    pinned amount. A target that changes a stored value needs an explanation, and its audit entries use it. A target
+    with no stored row is a change. A target that changes nothing needs no explanation.
     """
 
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -759,25 +810,10 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-
-    targets = body.get("targets")
-    explanation = body.get("explanation", "").strip()
-    if not isinstance(targets, list):
-        return _response(400, "targets array is required")
-    if not explanation:
-        return _response(400, "explanation is required")
-
-    parsed: dict[str, tuple[int, FieldChange[int]]] = {}
-    for target in targets:
-        if not isinstance(target, dict) or not isinstance(target.get("categoryId"), str):
-            return _response(400, "Each target must have categoryId")
-        carried = target.get("carriedAmount")
-        if not _is_amount(carried):
-            return _response(400, "carriedAmount must be an integer")
-        try:
-            parsed[target["categoryId"]] = (carried, _parse_amount_change(target, "pinnedAmount"))
-        except ValueError as e:
-            return _response(400, str(e))
+    try:
+        targets = parse_replace_targets(body)
+    except ValueError as e:
+        return _response(400, str(e))
 
     override_active, err = _resolve_override(event, body)
     if err:
@@ -799,6 +835,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
             ),
         )
 
+    by_category = {target.category_id: target for target in targets}
     existing = _BUDGET_TABLE.get_budget_targets(year_month)
     existing_cat_ids = {t["categoryId"] for t in existing}
     transactions = _TRANSACTIONS_TABLE.list_transactions_for_month(year_month)
@@ -809,7 +846,7 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     }
     required_cat_ids = existing_cat_ids | transaction_category_ids
 
-    missing = sorted(required_cat_ids - set(parsed))
+    missing = sorted(required_cat_ids - set(by_category))
     if missing:
         return _json_response(
             409,
@@ -827,16 +864,30 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
     old_by_category = {t["categoryId"]: BudgetTargetAmounts.from_item(t) for t in existing}
     new_by_category = {
         cat_id: BudgetTargetAmounts(
-            carried_amount=carried,
+            carried_amount=target.carried_amount,
             pinned_amount=resolve_change(
-                pinned_change, old.pinned_amount if (old := old_by_category.get(cat_id)) is not None else None
+                target.pinned_amount, old.pinned_amount if (old := old_by_category.get(cat_id)) is not None else None
             ),
         )
-        for cat_id, (carried, pinned_change) in parsed.items()
+        for cat_id, target in by_category.items()
     }
+
+    explanations: dict[str, str] = {}
+    without_explanation: list[int] = []
+    for cat_id, target in by_category.items():
+        if old_by_category.get(cat_id) == new_by_category[cat_id]:
+            continue
+        if target.explanation is None:
+            without_explanation.append(target.index)
+        else:
+            explanations[cat_id] = target.explanation
+    if without_explanation:
+        return _missing_explanation_response("targets", without_explanation)
+
     items = _BUDGET_TABLE.set_all_budget_targets(year_month, new_by_category)
 
-    for cat_id, new in new_by_category.items():
+    for cat_id, explanation in explanations.items():
+        new = new_by_category[cat_id]
         old = old_by_category.get(cat_id)
         old_carried = old.carried_amount if old is not None else None
         old_pinned = old.pinned_amount if old is not None else None
@@ -864,14 +915,15 @@ def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str,
 def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
     """Change some budget targets of a future month.
 
-    The body is `{targets: [{categoryId, carriedAmount?: number | null, pinnedAmount?: number | null}], explanation}`.
+    The body is `{targets: [{categoryId, carriedAmount?: number | null, pinnedAmount?: number | null, explanation?}]}`.
     Each target needs `carriedAmount`, `pinnedAmount`, or both. A category that is not in `targets` does not change,
     and neither does a key that a target leaves out. Only a future month is accepted, also with an override.
     - `carriedAmount` is the month's own carried amount: a number sets it (UPDATE), and null removes it (CLEAR), so
       that the month inherits again. Later months carry it forward.
     - `pinnedAmount` is the amount of this month only: a number sets it (PIN), and null removes it (UNPIN). It never
       carries forward.
-    A row with neither value left is deleted. The same value again does nothing, and writes no audit entry.
+    A row with neither value left is deleted. The same value again does nothing, and writes no audit entry. A target
+    that changes a value needs an explanation, and its audit entries use it.
 
     Return `{targets, warnings: {laterCarriedChanges, matchesInheritedValue}}`, where `targets` holds the resolved
     values of the month.
@@ -883,27 +935,10 @@ def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, 
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-
-    targets = body.get("targets")
-    explanation = body.get("explanation", "").strip()
-    if not isinstance(targets, list):
-        return _response(400, "targets array is required")
-    if not explanation:
-        return _response(400, "explanation is required")
-
-    parsed: dict[str, tuple[FieldChange[int], FieldChange[int]]] = {}
-    for target in targets:
-        if not isinstance(target, dict) or not isinstance(target.get("categoryId"), str):
-            return _response(400, "Each target must have categoryId")
-        if "carriedAmount" not in target and "pinnedAmount" not in target:
-            return _response(400, "Each target must have carriedAmount and/or pinnedAmount (each may be null)")
-        try:
-            parsed[target["categoryId"]] = (
-                _parse_amount_change(target, "carriedAmount"),
-                _parse_amount_change(target, "pinnedAmount"),
-            )
-        except ValueError as e:
-            return _response(400, str(e))
+    try:
+        targets = parse_update_targets(body)
+    except ValueError as e:
+        return _response(400, str(e))
 
     current_ym = _year_month_of(now)
     if year_month <= current_ym:
@@ -938,17 +973,27 @@ def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, 
         key: amounts.carried_amount for key, amounts in rows_before.items() if amounts.carried_amount is not None
     }
 
-    matches_inherited: list[str] = []
-
-    for cat_id, (carried_change, pinned_change) in parsed.items():
+    by_category = {target.category_id: target for target in targets}
+    writes: list[tuple[str, str, int | None, int | None, int | None, int | None]] = []
+    without_explanation: list[int] = []
+    for cat_id, target in by_category.items():
         old = rows_before.get((year_month, cat_id))
         old_carried = old.carried_amount if old is not None else None
         old_pinned = old.pinned_amount if old is not None else None
-        new_carried = resolve_change(carried_change, old_carried)
-        new_pinned = resolve_change(pinned_change, old_pinned)
+        new_carried = resolve_change(target.carried_amount, old_carried)
+        new_pinned = resolve_change(target.pinned_amount, old_pinned)
         if (new_carried, new_pinned) == (old_carried, old_pinned):
             continue
+        if target.explanation is None:
+            without_explanation.append(target.index)
+        else:
+            writes.append((cat_id, target.explanation, old_carried, new_carried, old_pinned, new_pinned))
+    if without_explanation:
+        return _missing_explanation_response("targets", without_explanation)
 
+    matches_inherited: list[str] = []
+
+    for cat_id, explanation, old_carried, new_carried, old_pinned, new_pinned in writes:
         if new_carried is None and new_pinned is None:
             _BUDGET_TABLE.delete_single_budget_target(year_month, cat_id)
         else:
@@ -977,17 +1022,11 @@ def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, 
             )
 
     # Read the table again, then find the later months with their own carried amount, and the resolved month.
-    rows_after = _BUDGET_TABLE.scan()
-    touched_cat_ids = set(parsed)
-    later_carried_changes = sorted(
-        (
-            {"categoryId": r["categoryId"], "yearMonth": r["yearMonth"]}
-            for r in rows_after
-            # Only an own carried amount stops a change from moving forward. A pinned amount does not.
-            if r["categoryId"] in touched_cat_ids and r["yearMonth"] > year_month and "carriedAmount" in r
-        ),
-        key=lambda p: (p["yearMonth"], p["categoryId"]),
-    )
+    later_carried_changes = [
+        {"categoryId": change["categoryId"], "yearMonth": change["yearMonth"]}
+        for change in _later_carried_changes(_BUDGET_TABLE.scan(), year_month, now)
+        if change["categoryId"] in by_category
+    ]
 
     active_ids = [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()]
     resolved = resolve_future_targets(BudgetDensifyAdapter(_BUDGET_TABLE), active_ids, year_month)
@@ -1007,23 +1046,19 @@ def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, 
     )
 
 
-def _is_amount(value: Any) -> bool:
-    """Return True if `value` is an amount: an integer in millionths of a dollar. A bool is not an amount."""
+def _missing_explanation_response(list_name: str, indices: list[int]) -> dict[str, Any]:
+    """Return the 400 response for the entries of `list_name` that change a value and have no explanation."""
 
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def _parse_amount_change(target: dict[str, Any], key: str) -> FieldChange[int]:
-    """Return Keep() for an absent key, Remove() for null, and SetTo(amount) for an amount. Raise ValueError else."""
-
-    if key not in target:
-        return Keep()
-    value = target[key]
-    if value is None:
-        return Remove()
-    if not _is_amount(value):
-        raise ValueError(f"{key} must be an integer or null")
-    return SetTo(value)
+    entries = ", ".join(f"{list_name}[{index}]" for index in indices)
+    return _json_response(
+        400,
+        json.dumps(
+            {
+                "error": f"explanation is required for each entry that changes a value: {entries}",
+                "entriesWithoutExplanation": indices,
+            }
+        ),
+    )
 
 
 # --- Income sources and the income plan ---
@@ -1294,6 +1329,106 @@ def _check_end_month_rules(
     return None
 
 
+@dataclass(frozen=True)
+class _RecurringIncomeWrite:
+    """One change of a stored value of a recurring income, from the entry at `index` of the body."""
+
+    index: int
+    key: str
+    action: AuditAction
+    before: RecurringIncome | None
+    after: RecurringIncome | None
+    field: str
+    explanation: str
+
+
+def _plan_recurring_income_writes(
+    entries: list[RecurringIncomeEntry],
+    year_month: str,
+    carried: dict[tuple[str, str], RecurringIncome],
+    pinned: dict[tuple[str, str], RecurringIncome],
+) -> tuple[list[_RecurringIncomeWrite], list[int]]:
+    """Apply each entry in order to `carried` and `pinned`. Return the writes, and the entries with no explanation.
+
+    An entry that changes no stored value makes no write, and needs no explanation. A SET with no `plannedIncomeId`
+    gets a new id. An entry that changes a value and has no explanation makes no write. Its index goes in the second
+    list.
+    """
+
+    writes: list[_RecurringIncomeWrite] = []
+    without_explanation: list[int] = []
+    for index, entry in enumerate(entries):
+        key: str
+        before: RecurringIncome | None
+        after: RecurringIncome | None
+        match entry.change:
+            case SetRecurringIncome(planned_income_id=planned_income_id, income=income):
+                key = planned_income_id or new_recurring_income_id()
+                before, after = carried.get((year_month, key)), income
+                if before == after:
+                    continue
+                carried[(year_month, key)] = income
+                if planned_income_id is None:
+                    action = AuditAction.RECURRING_INCOME_CREATE
+                else:
+                    action = AuditAction.RECURRING_INCOME_UPDATE
+                field = "recurringIncome"
+            case ClearRecurringIncome(planned_income_id=key):
+                if (year_month, key) not in carried:
+                    continue
+                before, after = carried.pop((year_month, key)), None
+                action, field = AuditAction.RECURRING_INCOME_CLEAR, "recurringIncome"
+            case SetPin(planned_income_id=key, income=income):
+                before, after = pinned.get((year_month, key)), income
+                if before == after:
+                    continue
+                pinned[(year_month, key)] = income
+                action, field = AuditAction.RECURRING_INCOME_PIN, "pinnedRecurringIncome"
+            case ClearPin(planned_income_id=key):
+                before, after = pinned.pop((year_month, key), None), None
+                if before is None:
+                    continue
+                action, field = AuditAction.RECURRING_INCOME_UNPIN, "pinnedRecurringIncome"
+            case _:
+                assert_never(entry.change)
+        if entry.explanation is None:
+            without_explanation.append(index)
+            continue
+        writes.append(_RecurringIncomeWrite(index, key, action, before, after, field, entry.explanation))
+    return writes, without_explanation
+
+
+def _apply_recurring_income_writes(
+    writes: list[_RecurringIncomeWrite],
+    year_month: str,
+    carried: dict[tuple[str, str], RecurringIncome],
+    pinned: dict[tuple[str, str], RecurringIncome],
+    user: dict[str, str],
+    override_active: bool,
+) -> None:
+    """Write the item of each recurring income that `writes` changes, and then one audit entry for each write.
+
+    `carried` and `pinned` hold the state after the writes.
+    """
+
+    for key in dict.fromkeys(write.key for write in writes):
+        _write_recurring_income_row(year_month, key, carried, pinned)
+    for write in writes:
+        source = write.after or write.before
+        _write_recurring_income_audit(
+            year_month,
+            write.action,
+            write.key,
+            source.income_source_id if source is not None else None,
+            write.before,
+            write.after,
+            write.explanation,
+            user,
+            override_active,
+            field=write.field,
+        )
+
+
 def _write_recurring_income_row(
     year_month: str,
     key: str,
@@ -1318,14 +1453,15 @@ def _write_recurring_income_row(
 def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
     """Write the recurring incomes of a dense month (current, grace, or locked through the override).
 
-    Body: `{recurring: [{action, plannedIncomeId?, recurringIncome?}], explanation, override?}`. The body must hold each
-    recurring income with a carried value in that month.
+    Body: `{recurring: [{action, plannedIncomeId?, recurringIncome?, explanation?}], override?}`. The body must hold
+    each recurring income with a carried value in that month.
     - SET writes the carried value (RECURRING_INCOME_UPDATE). With no `plannedIncomeId`, it creates a new recurring
       income (RECURRING_INCOME_CREATE).
     - SET_PIN and CLEAR_PIN set or remove the pinned value of this month (RECURRING_INCOME_PIN or
       RECURRING_INCOME_UNPIN).
     - CLEAR is only for a future month.
-    The same value again is a no-op with no audit entry. See `_check_end_month_rules` for the rules of the end month.
+    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation,
+    and its audit entry uses it. See `_check_end_month_rules` for the rules of the end month.
     """
 
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -1333,13 +1469,11 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-    explanation = (body.get("explanation") or "").strip()
-    if not explanation:
-        return _response(400, "explanation is required")
     try:
-        changes = parse_recurring_income_changes(body)
+        entries = parse_recurring_income_entries(body)
     except ValueError as e:
         return _response(400, str(e))
+    changes = [entry.change for entry in entries]
     if any(isinstance(change, ClearRecurringIncome) for change in changes):
         return _response(400, "CLEAR is only for a future month; use /update")
 
@@ -1387,62 +1521,10 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
             ),
         )
 
-    for change in changes:
-        match change:
-            case SetRecurringIncome(planned_income_id=planned_income_id, income=income):
-                key = planned_income_id or new_recurring_income_id()
-                before = carried.get((year_month, key))
-                if before == income:
-                    continue
-                carried[(year_month, key)] = income
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                action = (
-                    AuditAction.RECURRING_INCOME_CREATE
-                    if planned_income_id is None
-                    else AuditAction.RECURRING_INCOME_UPDATE
-                )
-                _write_recurring_income_audit(
-                    year_month, action, key, income.income_source_id, before, income, explanation, user, override_active
-                )
-            case SetPin(planned_income_id=key, income=income):
-                pinned_before = pinned.get((year_month, key))
-                if pinned_before == income:
-                    continue
-                pinned[(year_month, key)] = income
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                _write_recurring_income_audit(
-                    year_month,
-                    AuditAction.RECURRING_INCOME_PIN,
-                    key,
-                    income.income_source_id,
-                    pinned_before,
-                    income,
-                    explanation,
-                    user,
-                    override_active,
-                    field="pinnedRecurringIncome",
-                )
-            case ClearPin(planned_income_id=key):
-                pinned_before = pinned.pop((year_month, key), None)
-                if pinned_before is None:
-                    continue
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                _write_recurring_income_audit(
-                    year_month,
-                    AuditAction.RECURRING_INCOME_UNPIN,
-                    key,
-                    pinned_before.income_source_id,
-                    pinned_before,
-                    None,
-                    explanation,
-                    user,
-                    override_active,
-                    field="pinnedRecurringIncome",
-                )
-            case ClearRecurringIncome():
-                pass
-            case _:
-                assert_never(change)
+    writes, without_explanation = _plan_recurring_income_writes(entries, year_month, carried, pinned)
+    if without_explanation:
+        return _missing_explanation_response("recurring", without_explanation)
+    _apply_recurring_income_writes(writes, year_month, carried, pinned, user, override_active)
 
     return _json_response(200, json.dumps(_income_plan_response(year_month, now), default=_json_default))
 
@@ -1451,14 +1533,15 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     """Change some recurring incomes of a future month.
 
     The same rules as the budget /update: the month must be EDITABLE and later than the current month. Body:
-    `{recurring: [{action, plannedIncomeId?, recurringIncome?}], explanation, override?}`. A recurring income left out
+    `{recurring: [{action, plannedIncomeId?, recurringIncome?, explanation?}], override?}`. A recurring income left out
     of the body does not change. The override only lifts the rules of the end month (see `_check_end_month_rules`).
     - SET writes the month's own carried value (RECURRING_INCOME_UPDATE). With no `plannedIncomeId`, it creates a new
       recurring income from this month on (RECURRING_INCOME_CREATE).
     - CLEAR removes the month's own carried value, so that the month inherits again (RECURRING_INCOME_CLEAR).
     - SET_PIN and CLEAR_PIN set or remove the pinned value of this month (RECURRING_INCOME_PIN or
       RECURRING_INCOME_UNPIN).
-    The same value again is a no-op with no audit entry.
+    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation,
+    and its audit entry uses it.
 
     Returns `{incomePlan: <the month, as GET /api/income>, warnings: {laterCarriedChanges, matchesInheritedValue}}`.
     """
@@ -1468,13 +1551,11 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
-    explanation = (body.get("explanation") or "").strip()
-    if not explanation:
-        return _response(400, "explanation is required")
     try:
-        changes = parse_recurring_income_changes(body)
+        entries = parse_recurring_income_entries(body)
     except ValueError as e:
         return _response(400, str(e))
+    changes = [entry.change for entry in entries]
     override_active, err = _resolve_override(event, body)
     if err:
         return err
@@ -1514,83 +1595,26 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     err = _check_end_month_rules(changes, carried, year_month, now, override_active)
     if err:
         return err
-    matches_inherited: list[str] = []
-    touched_ids: set[str] = set()
 
-    for change in changes:
-        match change:
-            case SetRecurringIncome(planned_income_id=planned_income_id, income=income):
-                key = planned_income_id or new_recurring_income_id()
-                touched_ids.add(key)
-                held = (year_month, key) in carried
-                before = carried.get((year_month, key))
-                if held and before == income:
-                    continue
-                carried[(year_month, key)] = income
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                if planned_income_id is None:
-                    action = AuditAction.RECURRING_INCOME_CREATE
-                else:
-                    action = AuditAction.RECURRING_INCOME_UPDATE
-                    if walk_back_for(carried, year_month, key) == income:
-                        matches_inherited.append(key)
-                _write_recurring_income_audit(
-                    year_month, action, key, income.income_source_id, before, income, explanation, user, override_active
-                )
-            case ClearRecurringIncome(planned_income_id=key):
-                touched_ids.add(key)
-                if (year_month, key) not in carried:
-                    continue
-                before = carried.pop((year_month, key))
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                _write_recurring_income_audit(
-                    year_month,
-                    AuditAction.RECURRING_INCOME_CLEAR,
-                    key,
-                    before.income_source_id,
-                    before,
-                    None,
-                    explanation,
-                    user,
-                    override_active,
-                )
-            case SetPin(planned_income_id=key, income=income):
-                pinned_before = pinned.get((year_month, key))
-                if pinned_before == income:
-                    continue
-                pinned[(year_month, key)] = income
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                _write_recurring_income_audit(
-                    year_month,
-                    AuditAction.RECURRING_INCOME_PIN,
-                    key,
-                    income.income_source_id,
-                    pinned_before,
-                    income,
-                    explanation,
-                    user,
-                    override_active,
-                    field="pinnedRecurringIncome",
-                )
-            case ClearPin(planned_income_id=key):
-                pinned_before = pinned.pop((year_month, key), None)
-                if pinned_before is None:
-                    continue
-                _write_recurring_income_row(year_month, key, carried, pinned)
-                _write_recurring_income_audit(
-                    year_month,
-                    AuditAction.RECURRING_INCOME_UNPIN,
-                    key,
-                    pinned_before.income_source_id,
-                    pinned_before,
-                    None,
-                    explanation,
-                    user,
-                    override_active,
-                    field="pinnedRecurringIncome",
-                )
-            case _:
-                assert_never(change)
+    writes, without_explanation = _plan_recurring_income_writes(entries, year_month, carried, pinned)
+    if without_explanation:
+        return _missing_explanation_response("recurring", without_explanation)
+    _apply_recurring_income_writes(writes, year_month, carried, pinned, user, override_active)
+
+    # The inherited value comes from the months before this one, so the writes of this month do not change it.
+    matches_inherited = sorted(
+        {
+            write.key
+            for write in writes
+            if write.action == AuditAction.RECURRING_INCOME_UPDATE
+            and walk_back_for(carried, year_month, write.key) == write.after
+        }
+    )
+    touched_ids = {write.key for write in writes if write.action == AuditAction.RECURRING_INCOME_CREATE} | {
+        change.planned_income_id
+        for change in changes
+        if isinstance(change, SetRecurringIncome | ClearRecurringIncome) and change.planned_income_id is not None
+    }
 
     # A later month with its own carried value keeps it, so a change in this month does not reach it. A later pinned
     # value does not stop a change.
@@ -1610,7 +1634,7 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
                 "incomePlan": _income_plan_response(year_month, now),
                 "warnings": {
                     "laterCarriedChanges": later_carried_changes,
-                    "matchesInheritedValue": sorted(matches_inherited),
+                    "matchesInheritedValue": matches_inherited,
                 },
             },
             default=_json_default,
@@ -1833,14 +1857,14 @@ def _check_account_exists(account_id: str | None) -> dict[str, Any] | None:
 
 
 def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Create one transaction. Its `transactionDate` must be a real date, as YYYY-MM-DD, and it sets the month."""
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
 
-    year_month = body.get("yearMonth")
-    if not isinstance(year_month, str) or not YEAR_MONTH_PATTERN.match(year_month):
-        return _response(400, "yearMonth is required, as YYYY-MM")
     try:
+        year_month = parse_transaction_date(body.get("transactionDate"))[:7]
         new = parse_create_transaction_args(body, year_month=year_month)
     except ValueError as e:
         return _response(400, str(e))
@@ -2151,6 +2175,12 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
 
 
 def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Change a transaction. See `parse_update_transaction_args` for the fields.
+
+    A new `transactionDate` moves the transaction to a new item, also in a different month. The old month and the new
+    month must both be editable. The response is the new item.
+    """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -2184,8 +2214,18 @@ def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if args.changes_nothing():
         return _json_response(200, json.dumps(existing, default=_json_default))
 
-    item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, args)
-    return _json_response(200, json.dumps(item, default=_json_default))
+    match args.transaction_date:
+        case SetTo(value=transaction_date):
+            err = _check_year_month_editable(transaction_date[:7], override_active, now)
+            if err:
+                return err
+            moved = _TRANSACTIONS_TABLE.move_transaction(existing, args, transaction_date)
+            if moved is None:
+                return _response(404, "Transaction not found")
+            return _json_response(200, json.dumps(moved, default=_json_default))
+        case Keep():
+            item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, args)
+            return _json_response(200, json.dumps(item, default=_json_default))
 
 
 def _delete_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
@@ -2358,10 +2398,12 @@ def _post_account(event: dict[str, Any]) -> dict[str, Any]:
     return _json_response(201, json.dumps(item, default=_json_default))
 
 
-def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
+def _put_account(event: dict[str, Any], account_id: str, now: datetime) -> dict[str, Any]:
     """Change the given fields of an account.
 
-    See `parse_update_account_args` for the editable fields. The type of an account cannot change.
+    See `parse_update_account_args` for the editable fields. The type of an account cannot change. A change of the
+    asset classes also changes `removedAssetClasses`: a class that the request takes out gets the current month, and a
+    class that the request adds again loses its entry.
     """
 
     body = _parse_json_body(event)
@@ -2375,6 +2417,10 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
         args = parse_update_account_args(body, existing)
     except ValueError as e:
         return _response(400, str(e))
+    args = replace(
+        args,
+        removed_asset_classes=resolve_removed_asset_classes(existing, args.asset_classes, _year_month_of(now)),
+    )
     match args.owners:
         case SetTo(value=owners):
             err = _check_owners_exist(owners)
@@ -2390,8 +2436,10 @@ def _put_account(event: dict[str, Any], account_id: str) -> dict[str, Any]:
     return _json_response(200, json.dumps(item, default=_json_default))
 
 
-def _deactivate_account(account_id: str) -> dict[str, Any]:
-    item = _ACCOUNT_TABLE.deactivate(account_id)
+def _deactivate_account(account_id: str, now: datetime) -> dict[str, Any]:
+    """Close an account. The current month in ET is the last month in which it counts."""
+
+    item = _ACCOUNT_TABLE.deactivate(account_id, _year_month_of(now))
     if item is None:
         return _response(404, "Account not found")
     return _json_response(200, json.dumps(item, default=_json_default))
