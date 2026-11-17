@@ -65,6 +65,14 @@ export interface BudgetTarget {
 // How a change applies: from this month on (the carried value), or to this month only (the pinned value).
 export type ChangeScope = "FORWARD" | "THIS_MONTH";
 
+// A later month that holds its own carried amount for a category. A change from an earlier month on
+// stops at it.
+export interface LaterBudgetChange {
+    categoryId: string;
+    yearMonth: string;
+    carriedAmount: number;
+}
+
 export interface BudgetUpdateResult {
     targets: BudgetTarget[];
     warnings: {

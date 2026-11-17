@@ -27,6 +27,7 @@ import type {
     IncomeSource,
     IncomeSourceFields,
     IncomeUpdateResult,
+    LaterBudgetChange,
     LoanTerms,
     NetWorthHistory,
     NetWorthClassEntry,
@@ -178,6 +179,19 @@ function parseLaterCarriedChange<K extends string>(raw: unknown, key: K): Record
         [key]: requireString(obj, key, "LaterCarriedChange"),
         yearMonth: requireString(obj, "yearMonth", "LaterCarriedChange"),
     } as Record<K, string> & { yearMonth: string };
+}
+
+function parseLaterBudgetChange(raw: unknown): LaterBudgetChange {
+    const obj = requireObject(raw, "LaterBudgetChange");
+    return {
+        categoryId: requireString(obj, "categoryId", "LaterBudgetChange"),
+        yearMonth: requireString(obj, "yearMonth", "LaterBudgetChange"),
+        carriedAmount: requireNumber(obj, "carriedAmount", "LaterBudgetChange"),
+    };
+}
+
+export function parseLaterBudgetChangeArray(raw: unknown): LaterBudgetChange[] {
+    return arrayOf(raw, parseLaterBudgetChange, "LaterBudgetChange[]");
 }
 
 export function parseBudgetUpdateResult(raw: unknown): BudgetUpdateResult {

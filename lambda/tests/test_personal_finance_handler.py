@@ -1478,6 +1478,54 @@ class TestPostBudgetUpdate:
         assert body["warnings"]["laterCarriedChanges"] == [{"categoryId": "cat1", "yearMonth": "2026-12"}]
 
 
+class TestGetBudgetLaterChanges:
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_future_month_lists_each_later_own_carried_amount(self, mock_bt: MagicMock) -> None:
+        mock_bt.scan.return_value = [
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "carriedAmount": 500},
+            {"yearMonth": _FUTURE_MONTH, "categoryId": "cat1", "carriedAmount": 600},
+            {"yearMonth": "2027-01", "categoryId": "cat2", "carriedAmount": 300},
+            {"yearMonth": "2026-12", "categoryId": "cat1", "carriedAmount": 999},
+        ]
+
+        result = handler(_make_event("GET", f"/api/budget/{_FUTURE_MONTH}/later-changes"), None)
+
+        assert result["statusCode"] == 200
+        assert json.loads(result["body"]) == [
+            {"categoryId": "cat1", "yearMonth": "2026-12", "carriedAmount": 999},
+            {"categoryId": "cat2", "yearMonth": "2027-01", "carriedAmount": 300},
+        ]
+
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_a_pinned_amount_does_not_count(self, mock_bt: MagicMock) -> None:
+        mock_bt.scan.return_value = [
+            {"yearMonth": "2026-12", "categoryId": "cat1", "pinnedAmount": 800},
+            {"yearMonth": "2027-01", "categoryId": "cat1", "carriedAmount": 300, "pinnedAmount": 50},
+        ]
+
+        result = handler(_make_event("GET", f"/api/budget/{_FUTURE_MONTH}/later-changes"), None)
+
+        assert json.loads(result["body"]) == [{"categoryId": "cat1", "yearMonth": "2027-01", "carriedAmount": 300}]
+
+    @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
+    def test_a_past_month_lists_only_the_months_after_the_current_month(self, mock_bt: MagicMock) -> None:
+        # Each dense month holds a carried amount, so the months up to the current month never count.
+        mock_bt.scan.return_value = [
+            {"yearMonth": "2026-04", "categoryId": "cat1", "carriedAmount": 400},
+            {"yearMonth": "2026-05", "categoryId": "cat1", "carriedAmount": 500},
+            {"yearMonth": _EDITABLE_MONTH, "categoryId": "cat1", "carriedAmount": 500},
+            {"yearMonth": "2026-08", "categoryId": "cat1", "carriedAmount": 700},
+        ]
+
+        result = handler(_make_event("GET", f"/api/budget/{_LOCKED_MONTH}/later-changes"), None)
+
+        assert json.loads(result["body"]) == [{"categoryId": "cat1", "yearMonth": "2026-08", "carriedAmount": 700}]
+
+    def test_returns_400_for_invalid_month(self) -> None:
+        result = handler(_make_event("GET", "/api/budget/2026-6/later-changes"), None)
+        assert result["statusCode"] == 400
+
+
 _ADMIN_GROUP = "budget-admin-test"
 
 

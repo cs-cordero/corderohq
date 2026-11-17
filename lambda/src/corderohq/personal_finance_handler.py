@@ -231,7 +231,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             category_id = path.split("/")[-1]
             return _hard_delete_category(event, category_id, user)
 
-        # Budget
+        # Budget. The /later-changes path comes before the /{YYYY-MM} pattern, so that the app does not read
+        # "later-changes" as a year-month.
+        elif path.startswith("/api/budget/") and path.endswith("/later-changes") and method == "GET":
+            year_month = path.split("/")[-2]
+            return _get_budget_later_changes(year_month, now)
         elif path.startswith("/api/budget/") and method == "GET":
             year_month = path.split("/")[-1]
             return _get_budget(year_month, now)
@@ -743,6 +747,41 @@ def _get_budget(year_month: str, now: datetime) -> dict[str, Any]:
     return _json_response(200, json.dumps(targets, default=_json_default))
 
 
+def _get_budget_later_changes(year_month: str, now: datetime) -> dict[str, Any]:
+    """Return the later months that hold their own carried amount, as `[{categoryId, yearMonth, carriedAmount}]`.
+
+    The list holds each month after `year_month` and after the current month, in the editable range. A change from
+    `year_month` on stops at each one. A dense month holds a carried amount for each category, so a month up to the
+    current month is never in the list.
+    """
+
+    if not YEAR_MONTH_PATTERN.match(year_month):
+        return _response(400, "Invalid month format, expected YYYY-MM")
+    after = max(year_month, _year_month_of(now))
+    changes = _later_carried_changes(_BUDGET_TABLE.scan(), after, now)
+    return _json_response(200, json.dumps(changes, default=_json_default))
+
+
+def _later_carried_changes(rows: list[dict[str, Any]], after: str, now: datetime) -> list[dict[str, Any]]:
+    """Return each Budget row after `after`, in the editable range, that holds its own carried amount.
+
+    Each result is `{categoryId, yearMonth, carriedAmount}`, in order of month and then category. Only an own carried
+    amount stops a change from moving forward. A pinned amount does not, so a row with only a pinned amount is not in
+    the list.
+    """
+
+    return sorted(
+        (
+            {"categoryId": r["categoryId"], "yearMonth": r["yearMonth"], "carriedAmount": r["carriedAmount"]}
+            for r in rows
+            if r["yearMonth"] > after
+            and "carriedAmount" in r
+            and editability(r["yearMonth"], now) == EditabilityState.EDITABLE
+        ),
+        key=lambda change: (change["yearMonth"], change["categoryId"]),
+    )
+
+
 def _post_budget_replace(event: dict[str, Any], year_month: str, user: dict[str, str], now: datetime) -> dict[str, Any]:
     """Replace all budget targets of a dense month.
 
@@ -975,17 +1014,11 @@ def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, 
             )
 
     # Read the table again, then find the later months with their own carried amount, and the resolved month.
-    rows_after = _BUDGET_TABLE.scan()
-    touched_cat_ids = set(by_category)
-    later_carried_changes = sorted(
-        (
-            {"categoryId": r["categoryId"], "yearMonth": r["yearMonth"]}
-            for r in rows_after
-            # Only an own carried amount stops a change from moving forward. A pinned amount does not.
-            if r["categoryId"] in touched_cat_ids and r["yearMonth"] > year_month and "carriedAmount" in r
-        ),
-        key=lambda p: (p["yearMonth"], p["categoryId"]),
-    )
+    later_carried_changes = [
+        {"categoryId": change["categoryId"], "yearMonth": change["yearMonth"]}
+        for change in _later_carried_changes(_BUDGET_TABLE.scan(), year_month, now)
+        if change["categoryId"] in by_category
+    ]
 
     active_ids = [c["categoryId"] for c in _CATEGORY_TABLE.get_active_categories()]
     resolved = resolve_future_targets(BudgetDensifyAdapter(_BUDGET_TABLE), active_ids, year_month)

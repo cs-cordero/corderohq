@@ -23,6 +23,7 @@ import {
     parseIncomeSource,
     parseIncomeSourceArray,
     parseIncomeUpdateResult,
+    parseLaterBudgetChangeArray,
     parseNetWorthHistory,
     parseNetWorthMonth,
     parseOneTimeIncomeItem,
@@ -154,6 +155,9 @@ export const replaceBudget = (yearMonth: string, targets: BudgetReplaceTarget[],
         method: "POST",
         ...jsonBody({ targets, ...(override ? { override: true } : {}) }),
     });
+// Each later month, after this month and after the current month, that holds its own carried amount.
+export const fetchLaterBudgetChanges = (yearMonth: string) =>
+    request(`/budget/${yearMonth}/later-changes`, parseLaterBudgetChangeArray);
 export const updateBudget = (yearMonth: string, targets: BudgetUpdateTarget[]) =>
     request(`/budget/${yearMonth}/update`, parseBudgetUpdateResult, {
         method: "POST",

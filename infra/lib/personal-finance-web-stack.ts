@@ -56,7 +56,7 @@ interface PersonalFinanceWebStackProps extends cdk.StackProps {
  * - CloudWatch alarm (prod stage only): budget-scheduled-densify-prod-errors → shared alert topic
  * - API Gateway HTTP API: personal-finance-api-{stage} (Cognito JWT authorizer)
  * - Lambda permission: one for the whole HTTP API to invoke personal-finance-handler-{stage}
- * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /update), /api/transactions (+ /upload, /commit, /update, /delete), /api/income-sources (+ /reorder, /{incomeSourceId} PUT / deactivate / reactivate), /api/income/{yearMonth} (+ /replace, /update, /one-time), /api/summary, /api/audit-log, /api/profiles (GET / POST, + /{profileId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
+ * - API Gateway routes: /api/category-groups (+ /{groupId} rename / deactivate / reorder), /api/categories (+ /{categoryId} GET-preview / PUT / DELETE / reactivate / deactivate / reorder), /api/budget/{yearMonth} (+ /replace, /update, /later-changes), /api/transactions (+ /upload, /commit, /update, /delete), /api/income-sources (+ /reorder, /{incomeSourceId} PUT / deactivate / reactivate), /api/income/{yearMonth} (+ /replace, /update, /one-time), /api/summary, /api/audit-log, /api/profiles (GET / POST, + /{profileId} PUT / delete), /api/accounts (+ /reorder, /{accountId} PUT / deactivate / reactivate), /api/net-worth/history, /api/net-worth/{yearMonth} (GET / POST)
  * - S3 bucket: personal-finance-assets-{stage}-{account}-{region} (frontend assets)
  * - CloudFront distribution: S3 origin (frontend) + API Gateway origin (/api/*) + Cognito proxy (/oauth2/*)
  * - Route 53 A record: {stage domain} → CloudFront
@@ -323,6 +323,7 @@ export class PersonalFinanceWebStack extends cdk.Stack {
             { path: "/api/budget/{yearMonth}", methods: [apigatewayv2.HttpMethod.GET] },
             { path: "/api/budget/{yearMonth}/replace", methods: [apigatewayv2.HttpMethod.POST] }, // CP4
             { path: "/api/budget/{yearMonth}/update", methods: [apigatewayv2.HttpMethod.POST] },
+            { path: "/api/budget/{yearMonth}/later-changes", methods: [apigatewayv2.HttpMethod.GET] },
 
             // Transactions
             { path: "/api/transactions", methods: [apigatewayv2.HttpMethod.GET, apigatewayv2.HttpMethod.POST] },

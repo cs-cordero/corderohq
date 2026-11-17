@@ -392,6 +392,12 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | month is not yet dense — see       |
 |        |                                          | **Carry-Forward**.                 |
 +--------+------------------------------------------+------------------------------------+
+| GET    | /api/budget/{YYYY-MM}/later-changes      | Each later month that holds its    |
+|        |                                          | own carried amount for a category: |
+|        |                                          | [{categoryId, yearMonth,           |
+|        |                                          | carriedAmount}]. See **Later       |
+|        |                                          | changes**.                         |
++--------+------------------------------------------+------------------------------------+
 | POST   | /api/budget/{YYYY-MM}/replace            | Dense-month write (current, grace, |
 |        |                                          | or — via override — locked).       |
 |        |                                          | Replace-all semantics; body must   |
@@ -832,6 +838,23 @@ The response holds the month and the warnings:
 - **matchesInheritedValue** — this appears for each category where the new carried amount equals
   the value that the month inherits already. The frontend then warns the user: the month now holds
   that value as its own, so a later change in an earlier month stops there. (Spec 20.)
+
+### Later changes
+
+`GET /api/budget/{YYYY-MM}/later-changes` returns, before a save, the months at which a change from
+`{YYYY-MM}` on stops:
+
+```
+[{ "categoryId", "yearMonth", "carriedAmount" }, ...]
+```
+
+The list holds each month after `max({YYYY-MM}, current_ym)`, in the editable range, that holds its
+own carried amount for a category. It is in order of month, and then category. A pinned amount does
+not count, because it does not stop a change. The `laterCarriedChanges` warning of `/update` uses the
+same rule.
+
+The list starts after `current_ym` for a past month too. Each dense month holds a carried amount for
+each category, so without that rule the list for a past month would always hold the next month.
 
 ## Carry-Forward
 
