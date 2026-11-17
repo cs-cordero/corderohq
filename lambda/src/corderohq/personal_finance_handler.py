@@ -82,6 +82,7 @@ from corderohq.budget.targets import parse_replace_targets, parse_update_targets
 from corderohq.budget.transaction_args import (
     CreateTransactionArgs,
     parse_create_transaction_args,
+    parse_transaction_date,
     parse_update_transaction_args,
 )
 from corderohq.budget.treatment import BudgetTreatment, Classification, parse_classification
@@ -1854,14 +1855,14 @@ def _check_account_exists(account_id: str | None) -> dict[str, Any] | None:
 
 
 def _post_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Create one transaction. Its `transactionDate` must be a real date, as YYYY-MM-DD, and it sets the month."""
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
 
-    year_month = body.get("yearMonth")
-    if not isinstance(year_month, str) or not YEAR_MONTH_PATTERN.match(year_month):
-        return _response(400, "yearMonth is required, as YYYY-MM")
     try:
+        year_month = parse_transaction_date(body.get("transactionDate"))[:7]
         new = parse_create_transaction_args(body, year_month=year_month)
     except ValueError as e:
         return _response(400, str(e))
@@ -2172,6 +2173,12 @@ def _post_transactions_upload(event: dict[str, Any], now: datetime) -> dict[str,
 
 
 def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Change a transaction. See `parse_update_transaction_args` for the fields.
+
+    A new `transactionDate` moves the transaction to a new item, also in a different month. The old month and the new
+    month must both be editable. The response is the new item.
+    """
+
     body = _parse_json_body(event)
     if body is None:
         return _response(400, "Request body is required")
@@ -2205,8 +2212,18 @@ def _put_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:
     if args.changes_nothing():
         return _json_response(200, json.dumps(existing, default=_json_default))
 
-    item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, args)
-    return _json_response(200, json.dumps(item, default=_json_default))
+    match args.transaction_date:
+        case SetTo(value=transaction_date):
+            err = _check_year_month_editable(transaction_date[:7], override_active, now)
+            if err:
+                return err
+            moved = _TRANSACTIONS_TABLE.move_transaction(existing, args, transaction_date)
+            if moved is None:
+                return _response(404, "Transaction not found")
+            return _json_response(200, json.dumps(moved, default=_json_default))
+        case Keep():
+            item = _TRANSACTIONS_TABLE.update_transaction(year_month, sort_id, args)
+            return _json_response(200, json.dumps(item, default=_json_default))
 
 
 def _delete_transaction(event: dict[str, Any], now: datetime) -> dict[str, Any]:

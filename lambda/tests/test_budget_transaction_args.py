@@ -11,7 +11,7 @@ from corderohq.budget.treatment import BudgetTreatment, Classification
 from corderohq.common import Keep, Remove, SetTo
 
 _BODY = {"transactionDate": "2026-03-15", "description": " Coffee ", "amount": 5, "categoryId": "cat1"}
-_STORED = {"yearMonth": "2026-03", "sortId": "s", "categoryId": "cat1", "note": "old"}
+_STORED = {"yearMonth": "2026-03", "sortId": "s", "transactionDate": "2026-03-15", "categoryId": "cat1", "note": "old"}
 
 
 class TestParseCreateTransactionArgs:
@@ -67,6 +67,19 @@ class TestParseCreateTransactionArgs:
 
 
 class TestParseUpdateTransactionArgs:
+    def test_a_new_date_is_a_change(self) -> None:
+        args = parse_update_transaction_args({"transactionDate": "2026-04-02", "note": "moved"}, _STORED)
+        assert args.transaction_date == SetTo("2026-04-02")
+        assert args.note == SetTo("moved")
+
+    def test_the_stored_date_is_no_change(self) -> None:
+        assert parse_update_transaction_args({"transactionDate": "2026-03-15"}, _STORED).changes_nothing()
+
+    @pytest.mark.parametrize("value", ["2026-3-15", "03/15/2026", "2026-02-30", "", None, 20260315])
+    def test_an_invalid_date_is_rejected(self, value: object) -> None:
+        with pytest.raises(ValueError, match="transactionDate"):
+            parse_update_transaction_args({"transactionDate": value}, _STORED)
+
     def test_a_plain_change_does_not_touch_the_classification(self) -> None:
         args = parse_update_transaction_args({"description": " New ", "amount": 5}, _STORED)
         assert args == UpdateTransactionArgs(SetTo("New"), SetTo(5), Keep(), Keep(), Keep(), Keep())

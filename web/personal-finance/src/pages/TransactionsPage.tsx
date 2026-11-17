@@ -206,7 +206,6 @@ export default function TransactionsPage() {
         try {
             await createTransaction(
                 {
-                    yearMonth: month,
                     transactionDate: newTxn.date,
                     description: newTxn.description,
                     amount,

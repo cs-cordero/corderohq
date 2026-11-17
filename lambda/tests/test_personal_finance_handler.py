@@ -1132,7 +1132,6 @@ class TestPostTransaction:
                 "POST",
                 "/api/transactions",
                 body={
-                    "yearMonth": _EDITABLE_MONTH,
                     "transactionDate": "2026-06-15",
                     "description": "Coffee",
                     "amount": 5000000,
@@ -1142,6 +1141,27 @@ class TestPostTransaction:
             None,
         )
         assert result["statusCode"] == 201
+        assert mock_tt.create_transaction.call_args.args[0].year_month == _EDITABLE_MONTH
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_the_month_comes_from_the_date_and_not_from_the_body(self, mock_tt: MagicMock) -> None:
+        mock_tt.create_transaction.return_value = {}
+        body = {
+            "yearMonth": _LOCKED_MONTH,
+            "transactionDate": "2026-06-20",
+            "description": "Coffee",
+            "amount": 5,
+            "categoryId": "cat1",
+        }
+        result = handler(_make_event("POST", "/api/transactions", body=body), None)
+        assert result["statusCode"] == 201
+        assert mock_tt.create_transaction.call_args.args[0].year_month == _EDITABLE_MONTH
+
+    def test_an_invalid_date_returns_400(self) -> None:
+        body = {"transactionDate": "2026-06-31", "description": "Coffee", "amount": 5, "categoryId": "cat1"}
+        result = handler(_make_event("POST", "/api/transactions", body=body), None)
+        assert result["statusCode"] == 400
+        assert "transactionDate" in result["body"]
 
     def test_returns_400_when_field_missing(self) -> None:
         result = handler(
@@ -1197,6 +1217,95 @@ class TestUpdateTransaction:
             None,
         )
         assert result["statusCode"] == 400
+
+
+class TestUpdateTransactionDate:
+    _STORED = {
+        "yearMonth": _EDITABLE_MONTH,
+        "sortId": "2026-06-15#A",
+        "transactionDate": "2026-06-15",
+        "description": "Coffee",
+        "amount": 5,
+    }
+
+    def _update(self, **body: object) -> dict:
+        full = {"yearMonth": _EDITABLE_MONTH, "sortId": "2026-06-15#A", **body}
+        return handler(_make_event("POST", "/api/transactions/update", body=full), None)
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_a_date_in_the_same_month_moves_the_item(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = self._STORED
+        mock_tt.move_transaction.return_value = {"yearMonth": _EDITABLE_MONTH, "sortId": "2026-06-20#B"}
+        result = self._update(transactionDate="2026-06-20")
+        assert result["statusCode"] == 200
+        assert json.loads(result["body"])["sortId"] == "2026-06-20#B"
+        existing, args, new_date = mock_tt.move_transaction.call_args.args
+        assert (existing, new_date) == (self._STORED, "2026-06-20")
+        assert args.description == Keep()
+        mock_tt.update_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_a_date_in_a_different_month_with_a_second_field(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = self._STORED
+        mock_tt.move_transaction.return_value = {"yearMonth": "2026-07", "sortId": "2026-07-01#B"}
+        result = self._update(transactionDate="2026-07-01", description="Tea")
+        assert result["statusCode"] == 200
+        _, args, new_date = mock_tt.move_transaction.call_args.args
+        assert new_date == "2026-07-01"
+        assert args.description == SetTo("Tea")
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_the_same_date_runs_the_usual_update(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = self._STORED
+        mock_tt.update_transaction.return_value = {**self._STORED, "description": "Tea"}
+        result = self._update(transactionDate="2026-06-15", description="Tea")
+        assert result["statusCode"] == 200
+        mock_tt.move_transaction.assert_not_called()
+        mock_tt.update_transaction.assert_called_once()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_an_invalid_date_returns_400(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = self._STORED
+        result = self._update(transactionDate="June 20")
+        assert result["statusCode"] == 400
+        mock_tt.move_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_an_old_item_that_does_not_exist_returns_404(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = None
+        assert self._update(transactionDate="2026-06-20")["statusCode"] == 404
+
+        mock_tt.get_transaction.return_value = self._STORED
+        mock_tt.move_transaction.return_value = None
+        assert self._update(transactionDate="2026-06-20")["statusCode"] == 404
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_a_locked_new_month_returns_409(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = self._STORED
+        result = self._update(transactionDate=f"{_LOCKED_MONTH}-10")
+        assert result["statusCode"] == 409
+        mock_tt.move_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_a_locked_old_month_returns_409(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = {**self._STORED, "yearMonth": _LOCKED_MONTH}
+        body = {"yearMonth": _LOCKED_MONTH, "sortId": "2026-03-15#A", "transactionDate": "2026-06-20"}
+        result = handler(_make_event("POST", "/api/transactions/update", body=body), None)
+        assert result["statusCode"] == 409
+        mock_tt.move_transaction.assert_not_called()
+
+    @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
+    def test_the_override_permits_a_locked_new_month(self, mock_tt: MagicMock) -> None:
+        mock_tt.get_transaction.return_value = self._STORED
+        mock_tt.move_transaction.return_value = {"yearMonth": _LOCKED_MONTH}
+        body = {
+            "yearMonth": _EDITABLE_MONTH,
+            "sortId": "2026-06-15#A",
+            "transactionDate": f"{_LOCKED_MONTH}-10",
+            "override": True,
+        }
+        event = _make_event("POST", "/api/transactions/update", body=body, groups=[_ADMIN_GROUP])
+        assert handler(event, None)["statusCode"] == 200
 
 
 class TestDeleteTransactions:

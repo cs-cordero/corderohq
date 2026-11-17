@@ -169,13 +169,14 @@ export const fetchTransactions = (yearMonth: string) =>
     request(`/transactions?month=${yearMonth}`, parseTransactionArray);
 export const createTransaction = (
     data: {
-        yearMonth: string;
+        // YYYY-MM-DD. The server takes the month of the transaction from it.
         transactionDate: string;
         description: string;
         amount: number;
         budgetTreatment: BudgetTreatment;
         // Required for BUDGET_IMPACTING, optional for OFF_BUDGET. The server drops it for SKIP.
         categoryId?: string;
+        accountId?: string;
         note?: string;
     },
     override = false,
@@ -187,9 +188,15 @@ export const createTransaction = (
 export const updateTransaction = (
     yearMonth: string,
     sortId: string,
-    // An empty string for `categoryId` or `note` removes the value. A change to SKIP removes the
-    // category on the server.
-    updates: Partial<Pick<Transaction, "description" | "amount" | "budgetTreatment" | "categoryId" | "note">>,
+    // An empty string for `categoryId`, `accountId`, or `note` removes the value. A change to SKIP
+    // removes the category on the server. A new `transactionDate` (YYYY-MM-DD) moves the transaction
+    // to a new item, also in a different month. The response is the new item, with a new `sortId`.
+    updates: Partial<
+        Pick<
+            Transaction,
+            "transactionDate" | "description" | "amount" | "budgetTreatment" | "categoryId" | "accountId" | "note"
+        >
+    >,
     override = false,
 ) =>
     request("/transactions/update", parseTransaction, {

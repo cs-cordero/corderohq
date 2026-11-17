@@ -288,6 +288,25 @@ and not from April on.
 The account response includes both attributes when they are present. The net worth routes do not
 read them. The frontend calculates each total that it shows.
 
+### A change of the date
+
+`POST /api/transactions/update` accepts `transactionDate`. It must be a real date, as `YYYY-MM-DD`,
+else the response is `400`. The stored date is no change, and the usual update runs.
+
+The sort key holds the date, so a new date needs a new item. The new item has each attribute of the
+old one, also `createdAt` and `fingerprint`, with a new `sortId` and the `yearMonth` of the new date.
+Each other change of the same request applies to the new item. One `transact_write_items` call puts
+the new item and deletes the old key, with the condition `attribute_exists(sortId)`. Two separate
+calls could leave two items after a failure, and the summary would then count the money two times.
+If the old item is gone, the response is `404`.
+
+The old month and the new month must both be editable, with the usual override rule. The response
+is the new item, so the frontend replaces the old row by its old key.
+
+The CSV import looks for saved fingerprints in the months of the file and in one month on each side.
+A transaction that moves more than one month away is outside that range, so a second import of its
+file saves the row again.
+
 ### Category name uniqueness
 
 The Category-{stage} schema has no PK and no GSI on `name`. Therefore **the application code
@@ -451,7 +470,10 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 +--------+------------------------------------------+------------------------------------+
 | GET    | /api/transactions?month=YYYY-MM          | List transactions for a month.     |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions                        | Create one transaction.            |
+| POST   | /api/transactions                        | Create one transaction. The        |
+|        |                                          | transactionDate must be a real     |
+|        |                                          | date, as YYYY-MM-DD. Its first     |
+|        |                                          | seven characters are the month.    |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/upload                 | Body {csvData, accountId,          |
 |        |                                          | flipSigns?}. Returns the parsed    |
@@ -469,9 +491,11 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | each row whose fingerprint exists  |
 |        |                                          | (skippedDuplicates).               |
 +--------+------------------------------------------+------------------------------------+
-| POST   | /api/transactions/update                 | Update mutable fields (description,|
+| POST   | /api/transactions/update                 | Update mutable fields              |
+|        |                                          | (transactionDate, description,     |
 |        |                                          | amount, budgetTreatment,           |
-|        |                                          | categoryId, accountId, note).      |
+|        |                                          | categoryId, accountId, note). See  |
+|        |                                          | **A change of the date**.          |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/transactions/delete                 | Body {items: [{yearMonth, sortId}, |
 |        |                                          | ...]}. Batch delete.               |
@@ -594,7 +618,7 @@ offset. The grace period ends at **midnight ET on day 8** of the new month.
 | `POST /api/budget/{YYYY-MM}/replace` | `{YYYY-MM}` must be the current month, GRACE, or — via override — LOCKED |
 | `POST /api/budget/{YYYY-MM}/update` | `{YYYY-MM}` must be strictly in the future — i.e., EDITABLE and `yearMonth > current_ym` (one of the next 12 months). A write to the current month, the grace month, or any locked month is rejected with `409`; those months are dense and `/replace` is the right endpoint. Override does not unlock `/update` for non-future months — it has no use here |
 | `POST /api/transactions` | `transactionDate`'s year-month must be EDITABLE or GRACE |
-| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. An update cannot change `transactionDate` |
+| `POST /api/transactions/update` | The `yearMonth` of the row must be EDITABLE or GRACE. A new `transactionDate` must also have a month that is EDITABLE or GRACE |
 | `POST /api/transactions/delete` | Each item's `yearMonth` must be EDITABLE or GRACE |
 | `POST /api/transactions/commit` | Every row's `transactionDate` year-month must be EDITABLE or GRACE; see **CSV commit semantics** |
 | `POST /api/income/{YYYY-MM}/replace` | The same as the budget `/replace` |

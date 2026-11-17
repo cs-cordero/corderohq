@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
+from datetime import date
 from typing import Any
 
 from corderohq.budget.treatment import BudgetTreatment, Classification, parse_classification
 from corderohq.common import FieldChange, Keep, Remove, SetTo, parse_optional_str
 
 NOTE_MAX_LENGTH = 200
+_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -57,6 +60,8 @@ class UpdateTransactionArgs:
     category_id: FieldChange[str]
     account_id: FieldChange[str]
     note: FieldChange[str]
+    # A new date moves the transaction to a new item, because the sort key holds the date.
+    transaction_date: Keep | SetTo[str] = Keep()
 
     def changes_nothing(self) -> bool:
         """Return True if every field is Keep()."""
@@ -95,8 +100,15 @@ def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[
 
     `existing` is the stored transaction. A change to the budget treatment or the category is checked
     together with the stored value of the other one. The account and the note change on their own.
-    It does not check that the account exists.
+    A `transactionDate` must be a real date, as YYYY-MM-DD. The stored date is no change. It does not
+    check that the account exists.
     """
+
+    transaction_date: Keep | SetTo[str] = Keep()
+    if "transactionDate" in payload:
+        new_date = parse_transaction_date(payload["transactionDate"])
+        if new_date != existing.get("transactionDate"):
+            transaction_date = SetTo(new_date)
 
     description: Keep | SetTo[str] = Keep()
     if "description" in payload:
@@ -124,7 +136,22 @@ def parse_update_transaction_args(payload: Mapping[str, Any], existing: Mapping[
     if "note" in payload:
         note = _set_or_remove(_parse_note(payload["note"]))
 
-    return UpdateTransactionArgs(description, amount, budget_treatment, category_id, account_id, note)
+    return UpdateTransactionArgs(description, amount, budget_treatment, category_id, account_id, note, transaction_date)
+
+
+def parse_transaction_date(value: Any) -> str:
+    """Return the date of a transaction, as YYYY-MM-DD. Raise ValueError if it is not a real date in that form.
+
+    The month of a transaction is the first seven characters of its date.
+    """
+
+    if not isinstance(value, str) or not _DATE_PATTERN.match(value.strip()):
+        raise ValueError("transactionDate must be a date, as YYYY-MM-DD")
+    try:
+        date.fromisoformat(value.strip())
+    except ValueError:
+        raise ValueError(f"transactionDate '{value.strip()}' is not a real date") from None
+    return value.strip()
 
 
 def _parse_description(value: Any) -> str:
