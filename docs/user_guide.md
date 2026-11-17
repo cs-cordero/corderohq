@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - The AWS CLI, set up with credentials for the target account
-- Node.js, for the CDK
+- Node.js 22.22 or later, for the CDK and the personal finance frontend
 - Docker, because the CDK builds the Lambdas in a container during a deploy
 - Python 3.13
 - [uv](https://docs.astral.sh/uv/), the Python package manager

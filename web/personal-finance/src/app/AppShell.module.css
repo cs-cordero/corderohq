@@ -1,0 +1,179 @@
+/* The shell: the sidebar on the left and the main area. The values come from the <nav> and the <main>
+   of Main.dc.html. */
+
+.app {
+    display: flex;
+    flex-wrap: wrap;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--ink);
+}
+
+.nav {
+    flex: 1 1 208px;
+    padding: 28px 20px;
+    border-right: 1px solid var(--line);
+    background: var(--nav-bg);
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.brandRow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brandMark {
+    display: block;
+    width: 28px;
+    height: 28px;
+}
+
+.brand {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+    line-height: 1;
+    /* Trim the line box to the cap height, so the word centres optically against the owl. */
+    text-box: trim-both cap alphabetic;
+}
+
+.navSections {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.navSection {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.navHead {
+    font-family: var(--font-label);
+    font-size: var(--label);
+    letter-spacing: 0.01em;
+    color: var(--muted);
+    padding: 0 10px 6px;
+}
+
+.navItems {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.navItemsTitled {
+    gap: 2px;
+}
+
+.navLink {
+    display: flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 0 10px;
+    color: var(--muted);
+    text-decoration: none;
+}
+
+.navLinkTitled {
+    padding-left: 20px;
+}
+
+.navLink:hover {
+    color: var(--ink);
+}
+
+.active {
+    color: var(--ink);
+    background: var(--nav-active);
+    font-weight: 500;
+}
+
+.navFoot {
+    margin-top: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
+}
+
+.themeToggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 40px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--ink);
+    font-size: var(--text-small);
+    cursor: pointer;
+}
+
+.themeDot {
+    width: 10px;
+    height: 10px;
+    border: 1px solid var(--ink);
+    background: var(--theme-dot);
+}
+
+/* A 12px label in the mockup. The email keeps its own case, so this line has no text-transform. */
+.signedIn {
+    font-family: var(--font-label);
+    font-size: var(--label);
+    letter-spacing: 0.01em;
+    color: var(--muted);
+    padding: 0 10px;
+    overflow-wrap: anywhere;
+}
+
+.signOut {
+    align-self: flex-start;
+    min-height: var(--target);
+    padding: 0 10px;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: var(--text-small);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.signOut:hover {
+    color: var(--ink);
+}
+
+.main {
+    flex: 999 1 560px;
+    min-width: 0;
+    padding: 40px clamp(16px, 4vw, 56px) 64px;
+}
+
+.content {
+    max-width: 1160px;
+    margin: 0 auto;
+}
+
+/* On a narrow screen the sidebar links wrap in a row, and the group titles and the footer hide. */
+@media (max-width: 760px) {
+    .navSections,
+    .navItems {
+        flex-direction: row;
+        flex-wrap: wrap;
+    }
+
+    .navHead {
+        display: none;
+    }
+
+    .navFoot {
+        display: none;
+    }
+}

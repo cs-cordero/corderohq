@@ -1,0 +1,10 @@
+/* Mioya, the display serif, from `src/assets/fonts/mioya/` (SIL Open Font License 1.1, see `OFL.txt` there).
+   Instrument Sans and Fraunces come from their @fontsource-variable packages, which `main.tsx` imports. */
+
+@font-face {
+    font-family: "Mioya";
+    src: url("../assets/fonts/mioya/MioyaVF.ttf") format("truetype");
+    font-weight: 100 1000;
+    font-style: normal;
+    font-display: swap;
+}

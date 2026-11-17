@@ -1,0 +1,80 @@
+/* Each design value of the app. A page or a component reads these tokens, and never writes a colour, a
+   font, or a border value itself. `app/theme.ts` sets `data-theme` on the root element. */
+
+:root {
+    --bg: #ffffff;
+    --ink: #0e1116;
+    --muted: #5d6470;
+    --line: #e3e5e9;
+    --soft: #f1f2f4;
+    --hi: #f7f8f9; /* the column of the latest month */
+    --accent: #0369a1;
+    --on-accent: #ffffff;
+    --save: #0ea5ff; /* the bright Save button */
+    --on-save: #0e1116;
+    --warn: #b4530a;
+    --warn-bg: rgb(180 83 10 / 6%);
+    --placeholder: #8a919c;
+
+    --nav-bg: color-mix(in srgb, var(--accent) 6%, var(--bg));
+    --nav-active: color-mix(in srgb, var(--accent) 13%, var(--bg));
+    --stripe: color-mix(in srgb, var(--ink) 2.5%, var(--bg));
+    --tint: color-mix(in srgb, var(--accent) 8%, var(--bg));
+
+    /* The theme button shows a small square: empty in the light theme, filled in the dark theme. */
+    --theme-dot: transparent;
+
+    /* Each asset class has a fixed colour. Other classes use the Real estate grey for now. */
+    --class-target-date: #2a78d6;
+    --class-us-large-cap: #eb6834;
+    --class-cash: #1baf7a;
+    --class-bonds: #6250d6;
+    --class-international: #e87ba4;
+    --class-real-estate: #8a919c;
+
+    --font-display: "Mioya", Georgia, serif;
+    --font-body: "Instrument Sans Variable", system-ui, sans-serif;
+    --font-label: "Fraunces Variable", Georgia, serif;
+
+    --text: 17px; /* body text: the 14px mockup base at 120% */
+    --text-small: 15.5px; /* a 13px mockup value at 120% */
+    --figure: 14px; /* a figure keeps the mockup size */
+    --label: 14px;
+    --h1: 40px;
+    --kpi: 24px;
+
+    --target: 36px; /* the minimum click target */
+    --target-primary: 44px;
+
+    color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+    --bg: #0e1014;
+    --ink: #e7e9ec;
+    --muted: #99a0ab;
+    --line: #2a2e35;
+    --soft: #1c1f25;
+    --hi: #15181d;
+    --accent: #55b8ec;
+    --on-accent: #0e1014;
+    --save: #0369a1;
+    --on-save: #ffffff;
+    --warn: #f0a040;
+    --warn-bg: rgb(240 160 64 / 10%);
+    --nav-bg: color-mix(in srgb, var(--accent) 10%, var(--bg));
+    --nav-active: color-mix(in srgb, var(--accent) 20%, var(--bg));
+    --stripe: color-mix(in srgb, var(--ink) 3.5%, var(--bg));
+    --tint: color-mix(in srgb, var(--accent) 16%, var(--bg));
+
+    --theme-dot: var(--ink);
+
+    --class-target-date: #3987e5;
+    --class-us-large-cap: #d95926;
+    --class-cash: #199e70;
+    --class-bonds: #9085e9;
+    --class-international: #d55181;
+    --class-real-estate: #6b7280;
+
+    color-scheme: dark;
+}

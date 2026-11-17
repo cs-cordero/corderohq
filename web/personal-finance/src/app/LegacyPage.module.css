@@ -1,0 +1,40 @@
+/* The temporary bar above an old page. CP4 and CP7 remove the links, and each page with a
+   LockedMonthBanner removes the override button. */
+
+.bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 16px;
+    margin-bottom: 16px;
+}
+
+.link,
+.override {
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--target);
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font-size: var(--text-small);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    cursor: pointer;
+}
+
+.current {
+    color: var(--ink);
+    font-weight: 500;
+    text-decoration: none;
+}
+
+.override {
+    margin-left: auto;
+}
+
+.override[aria-pressed="true"] {
+    color: var(--warn);
+    font-weight: 500;
+}

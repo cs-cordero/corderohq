@@ -194,6 +194,23 @@ function decodeJwtPayload(token: string): unknown {
 }
 
 /**
+ * Return the email of the signed-in user, from the `email` claim of the ID token, else its
+ * `cognito:username` claim. The access token holds no email, so this reads the ID token. Returns
+ * null if the user is not signed in or the token holds neither claim.
+ */
+export function getCurrentUserEmail(): string | null {
+    const token = sessionStorage.getItem("id_token");
+    if (!token) return null;
+    const payload = decodeJwtPayload(token);
+    if (!isPlainObject(payload)) return null;
+    for (const claim of ["email", "cognito:username"]) {
+        const value = payload[claim];
+        if (typeof value === "string" && value) return value;
+    }
+    return null;
+}
+
+/**
  * Return the user's Cognito group memberships, parsed from the access token's
  * `cognito:groups` claim. The claim can arrive as either a JSON-encoded list or
  * a comma-separated string depending on API Gateway settings; both shapes are
