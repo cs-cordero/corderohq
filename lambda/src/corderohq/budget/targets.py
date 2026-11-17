@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeIs
 
 from corderohq.common import FieldChange, Keep, Remove, SetTo, parse_optional_str
 
@@ -84,7 +84,7 @@ def parse_update_targets(payload: Mapping[str, Any]) -> list[UpdateTarget]:
     return targets
 
 
-def _is_amount(value: Any) -> bool:
+def _is_amount(value: Any) -> TypeIs[int]:
     """Return True if `value` is an amount: an integer in millionths of a dollar. A bool is not an amount."""
 
     return isinstance(value, int) and not isinstance(value, bool)
