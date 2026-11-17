@@ -39,13 +39,13 @@ export default function DevBanner() {
                         if (e.key === "Enter") apply();
                     }}
                 />
-                <button className="small-btn" onClick={apply}>
+                <button className="dev-btn" onClick={apply}>
                     Apply
                 </button>
                 {simulating && (
                     <>
                         <span className="dev-banner-sim-active">simulating {current}</span>
-                        <button className="small-btn" onClick={clearSimulatedDate}>
+                        <button className="dev-btn" onClick={clearSimulatedDate}>
                             Clear
                         </button>
                     </>

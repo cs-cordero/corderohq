@@ -77,7 +77,7 @@ export default function DevSimulationInfoModal() {
                     </li>
                 </ol>
                 <div className="dev-modal-actions">
-                    <button className="primary-btn" onClick={dismiss}>
+                    <button className="dev-btn dev-btn-primary" onClick={dismiss}>
                         Got it
                     </button>
                 </div>

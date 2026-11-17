@@ -1,0 +1,39 @@
+/* A small reset, the body font, and the focus ring. The design has no rounded corners, and this is the
+   only file that sets `border-radius`. */
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+    border-radius: 0;
+}
+
+html,
+body {
+    margin: 0;
+}
+
+body {
+    font-family: var(--font-body);
+    font-size: var(--text);
+    line-height: 1.4;
+    background: var(--bg);
+    color: var(--ink);
+}
+
+button,
+input,
+select,
+textarea {
+    font: inherit;
+    color: inherit;
+}
+
+a {
+    color: inherit;
+}
+
+:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+}

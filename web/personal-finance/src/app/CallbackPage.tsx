@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router";
+import { useAdmin } from "../admin";
 import { handleCallback, redirectToLogin } from "../auth";
 
 const CFN_LOOKUP = `aws cloudformation describe-stacks \\
@@ -9,11 +10,14 @@ const CFN_LOOKUP = `aws cloudformation describe-stacks \\
 
 export default function CallbackPage() {
     const navigate = useNavigate();
+    const { refreshAdminUser } = useAdmin();
     const [error, setError] = useState<string | null>(null);
 
     useEffect(() => {
         handleCallback().then((result) => {
             if (result.kind === "success") {
+                // The admin provider mounted before the tokens existed, so it reads the groups again.
+                refreshAdminUser();
                 navigate("/", { replace: true });
             } else if (result.kind === "no-code") {
                 redirectToLogin();
@@ -21,7 +25,7 @@ export default function CallbackPage() {
                 setError(result.reason);
             }
         });
-    }, [navigate]);
+    }, [navigate, refreshAdminUser]);
 
     if (error) {
         return (

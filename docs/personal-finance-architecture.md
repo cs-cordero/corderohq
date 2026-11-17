@@ -1382,70 +1382,25 @@ the correct tool for it.
 
 ### Session model
 
-The app draws a toggle in the header **only when the JWT carries `budget-admin-{stage}`**. It has
-two states: Off, which is the default, and On.
+The app shows a **Use admin override** button **only when the JWT carries `budget-admin-{stage}`**.
+The button is in the "Locked month" banner of each page. Until a page has its banner, an old page
+shows the button as a text button above its content. The override has two states: Off, which is
+the default, and On. The pressed button says "Override on".
 
 - **It starts Off** on each page load, in each new tab, and after each sign-in. The state belongs
   to **one tab**. It lives in `useState` only. The app never puts it in `localStorage`, in
   `sessionStorage`, or in a cookie.
-- **It has no timeout.** The state holds until the user turns it off, closes the tab, or reloads
-  the page. The colours below are the safeguard.
+- **It lasts for one page and one month.** It goes off when the path changes, or when the month in
+  `?month=` changes. A change of `?view=` on Allocations keeps it, because the two modes are one
+  page.
 - One click turns it on, and one click turns it off. There is no second sign-in, and no confirm
   box. The friction belongs to each action instead.
 
 ### Visual treatment
 
-When admin mode is On:
-
-- A banner stays across the top of the window: `Admin mode active — your changes can bypass lock
-  and grace rules. [Turn off]`.
-- The banner uses a warning colour, amber or red.
-- The header and the navigation strip take the same colour. Admin mode is then clear on every page.
-- An **Admin tools** item appears in the navigation.
-
-When admin mode is Off, there is no banner, no colour on the header, and no admin tools item.
-
-The banner and the colour are the only guard against "I forgot that it was on". They are strong on
-purpose.
-
-### Per-action behavior under admin mode
-
-For each kind of change, this section shows three things: what the UI shows when admin mode is Off
-and the lock stops the action; what it shows when admin mode is On and the action can go ahead; and
-whether the app asks for an explanation.
-
-| Action | Off (locked context) | On (admin mode) | Explanation collected |
-|--------|---------------------|-----------------|----------------------|
-| `POST /api/budget/{YYYY-MM}/replace` on a locked month | Form is read-only; no Save button. | Form is editable. Save button reads "Save with override". | Yes — same `explanation` field the form requires for every `/replace`, written to the audit log with `override=true`. |
-| `POST /api/budget/{YYYY-MM}/update` on a locked month | Future-month controls hidden. | Future-month controls visible. Save button reads "Save with override". | Yes — same `explanation` field, written to the audit log with `override=true`. |
-| `POST /api/transactions` with date in locked month | "Save" disabled with tooltip explaining lock. | "Save" enabled, label reads "Save (override)". | No — transactions are not audited; no explanation field is shown. |
-| `POST /api/transactions/update` moving a row into/out of a locked month | "Save" disabled. | "Save" enabled, label reads "Save (override)". | No. |
-| `POST /api/transactions/delete` on a row in a locked month | "Delete" disabled. | "Delete" enabled, label reads "Delete (override)". | No. |
-| `POST /api/transactions/commit` with any locked-month rows | Locked rows surface as inline errors; Commit button disabled. | Locked rows become inline warnings (different color). A persistent header on the review screen reads: "Committing N rows in locked months: [Mar 2024, Apr 2024] via admin override." Commit button reads "Commit (override)". | No. |
-| `DELETE /api/categories/{id}` | Not reachable from any page. | Reachable only via Admin tools. Form on its own page; not gated by the session toggle. | Yes — typed-name confirmation + required explanation, written to the `CATEGORY_HARD_DELETE` audit entry. |
-
-A budget target needs an explanation, and a transaction does not. This difference follows directly
-from the audit scope. It is of no use to ask the user for a reason that the app then throws away.
-
-### Admin tools page
-
-The page sits at `/admin`. The app draws it only when the JWT carries `budget-admin-{stage}`. To
-open `/admin`, the toggle does **not** need to be On. Each admin tool carries its own safeguards —
-see **Hard delete semantics**.
-
-What the page holds at the start:
-
-- **Hard delete a category.** A list of every category, active and inactive. On a choice, the page
-  calls `GET /api/categories/{id}?deletion_preview=true`, and shows the counts. It also has a field
-  for the typed name, a field for the explanation, and a red "Permanently delete" button.
-
-Space for more tools later, but not in v1:
-
-- A button to densify the current month by hand.
-- The health of the cron job: the time of its last good run.
-- A query on the raw audit log, by user, by date range, and by action.
-
-### Stage isolation
+The pressed button, in the warn colour, shows that the override is on. It is on the page that the
+override applies to. The override ends at each change of page or month, so it cannot stay on by
+mistake.
 
 A user in `budget-admin-dev` is an admin in dev only. To make that user an admin in prod, someone
 must add them to `budget-admin-prod` as well. The server enforces this. The Lambda reads its
@@ -1453,8 +1408,8 @@ must add them to `budget-admin-prod` as well. The server enforces this. The Lamb
 JWT does not carry the group for that stage.
 
 The frontend builds the same group name from a stage value. The deploy puts that value into
-`config.json`. The admin toggle and the `/admin` route therefore appear only when the user holds
-the claim for that stage.
+`config.json`. The override button and the Admin item of the sidebar therefore appear only when
+the user holds the claim for that stage.
 
 ## Accounts for the Budget
 
@@ -1674,26 +1629,64 @@ the Budget and PlannedIncome tables.
 Every environment variable goes through `get_env_var()`. That function raises an error if the value
 is absent or blank.
 
-## Frontend (`budget/`)
+## Frontend (`web/personal-finance/`)
 
-React and TypeScript, built by Vite.
+React and TypeScript, built by Vite. The router is React Router 8 (`react-router`), as a data router
+(`createBrowserRouter`), because the leave guard needs `useBlocker`.
 
-The pages are `SummaryPage`, `BudgetPage`, `IncomePage`, `TransactionsPage`, `UploadPage`,
-`CategoriesPage`, `AuditLogPage`, `AdminToolsPage`, and `CallbackPage`. `IncomePage` shows the
-recurring incomes of a month in groups by income source, the one-time incomes, and the income sources.
-Each change of a recurring income applies "From this month on" (`SET`) or "This month only"
-(`SET_PIN`). In a dense month, the page sends each recurring income again in the `/replace` body.
-The summary page and the budget page show the shared `LeftToAssign` line at the top. The net worth record adds `AccountsPage` and
-`NetWorthEntryPage`. `App.tsx` holds the routes. `components/Layout.tsx` holds the navigation, with
-one list of links for the budget (`BUDGET_LINKS`) and one for the net worth record.
+- `App.tsx` builds the router from `app/routes.tsx`. `AdminProvider` wraps the router.
+- `app/AppShell.tsx` is the shell: the sidebar (`app/SidebarNav.tsx`) and the main area. The sidebar
+  footer holds the theme button, the email of the user, and "Sign out". The dev banner is a thin
+  strip above the shell, in dev only.
+- `app/theme.ts` stores the theme in `localStorage["chq-theme"]` and sets `data-theme` on `<html>`.
+  The default is light. `main.tsx` sets it before React renders.
+- `styles/tokens.css` holds each design value as a CSS custom property, for both themes.
+  `styles/base.css` holds the reset, the body font, and the focus ring. `styles/fonts.css` declares
+  Mioya, from `assets/fonts/mioya/`. Instrument Sans and Fraunces come from their `@fontsource-variable`
+  packages.
+- A component keeps its styles in a CSS Module next to it.
+
+The routes:
+
+| Path | Page |
+|---|---|
+| `/` | Summary |
+| `/allocations` | Allocations, Allocate mode |
+| `/allocations?view=arrange` | Allocations, Arrange mode |
+| `/income` | Income |
+| `/transactions` | Transactions |
+| `/transactions/import` | Import CSV |
+| `/net-worth` | Net Worth |
+| `/net-worth/record` | Record month |
+| `/accounts` | Accounts |
+| `/household` | Household |
+| `/audit-log`, `/admin`, `/callback` | Audit log, Admin tools, the sign-in callback |
+
+The old paths `/budget`, `/categories`, and `/upload` redirect to the new paths. Summary,
+Allocations, Income, Transactions, and Record month read the month from `?month=YYYY-MM`
+(`hooks/useMonthParam.ts`). With no value, the month is the current month in ET. The sidebar links
+between Summary, Allocations, and Income keep the month.
+
+**The old pages.** The pages in `pages/` are the pages from before the new design: `SummaryPage`,
+`BudgetPage`, `CategoriesPage`, `IncomePage`, `TransactionsPage`, `UploadPage`, `NetWorthEntryPage`,
+`AccountsPage`, `AuditLogPage`, and `AdminToolsPage`. The router wraps each one in
+`app/LegacyPage.tsx`, which renders a `.legacy-page` block. The rules of `styles/legacy.css` apply
+only inside that block, so they cannot touch the new shell. An old page keeps its own light colours
+in the dark theme. Until Household and Record month exist, `/household` redirects to `/accounts`,
+and `/net-worth/record` redirects to `/net-worth`.
+
+`IncomePage` shows the recurring incomes of a month in groups by income source, the one-time
+incomes, and the income sources. Each change of a recurring income applies "From this month on"
+(`SET`) or "This month only" (`SET_PIN`). In a dense month, the page sends each recurring income
+again in the `/replace` body. The summary page and the budget page show the shared `LeftToAssign`
+line at the top.
 
 `types.ts` holds the response types. `parsers.ts` checks each response at run time before the
 page uses it, so a new field in a response needs a change in both files.
 
 The shared parts are `auth.ts`, which holds the PKCE flow and permits one token request at a time,
-and `api.ts`, which holds the typed wrappers. The shared components are `MonthPicker`,
-`LoadingOverlay`, `StatusMessage`, `DevBanner`, and `AdminBanner`. `AdminBanner` is the banner that
-stays on the screen while admin mode is on.
+and `api.ts`, which holds the typed wrappers. The shared components of the old pages are
+`MonthPicker`, `LoadingOverlay`, `StatusMessage`, and `DevBanner`.
 
 The CDK stack sends the build output to S3 with a `BucketDeployment`. That step also writes a
 `config.json` beside it, which holds the Cognito domain, the client ID, and the stage. One bundle
