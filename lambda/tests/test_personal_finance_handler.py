@@ -1,6 +1,7 @@
 import json
 import os
 from datetime import UTC, datetime
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -772,7 +773,13 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Missing cat2 which has a transaction"}],
+                    "targets": [
+                        {
+                            "categoryId": "cat1",
+                            "carriedAmount": 500,
+                            "explanation": "Missing cat2 which has a transaction",
+                        }
+                    ],
                 },
             ),
             None,
@@ -801,7 +808,13 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "cat2 only has a $0 transaction so it's not required"}],
+                    "targets": [
+                        {
+                            "categoryId": "cat1",
+                            "carriedAmount": 500,
+                            "explanation": "cat2 only has a $0 transaction so it's not required",
+                        }
+                    ],
                 },
             ),
             None,
@@ -815,7 +828,13 @@ class TestPostBudgetReplace:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Trying to use replace for a future month"}],
+                    "targets": [
+                        {
+                            "categoryId": "cat1",
+                            "carriedAmount": 500,
+                            "explanation": "Trying to use replace for a future month",
+                        }
+                    ],
                 },
             ),
             None,
@@ -1220,7 +1239,7 @@ class TestUpdateTransaction:
 
 
 class TestUpdateTransactionDate:
-    _STORED = {
+    _STORED: ClassVar[dict[str, object]] = {
         "yearMonth": _EDITABLE_MONTH,
         "sortId": "2026-06-15#A",
         "transactionDate": "2026-06-15",
@@ -1465,7 +1484,9 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": None, "explanation": "Remove the holiday value"}],
+                    "targets": [
+                        {"categoryId": "cat1", "carriedAmount": None, "explanation": "Remove the holiday value"}
+                    ],
                 },
             ),
             None,
@@ -1513,7 +1534,9 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_EDITABLE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Wrong endpoint for current month"}],
+                    "targets": [
+                        {"categoryId": "cat1", "carriedAmount": 500, "explanation": "Wrong endpoint for current month"}
+                    ],
                 },
             ),
             None,
@@ -1544,7 +1567,13 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Pin to the value that would have carried forward anyway"}],
+                    "targets": [
+                        {
+                            "categoryId": "cat1",
+                            "carriedAmount": 500,
+                            "explanation": "Pin to the value that would have carried forward anyway",
+                        }
+                    ],
                 },
             ),
             None,
@@ -1578,7 +1607,13 @@ class TestPostBudgetUpdate:
                 "POST",
                 f"/api/budget/{_FUTURE_MONTH}/update",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 700, "explanation": "Change a month before a month with its own value"}],
+                    "targets": [
+                        {
+                            "categoryId": "cat1",
+                            "carriedAmount": 700,
+                            "explanation": "Change a month before a month with its own value",
+                        }
+                    ],
                 },
             ),
             None,
@@ -1695,7 +1730,13 @@ class TestEditabilityEnforcement:
                 "POST",
                 f"/api/budget/{_LOCKED_MONTH}/replace",
                 body={
-                    "targets": [{"categoryId": "cat1", "carriedAmount": 500, "explanation": "Backdated correction for an old month"}],
+                    "targets": [
+                        {
+                            "categoryId": "cat1",
+                            "carriedAmount": 500,
+                            "explanation": "Backdated correction for an old month",
+                        }
+                    ],
                     "override": True,
                 },
                 groups=[_ADMIN_GROUP],

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any, NamedTuple
@@ -210,4 +210,4 @@ class UpdateAccountArgs:
     cash_flow_role: FieldChange[CashFlowRole]
     account_number_last_four: FieldChange[list[str]]
     # A map from each asset class that the account no longer holds to the last month in which it counts.
-    removed_asset_classes: FieldChange[dict[str, str]] = Keep()
+    removed_asset_classes: FieldChange[dict[str, str]] = field(default_factory=Keep)

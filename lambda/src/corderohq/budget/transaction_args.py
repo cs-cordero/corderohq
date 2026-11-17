@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import date
 from typing import Any
 
@@ -61,12 +61,12 @@ class UpdateTransactionArgs:
     account_id: FieldChange[str]
     note: FieldChange[str]
     # A new date moves the transaction to a new item, because the sort key holds the date.
-    transaction_date: Keep | SetTo[str] = Keep()
+    transaction_date: Keep | SetTo[str] = field(default_factory=Keep)
 
     def changes_nothing(self) -> bool:
         """Return True if every field is Keep()."""
 
-        return all(isinstance(getattr(self, field.name), Keep) for field in fields(self))
+        return all(isinstance(getattr(self, item.name), Keep) for item in fields(self))
 
 
 def parse_create_transaction_args(

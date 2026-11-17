@@ -931,7 +931,12 @@ class TestPinnedRecurringIncome:
         body = {
             "recurring": [
                 _set("REC#a"),
-                {"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY, "explanation": "unpaid leave"},
+                {
+                    "action": "SET_PIN",
+                    "plannedIncomeId": "REC#a",
+                    "recurringIncome": _SHORT_BODY,
+                    "explanation": "unpaid leave",
+                },
             ],
         }
         assert handler(_event("POST", f"/api/income/{_CURRENT}/replace", body), None)["statusCode"] == 200
@@ -944,7 +949,14 @@ class TestPinnedRecurringIncome:
     def test_pin_with_no_carried_value(self, tables: dict[str, MagicMock]) -> None:
         tables["plan"].scan_recurring_incomes.return_value = [_recurring_item(_CURRENT, "REC#a")]
         body = {
-            "recurring": [{"action": "SET_PIN", "plannedIncomeId": "REC#a", "recurringIncome": _SHORT_BODY, "explanation": "short month"}],
+            "recurring": [
+                {
+                    "action": "SET_PIN",
+                    "plannedIncomeId": "REC#a",
+                    "recurringIncome": _SHORT_BODY,
+                    "explanation": "short month",
+                }
+            ],
         }
         result = handler(_event("POST", f"/api/income/{_FUTURE}/update", body), None)
         assert result["statusCode"] == 200
@@ -1024,7 +1036,9 @@ class TestRecurringIncomeExplanations:
         tables["plan"].put_recurring_income.assert_called_once_with(
             _CURRENT, "REC#a", RecurringIncomeValues(carried=parse_recurring_income(_RAISED_BODY))
         )
-        entries = [(call.kwargs["action"], call.kwargs["explanation"]) for call in tables["audit"].write_entry.call_args_list]
+        entries = [
+            (call.kwargs["action"], call.kwargs["explanation"]) for call in tables["audit"].write_entry.call_args_list
+        ]
         assert entries == [("RECURRING_INCOME_UPDATE", "raise"), ("RECURRING_INCOME_UNPIN", "raise")]
 
     def test_update_checks_each_row_before_the_first_write(self, tables: dict[str, MagicMock]) -> None:

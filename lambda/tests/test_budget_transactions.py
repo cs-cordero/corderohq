@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, ClassVar
 from unittest.mock import MagicMock
 
 import pytest
@@ -109,7 +109,7 @@ def _changes(**changes: Any) -> UpdateTransactionArgs:
 
 
 class TestMove:
-    _OLD: dict[str, Any] = {
+    _OLD: ClassVar[dict[str, Any]] = {
         "yearMonth": "2026-03",
         "sortId": "2026-03-15#A",
         "transactionDate": "2026-03-15",

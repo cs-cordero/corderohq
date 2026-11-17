@@ -351,9 +351,7 @@ def parse_recurring_income_rows(payload: Mapping[str, Any]) -> list[RecurringInc
         try:
             change = _parse_recurring_income_change(raw)
             rows.append(
-                RecurringIncomeRow(
-                    change=change, explanation=parse_optional_str(raw.get("explanation"), "explanation")
-                )
+                RecurringIncomeRow(change=change, explanation=parse_optional_str(raw.get("explanation"), "explanation"))
             )
         except ValueError as e:
             raise ValueError(f"recurring[{index}]: {e}") from None

@@ -521,7 +521,13 @@ export default function IncomePage() {
             ...(income?.recurring ?? []).flatMap((r): RecurringIncomeChange[] =>
                 r.carriedRecurringIncome === null || changedIds.has(r.plannedIncomeId)
                     ? []
-                    : [{ action: "SET", plannedIncomeId: r.plannedIncomeId, recurringIncome: r.carriedRecurringIncome }],
+                    : [
+                          {
+                              action: "SET",
+                              plannedIncomeId: r.plannedIncomeId,
+                              recurringIncome: r.carriedRecurringIncome,
+                          },
+                      ],
             ),
             ...changes,
         ];
