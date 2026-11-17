@@ -1348,10 +1348,11 @@ def _plan_recurring_income_writes(
     carried: dict[tuple[str, str], RecurringIncome],
     pinned: dict[tuple[str, str], RecurringIncome],
 ) -> tuple[list[_RecurringIncomeWrite], list[int]]:
-    """Apply each entry in order to `carried` and `pinned`, and return the writes and the entries without an explanation.
+    """Apply each entry in order to `carried` and `pinned`. Return the writes, and the entries with no explanation.
 
-    An entry that changes no stored value makes no write, and needs no explanation. A SET with no `plannedIncomeId` gets a
-    new id. An entry that changes a value and has no explanation makes no write. Its index goes in the second list.
+    An entry that changes no stored value makes no write, and needs no explanation. A SET with no `plannedIncomeId`
+    gets a new id. An entry that changes a value and has no explanation makes no write. Its index goes in the second
+    list.
     """
 
     writes: list[_RecurringIncomeWrite] = []
@@ -1459,8 +1460,8 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     - SET_PIN and CLEAR_PIN set or remove the pinned value of this month (RECURRING_INCOME_PIN or
       RECURRING_INCOME_UNPIN).
     - CLEAR is only for a future month.
-    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation, and its
-    audit entry uses it. See `_check_end_month_rules` for the rules of the end month.
+    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation,
+    and its audit entry uses it. See `_check_end_month_rules` for the rules of the end month.
     """
 
     if not YEAR_MONTH_PATTERN.match(year_month):
@@ -1539,8 +1540,8 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     - CLEAR removes the month's own carried value, so that the month inherits again (RECURRING_INCOME_CLEAR).
     - SET_PIN and CLEAR_PIN set or remove the pinned value of this month (RECURRING_INCOME_PIN or
       RECURRING_INCOME_UNPIN).
-    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation, and its
-    audit entry uses it.
+    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation,
+    and its audit entry uses it.
 
     Returns `{incomePlan: <the month, as GET /api/income>, warnings: {laterCarriedChanges, matchesInheritedValue}}`.
     """

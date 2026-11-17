@@ -336,7 +336,7 @@ def parse_update_income_source_args(payload: Mapping[str, Any]) -> UpdateIncomeS
 
 
 def parse_recurring_income_entries(payload: Mapping[str, Any]) -> list[RecurringIncomeEntry]:
-    """Convert `recurring`, a list of `{action, plannedIncomeId?, recurringIncome?, explanation?}`, into checked entries.
+    """Convert `recurring`, a list of `{action, plannedIncomeId?, recurringIncome?, explanation?}`, into entries.
 
     Raise ValueError for bad input. SET needs `recurringIncome`, and creates a new recurring income when it has no
     `plannedIncomeId`. SET_PIN needs `plannedIncomeId` and `recurringIncome`. CLEAR and CLEAR_PIN need
@@ -350,9 +350,8 @@ def parse_recurring_income_entries(payload: Mapping[str, Any]) -> list[Recurring
     for index, raw in enumerate(raw_entries):
         try:
             change = _parse_recurring_income_change(raw)
-            entries.append(
-                RecurringIncomeEntry(change=change, explanation=parse_optional_str(raw.get("explanation"), "explanation"))
-            )
+            explanation = parse_optional_str(raw.get("explanation"), "explanation")
+            entries.append(RecurringIncomeEntry(change=change, explanation=explanation))
         except ValueError as e:
             raise ValueError(f"recurring[{index}]: {e}") from None
     return entries
