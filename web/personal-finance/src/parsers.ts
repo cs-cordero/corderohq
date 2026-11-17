@@ -92,7 +92,7 @@ export function parseCategoryGroupArray(raw: unknown): CategoryGroup[] {
 
 export function parseCategory(raw: unknown): Category {
     const obj = requireObject(raw, "Category");
-    return {
+    const category: Category = {
         categoryId: requireString(obj, "categoryId", "Category"),
         name: requireString(obj, "name", "Category"),
         active: requireBoolean(obj, "active", "Category"),
@@ -108,6 +108,9 @@ export function parseCategory(raw: unknown): Category {
         groupId: typeof obj.groupId === "string" ? obj.groupId : "",
         orderInGroup: typeof obj.orderInGroup === "number" ? obj.orderInGroup : 0,
     };
+    const deactivatedYearMonth = optionalString(obj, "deactivatedYearMonth", "Category");
+    if (deactivatedYearMonth !== undefined) category.deactivatedYearMonth = deactivatedYearMonth;
+    return category;
 }
 
 export function parseCategoryArray(raw: unknown): Category[] {

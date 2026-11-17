@@ -372,7 +372,7 @@ class TestDeactivateCategory:
         assert result["statusCode"] == 200
         body = json.loads(result["body"])
         assert body["affectedMonths"] == []
-        mock_ct.deactivate.assert_called_once_with("cat1")
+        mock_ct.deactivate.assert_called_once_with("cat1", _EDITABLE_MONTH)
 
     @patch("corderohq.personal_finance_handler._BUDGET_TABLE")
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
@@ -427,7 +427,7 @@ class TestDeactivateCategory:
         # The future rows are deleted from the Budget table.
         assert mock_bt.delete_single_budget_target.call_count == 2
         # Category is then deactivated last.
-        mock_ct.deactivate.assert_called_once_with("cat1")
+        mock_ct.deactivate.assert_called_once_with("cat1", _EDITABLE_MONTH)
 
     @patch("corderohq.personal_finance_handler._CATEGORY_TABLE")
     def test_returns_404_when_category_not_found(self, mock_ct: MagicMock) -> None:

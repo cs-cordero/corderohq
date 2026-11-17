@@ -26,6 +26,9 @@ export interface Category {
     // string or 0. The UI then does not fail on an old row.
     groupId: string;
     orderInGroup: number;
+    // The month (YYYY-MM) of the deactivation of an inactive category. A category that was
+    // inactive before the app stored this month has none.
+    deactivatedYearMonth?: string;
 }
 
 export interface DeactivateResult {

@@ -152,20 +152,27 @@ class CategoryTable:
                 ExpressionAttributeValues={":g": group_id, ":o": index, ":now": now},
             )
 
-    def deactivate(self, category_id: str) -> dict[str, Any] | None:
-        """Set active=False on a category. Return the changed item, or None if it does not exist."""
+    def deactivate(self, category_id: str, year_month: str) -> dict[str, Any] | None:
+        """Set active=False on a category. Return the changed item, or None if it does not exist.
 
-        if self.get_category_by_id(category_id) is None:
+        `year_month` becomes `deactivatedYearMonth`, the month of the deactivation. A category that is inactive already
+        does not change, so it keeps its stored month.
+        """
+
+        existing = self.get_category_by_id(category_id)
+        if existing is None:
             return None
+        if not existing.get("active", True):
+            return existing
 
         now = datetime.now(tz=UTC).isoformat()
         response = self._table.update_item(
             Key={"categoryId": category_id},
-            UpdateExpression="SET active = :val, updatedAt = :now",
-            ExpressionAttributeValues={":val": False, ":now": now},
+            UpdateExpression="SET active = :val, deactivatedYearMonth = :ym, updatedAt = :now",
+            ExpressionAttributeValues={":val": False, ":ym": year_month, ":now": now},
             ReturnValues="ALL_NEW",
         )
-        _LOGGER.info("Deactivated category %s", category_id)
+        _LOGGER.info("Deactivated category %s in %s", category_id, year_month)
         return response["Attributes"]
 
     def delete_category(self, category_id: str) -> None:
@@ -174,7 +181,7 @@ class CategoryTable:
         self._table.delete_item(Key={"categoryId": category_id})
 
     def reactivate(self, category_id: str) -> dict[str, Any] | None:
-        """Re-activate a deactivated category. Returns the updated item, or None if not found."""
+        """Activate a category again, and remove its `deactivatedYearMonth`. Return the item, or None if absent."""
 
         if self.get_category_by_id(category_id) is None:
             return None
@@ -182,7 +189,7 @@ class CategoryTable:
         now = datetime.now(tz=UTC).isoformat()
         response = self._table.update_item(
             Key={"categoryId": category_id},
-            UpdateExpression="SET active = :val, updatedAt = :now",
+            UpdateExpression="SET active = :val, updatedAt = :now REMOVE deactivatedYearMonth",
             ExpressionAttributeValues={":val": True, ":now": now},
             ReturnValues="ALL_NEW",
         )

@@ -142,7 +142,12 @@ it.
 |                        |                    |            | nameHistory (list of        |
 |                        |                    |            | {previousName, replacedAt   |
 |                        |                    |            | ISO-8601 UTC}). Soft-delete |
-|                        |                    |            | via active=False. Names are |
+|                        |                    |            | via active=False.           |
+|                        |                    |            | deactivatedYearMonth: the   |
+|                        |                    |            | month in ET of the          |
+|                        |                    |            | deactivation, on an         |
+|                        |                    |            | inactive category only.     |
+|                        |                    |            | Names are                   |
 |                        |                    |            | unique case-insensitive     |
 |                        |                    |            | across active + inactive —  |
 |                        |                    |            | see **Category name         |
@@ -399,7 +404,9 @@ Every route needs a JWT, and every route sits under `/api`. The handler reads
 |        |                                          | amount. If confirm is absent or    |
 |        |                                          | false and affectedMonths is non-   |
 |        |                                          | empty, it returns 409 so the UI    |
-|        |                                          | can prompt.                        |
+|        |                                          | can prompt. Sets                   |
+|        |                                          | deactivatedYearMonth to the        |
+|        |                                          | current month in ET.               |
 +--------+------------------------------------------+------------------------------------+
 | POST   | /api/categories/{id}/reactivate          | Reactivate a deactivated category. |
 |        |                                          | The future values dropped at       |
@@ -998,8 +1005,11 @@ both of these:
   `CLEAR` or `UNPIN` audit entry for each amount it drops. The budget-target audit trail therefore stays
   complete — see **Audit scope**. The app leaves the past dense rows as they are, in the current
   month, the grace month, and every locked month. The history therefore stays true, as Spec 2
-  requires.
-- **Reactivate** (`POST /api/categories/{id}/reactivate`) — this changes the flag back. It does not
+  requires. The deactivation sets `deactivatedYearMonth` to the current month in ET. A deactivate
+  of a category that is inactive already changes nothing, so the stored month stays. A category
+  that was inactive before this attribute existed has no month.
+- **Reactivate** (`POST /api/categories/{id}/reactivate`) — this changes the flag back, and removes
+  `deactivatedYearMonth`. It does not
   restore a future value that the deactivation dropped. The category joins the active set again. The
   next densify step, or any write to the current month, then treats it like a new category for
   that month.

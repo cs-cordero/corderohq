@@ -451,7 +451,8 @@ def _deactivate_category(
 
     Without `confirm: true`, return the future months that have their own values for the category, and change
     nothing. With `confirm: true`, deactivate it, and delete those rows. Each deleted row writes one CLEAR audit entry
-    for its carried amount, and one UNPIN entry for its pinned amount.
+    for its carried amount, and one UNPIN entry for its pinned amount. The current month in ET becomes the
+    `deactivatedYearMonth` of the category.
     """
 
     body = _parse_json_body(event) or {}
@@ -504,7 +505,7 @@ def _deactivate_category(
                 changes={name: {"before": before, "after": None}},
             )
 
-    item = _CATEGORY_TABLE.deactivate(category_id)
+    item = _CATEGORY_TABLE.deactivate(category_id, current_month)
     return _json_response(
         200,
         json.dumps({"category": item, "affectedMonths": affected_months}, default=_json_default),
