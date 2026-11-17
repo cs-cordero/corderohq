@@ -868,7 +868,7 @@ class TestPostBudgetReplace:
 
         assert result["statusCode"] == 400
         response = json.loads(result["body"])
-        assert response["rowsWithoutExplanation"] == [0, 2]
+        assert response["entriesWithoutExplanation"] == [0, 2]
         assert "targets[0], targets[2]" in response["error"]
         mock_bt.set_all_budget_targets.assert_not_called()
         mock_audit.write_entry.assert_not_called()
@@ -936,7 +936,7 @@ class TestPostBudgetReplace:
         result = handler(_make_event("POST", f"/api/budget/{_EDITABLE_MONTH}/replace", body=body), None)
 
         assert result["statusCode"] == 400
-        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        assert json.loads(result["body"])["entriesWithoutExplanation"] == [1]
         mock_bt.set_all_budget_targets.assert_not_called()
 
     @patch("corderohq.personal_finance_handler._TRANSACTIONS_TABLE")
@@ -1425,7 +1425,7 @@ class TestPostBudgetUpdate:
         result = handler(_make_event("POST", f"/api/budget/{_FUTURE_MONTH}/update", body=body), None)
 
         assert result["statusCode"] == 400
-        assert json.loads(result["body"])["rowsWithoutExplanation"] == [1]
+        assert json.loads(result["body"])["entriesWithoutExplanation"] == [1]
         mock_bt.set_single_budget_target.assert_not_called()
         mock_audit.write_entry.assert_not_called()
 

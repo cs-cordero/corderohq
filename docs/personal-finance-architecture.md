@@ -535,11 +535,11 @@ Assign** for the bodies and the responses.
 | POST   | /api/income-sources/{id}/reactivate        | The same as a category.                |
 | GET    | /api/income/{YYYY-MM}                      | The income plan of one month.          |
 | POST   | /api/income/{YYYY-MM}/replace              | Dense-month write of the recurring     |
-|        |                                            | incomes. Each row that changes a value |
-|        |                                            | needs its own explanation.             |
+|        |                                            | incomes. Each entry that changes a     |
+|        |                                            | value needs its own explanation.       |
 | POST   | /api/income/{YYYY-MM}/update               | Future-month write of the recurring    |
-|        |                                            | incomes. Each row that changes a value |
-|        |                                            | needs its own explanation.             |
+|        |                                            | incomes. Each entry that changes a     |
+|        |                                            | value needs its own explanation.       |
 | POST   | /api/income/{YYYY-MM}/one-time             | Create a one-time income (no           |
 |        |                                            | `plannedIncomeId`), change it (an id), |
 |        |                                            | or delete it (an id and `delete:       |
@@ -838,7 +838,7 @@ If the body fails rule 2, and editability passed, the response is `409 Conflict`
 each `categoryId` that is absent, and the app **writes no rows**. The client must send the request
 again with those entries added. Usually it copies the values that exist.
 
-If the body fails rule 3, the response is `400`, with `rowsWithoutExplanation`: the index in
+If the body fails rule 3, the response is `400`, with `entriesWithoutExplanation`: the index in
 `targets` of each such target. The app **writes no rows**.
 
 The body does not need a category with no row and no transaction in the month. A category that the
@@ -1182,14 +1182,15 @@ own dense rows only, so its value never changes after the lock.
 `{action, plannedIncomeId?, recurringIncome?, explanation?}`, in place of `targets`. Each body
 takes an optional `override`.
 
-- A row that changes a stored value needs an `explanation` that is not blank, and its audit entry
-  uses it. A row that changes nothing needs none. The handler applies the rows in order to a copy of
-  the state, to find which rows change a value. It does this before the first write. A failure is a
-  `400` with `rowsWithoutExplanation`, the index in `recurring` of each such row.
-- One edit of the user can be two rows, `SET` and `CLEAR_PIN`. Each row changes a value, so each
-  row needs an explanation.
-- The `/replace` body holds, for each recurring income with a carried value in the month: the rows
-  of the change of the user, or one unchanged `SET` with no explanation.
+- An entry that changes a stored value needs an `explanation` that is not blank, and its audit
+  entry uses it. An entry that changes nothing needs none. The handler applies the entries in order
+  to a copy of the state, to find which entries change a value. It does this before the first write.
+  A failure is a `400` with `entriesWithoutExplanation`, the index in `recurring` of each such
+  entry.
+- One edit of the user can be two entries, `SET` and `CLEAR_PIN`. Each entry changes a value, so
+  each entry needs an explanation.
+- The `/replace` body holds, for each recurring income with a carried value in the month: the
+  entries of the change of the user, or one unchanged `SET` with no explanation.
 
 - `SET` writes `recurringIncome`. With no `plannedIncomeId`, it creates a new recurring income from
   this month on.

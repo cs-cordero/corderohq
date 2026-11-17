@@ -68,14 +68,14 @@ from corderohq.budget.income import (
     OneTimeIncome,
     RecurringIncome,
     RecurringIncomeChange,
-    RecurringIncomeRow,
+    RecurringIncomeEntry,
     SetPin,
     SetRecurringIncome,
     UpdateOneTimeIncomeArgs,
     parse_create_income_source_args,
     parse_one_time_income,
     parse_one_time_income_args,
-    parse_recurring_income_rows,
+    parse_recurring_income_entries,
     parse_update_income_source_args,
 )
 from corderohq.budget.targets import parse_replace_targets, parse_update_targets
@@ -1047,15 +1047,15 @@ def _post_budget_update(event: dict[str, Any], year_month: str, user: dict[str, 
 
 
 def _missing_explanation_response(list_name: str, indices: list[int]) -> dict[str, Any]:
-    """Return the 400 response for the rows of `list_name` that change a value and have no explanation."""
+    """Return the 400 response for the entries of `list_name` that change a value and have no explanation."""
 
-    rows = ", ".join(f"{list_name}[{index}]" for index in indices)
+    entries = ", ".join(f"{list_name}[{index}]" for index in indices)
     return _json_response(
         400,
         json.dumps(
             {
-                "error": f"explanation is required for each row that changes a value: {rows}",
-                "rowsWithoutExplanation": indices,
+                "error": f"explanation is required for each entry that changes a value: {entries}",
+                "entriesWithoutExplanation": indices,
             }
         ),
     )
@@ -1331,7 +1331,7 @@ def _check_end_month_rules(
 
 @dataclass(frozen=True)
 class _RecurringIncomeWrite:
-    """One change of a stored value of a recurring income, from the row at `index` of the body."""
+    """One change of a stored value of a recurring income, from the entry at `index` of the body."""
 
     index: int
     key: str
@@ -1343,24 +1343,24 @@ class _RecurringIncomeWrite:
 
 
 def _plan_recurring_income_writes(
-    rows: list[RecurringIncomeRow],
+    entries: list[RecurringIncomeEntry],
     year_month: str,
     carried: dict[tuple[str, str], RecurringIncome],
     pinned: dict[tuple[str, str], RecurringIncome],
 ) -> tuple[list[_RecurringIncomeWrite], list[int]]:
-    """Apply each row in order to `carried` and `pinned`, and return the writes and the rows without an explanation.
+    """Apply each entry in order to `carried` and `pinned`, and return the writes and the entries without an explanation.
 
-    A row that changes no stored value makes no write, and needs no explanation. A SET with no `plannedIncomeId` gets a
-    new id. A row that changes a value and has no explanation makes no write. Its index goes in the second list.
+    An entry that changes no stored value makes no write, and needs no explanation. A SET with no `plannedIncomeId` gets a
+    new id. An entry that changes a value and has no explanation makes no write. Its index goes in the second list.
     """
 
     writes: list[_RecurringIncomeWrite] = []
     without_explanation: list[int] = []
-    for index, row in enumerate(rows):
+    for index, entry in enumerate(entries):
         key: str
         before: RecurringIncome | None
         after: RecurringIncome | None
-        match row.change:
+        match entry.change:
             case SetRecurringIncome(planned_income_id=planned_income_id, income=income):
                 key = planned_income_id or new_recurring_income_id()
                 before, after = carried.get((year_month, key)), income
@@ -1389,11 +1389,11 @@ def _plan_recurring_income_writes(
                     continue
                 action, field = AuditAction.RECURRING_INCOME_UNPIN, "pinnedRecurringIncome"
             case _:
-                assert_never(row.change)
-        if row.explanation is None:
+                assert_never(entry.change)
+        if entry.explanation is None:
             without_explanation.append(index)
             continue
-        writes.append(_RecurringIncomeWrite(index, key, action, before, after, field, row.explanation))
+        writes.append(_RecurringIncomeWrite(index, key, action, before, after, field, entry.explanation))
     return writes, without_explanation
 
 
@@ -1459,7 +1459,7 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     - SET_PIN and CLEAR_PIN set or remove the pinned value of this month (RECURRING_INCOME_PIN or
       RECURRING_INCOME_UNPIN).
     - CLEAR is only for a future month.
-    The same value again is a no-op with no audit entry. A row that changes a stored value needs an explanation, and its
+    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation, and its
     audit entry uses it. See `_check_end_month_rules` for the rules of the end month.
     """
 
@@ -1469,10 +1469,10 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
     if body is None:
         return _response(400, "Request body is required")
     try:
-        rows = parse_recurring_income_rows(body)
+        entries = parse_recurring_income_entries(body)
     except ValueError as e:
         return _response(400, str(e))
-    changes = [row.change for row in rows]
+    changes = [entry.change for entry in entries]
     if any(isinstance(change, ClearRecurringIncome) for change in changes):
         return _response(400, "CLEAR is only for a future month; use /update")
 
@@ -1520,7 +1520,7 @@ def _post_income_replace(event: dict[str, Any], year_month: str, user: dict[str,
             ),
         )
 
-    writes, without_explanation = _plan_recurring_income_writes(rows, year_month, carried, pinned)
+    writes, without_explanation = _plan_recurring_income_writes(entries, year_month, carried, pinned)
     if without_explanation:
         return _missing_explanation_response("recurring", without_explanation)
     _apply_recurring_income_writes(writes, year_month, carried, pinned, user, override_active)
@@ -1539,7 +1539,7 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     - CLEAR removes the month's own carried value, so that the month inherits again (RECURRING_INCOME_CLEAR).
     - SET_PIN and CLEAR_PIN set or remove the pinned value of this month (RECURRING_INCOME_PIN or
       RECURRING_INCOME_UNPIN).
-    The same value again is a no-op with no audit entry. A row that changes a stored value needs an explanation, and its
+    The same value again is a no-op with no audit entry. An entry that changes a stored value needs an explanation, and its
     audit entry uses it.
 
     Returns `{incomePlan: <the month, as GET /api/income>, warnings: {laterCarriedChanges, matchesInheritedValue}}`.
@@ -1551,10 +1551,10 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     if body is None:
         return _response(400, "Request body is required")
     try:
-        rows = parse_recurring_income_rows(body)
+        entries = parse_recurring_income_entries(body)
     except ValueError as e:
         return _response(400, str(e))
-    changes = [row.change for row in rows]
+    changes = [entry.change for entry in entries]
     override_active, err = _resolve_override(event, body)
     if err:
         return err
@@ -1595,7 +1595,7 @@ def _post_income_update(event: dict[str, Any], year_month: str, user: dict[str, 
     if err:
         return err
 
-    writes, without_explanation = _plan_recurring_income_writes(rows, year_month, carried, pinned)
+    writes, without_explanation = _plan_recurring_income_writes(entries, year_month, carried, pinned)
     if without_explanation:
         return _missing_explanation_response("recurring", without_explanation)
     _apply_recurring_income_writes(writes, year_month, carried, pinned, user, override_active)
